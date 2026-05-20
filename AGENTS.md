@@ -1,3 +1,39 @@
-# Expo HAS CHANGED
+# Agent instructions
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v56.0.0/ before writing any code.
+## Documentation
+
+Read the exact versioned Expo docs at https://docs.expo.dev/versions/v56.0.0/ before writing any code that touches the Expo SDK. SDK 56 introduces several changes (Hermes V1, RN 0.85, Swift/C++ interop in modules, new `create-expo-module` flags) — do not rely on memory of older SDKs.
+
+## Linked Literate Programming (LLP)
+
+This repo uses [LLP](https://github.com/ccheever/llp). Design decisions and the precise W3C spec slices we implement live under `llp/`. Read the relevant LLP before changing code that implements a spec clause; if you change the implementation, update the LLP first or update both in the same change.
+
+Start at `llp/0000-standard-camera.explainer.md`. Document numbering and types follow the LLP 0000 conventions (`Explainer`, `Spec`, `Decision`, `Plan`, `Guide`, `Principle`, `Issue`, `Research`).
+
+### `@ref` annotations
+
+Every load-bearing implementation detail that exists because a spec clause says so should have an `@ref` comment pointing at the relevant LLP section:
+
+```swift
+// @ref LLP 0003#track-stop — MediaStreamTrack.stop() must transition readyState to "ended"
+```
+
+```ts
+// @ref LLP 0004#srcobject-currentTime — UA MUST ignore attempts to set currentTime on a MediaStream source
+```
+
+Run the `ref-check` skill (`/ref-check`) before requesting review to catch broken references and orphaned annotations.
+
+## Scope reminder
+
+This project implements a tiny subset of the W3C "Media Capture and Streams" spec on iOS only. Before adding a feature, check `llp/0001-spec-subset-scope.spec.md` — if the clause is marked "out of scope", do not add it without first updating LLP 0001.
+
+## Testing
+
+The in-app WPT-style runner is the source of truth for spec compliance. To run:
+
+```
+bun run test:ios
+```
+
+This boots an iOS 26 simulator, installs the app, deep-links to the test runner, parses results from the simulator log, and shuts the simulator down. Do not mark a spec change "done" until the runner is green.

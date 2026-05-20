@@ -1,98 +1,164 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
+import * as React from 'react';
+import { Button, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Video, type HTMLVideoElement } from '../../modules/standard-camera';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
+// @ref LLP 0000 — Demo screen: the entire surface a developer interacts with
+// is the spec-shaped navigator.mediaDevices.getUserMedia + <Video srcObject>.
+
+export default function HomeScreen(): React.JSX.Element {
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const [stream, setStream] = React.useState<MediaStream | null>(null);
+  const [status, setStatus] = React.useState<string>('idle');
+  const [error, setError] = React.useState<string | null>(null);
+
+  // Auto-start on mount, with proper teardown so Fast Refresh / unmounts
+  // don't leak an AVCaptureSession.
+  React.useEffect(() => {
+    let cancelled = false;
+    let active: MediaStream | null = null;
+
+    void (async () => {
+      setError(null);
+      setStatus('requesting');
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (cancelled) {
+          for (const t of s.getTracks()) t.stop();
+          return;
+        }
+        active = s;
+        setStream(s);
+        setStatus('starting');
+
+        const v = videoRef.current;
+        if (v) {
+          v.srcObject = s;
+          v.onloadeddata = () => setStatus('playing');
+          v.onended = () => setStatus('ended');
+          await v.play();
+        }
+      } catch (e) {
+        if (cancelled) return;
+        const err = e as Error & { name?: string };
+        setError(`${err.name ?? 'Error'}: ${err.message}`);
+        setStatus('idle');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (active) {
+        for (const t of active.getTracks()) t.stop();
+      }
+    };
+  }, []);
+
+  function stop(): void {
+    if (!stream) return;
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setStream(null);
+    setStatus('stopped');
   }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
+
+  async function start(): Promise<void> {
+    setError(null);
+    setStatus('requesting');
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: true });
+      setStream(s);
+      setStatus('starting');
+
+      const v = videoRef.current;
+      if (v) {
+        v.srcObject = s;
+        v.onloadeddata = () => setStatus('playing');
+        v.onended = () => setStatus('ended');
+        await v.play();
+      }
+    } catch (e) {
+      const err = e as Error & { name?: string };
+      setError(`${err.name ?? 'Error'}: ${err.message}`);
+      setStatus('idle');
+    }
   }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.title}>standard-camera-app</Text>
+      <Text style={styles.subtitle}>navigator.mediaDevices.getUserMedia → &lt;Video srcObject&gt;</Text>
 
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
+      <View style={styles.videoContainer}>
+        <Video ref={videoRef} style={styles.video} />
+      </View>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+      <View style={styles.controls}>
+        {!stream ? (
+          <Button title="Start camera" onPress={start} />
+        ) : (
+          <Button title="Stop camera" onPress={stop} />
+        )}
+      </View>
 
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+      <View style={styles.statusBlock}>
+        <Text style={styles.statusLine}>status: {status}</Text>
+        <Text style={styles.statusLine}>active: {stream?.active ? 'true' : 'false'}</Text>
+        <Text style={styles.statusLine}>tracks: {stream?.getTracks().length ?? 0}</Text>
+        {stream?.getVideoTracks().map((t) => (
+          <Text key={t.id} style={styles.statusLine}>
+            {t.label} • {t.kind} • {t.readyState}
+          </Text>
+        ))}
+        {error && <Text style={styles.errorLine}>{error}</Text>}
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+    padding: 16,
+    gap: 16,
   },
   title: {
-    textAlign: 'center',
+    fontSize: 24,
+    fontWeight: '600',
   },
-  code: {
-    textTransform: 'uppercase',
+  subtitle: {
+    fontSize: 13,
+    fontFamily: 'Menlo',
+    opacity: 0.7,
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+  videoContainer: {
+    aspectRatio: 3 / 4,
+    backgroundColor: '#111',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  video: {
+    flex: 1,
+  },
+  controls: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  statusBlock: {
+    gap: 4,
+  },
+  statusLine: {
+    fontFamily: 'Menlo',
+    fontSize: 12,
+  },
+  errorLine: {
+    fontFamily: 'Menlo',
+    fontSize: 12,
+    color: '#c00',
   },
 });

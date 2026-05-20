@@ -1,0 +1,137 @@
+# LLP 0004: `HTMLMediaElement.srcObject` subset
+
+**Type:** Spec
+**Status:** Active
+**Systems:** standard-camera
+**Author:** James Ide
+**Date:** 2026-05-19
+**Related:** 0001, 0003, 0005
+
+## Summary
+
+We don't have a real `HTMLMediaElement` in React Native, so our `<Video>` component exposes the subset of the `HTMLMediaElement` interface required to consume a `MediaStream` via `srcObject`. The settable surface is exposed both as a prop (`<Video srcObject={stream} />`) and as a property on a ref (`videoRef.current.srcObject = stream`). The ref form mirrors DOM idiom 1:1.
+
+Spec sources:
+- [HTML living standard `srcObject`](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject)
+- [W3C Media Capture § HTMLMediaElement extensions](https://www.w3.org/TR/mediacapture-streams/#htmlmediaelement-extensions)
+
+## The ref surface
+
+A `<Video>` ref exposes:
+
+```ts
+interface VideoRef {
+  // Stream
+  srcObject: MediaStream | null;            // get/set
+
+  // ReadyState — same numeric constants as HTMLMediaElement
+  readyState: 0 | 1 | 2 | 3 | 4;
+  HAVE_NOTHING: 0;
+  HAVE_METADATA: 1;
+  HAVE_CURRENT_DATA: 2;
+  HAVE_FUTURE_DATA: 3;
+  HAVE_ENOUGH_DATA: 4;
+
+  // Time / duration
+  duration: number;       // NaN until loaded, Infinity after
+  currentTime: number;    // get returns elapsed since play; setter is no-op
+  seekable: { length: 0 };
+  buffered: { length: 0 };
+  seeking: false;
+
+  // Playback
+  paused: boolean;
+  ended: boolean;
+  playbackRate: number;          // always 1; setter is no-op
+  defaultPlaybackRate: number;   // always 1
+  preload: "none";               // setter is no-op
+  play(): Promise<void>;
+  pause(): void;
+
+  // Events
+  addEventListener(type, listener, options?): void;
+  removeEventListener(type, listener, options?): void;
+  onloadeddata: ((ev: Event) => void) | null;
+  ondurationchange: ((ev: Event) => void) | null;
+  onended: ((ev: Event) => void) | null;
+  onplay: ((ev: Event) => void) | null;
+  onpause: ((ev: Event) => void) | null;
+}
+```
+
+## Required invariants
+
+### `srcObject-readyState`
+
+- Initially `readyState === HAVE_NOTHING (0)`.
+- When the first frame is captured (signaled by the native `AVCaptureVideoPreviewLayer` becoming ready), set `readyState = HAVE_ENOUGH_DATA (4)` and fire `loadeddata`.
+
+### `srcObject-duration`
+
+- Initially `duration === NaN`.
+- When transitioning to `HAVE_ENOUGH_DATA`, set `duration = Infinity` and fire `durationchange`.
+
+### `srcObject-currentTime`
+
+- Get: returns elapsed wall-clock seconds since `play()` or first frame.
+- Set: the UA MUST ignore attempts to set `currentTime` for a MediaStream source. Per the WPT test, the assignment `vid.currentTime = 42` must leave `currentTime` at `0` (or its actual elapsed value).
+
+### `srcObject-playbackRate`
+
+- Get: always returns `1`.
+- Set: ignored. `vid.playbackRate = 0.5; expect(vid.playbackRate).toBe(1)`.
+
+### `srcObject-preload`
+
+- Always `"none"`.
+- Set: ignored.
+
+### `srcObject-seekable`
+
+- `seekable.length === 0`. We expose a `TimeRanges`-shaped polyfill (`{ length: 0, start, end }` where start/end throw `InvalidStateError` if called with length 0).
+
+### `srcObject-ended`
+
+- `ended` becomes `true` asynchronously after every track in `srcObject` has `readyState === "ended"`. The transition fires an `ended` event.
+
+### `srcObject-play-pause`
+
+- `play()` starts the underlying `AVCaptureSession` if not running; resolves; fires `play`.
+- `pause()` stops the underlying `AVCaptureSession`; sets `paused = true`; fires `pause`.
+
+## Prop vs. ref attribute
+
+The prop form is for ergonomic React code:
+
+```tsx
+<Video srcObject={stream} />
+```
+
+The ref form mirrors the DOM:
+
+```tsx
+const videoRef = useRef<VideoRef>(null);
+useEffect(() => {
+  videoRef.current!.srcObject = stream;
+  videoRef.current!.onloadeddata = () => console.log("ready");
+}, [stream]);
+```
+
+If both are set, the last writer wins (the React reconciler will set the prop after the user sets the ref, or vice versa). Internally both routes funnel through the same setter, which:
+
+1. Sends the new `MediaStream` shared object handle to native via a `srcObject` prop on the underlying view.
+2. Resets `readyState = 0`, `duration = NaN`, `ended = false`.
+3. Waits for the native `loadeddata` event to fire the transitions above.
+
+## What we don't expose
+
+- `src` (URL-based source). React Native developers should reach for `expo-video` for URL playback.
+- `canPlayType`, `crossOrigin`, `muted` audio routing, `volume`, `played` (`TimeRanges`).
+- `error` (the `MediaError` object). v1 surfaces capture-time errors as the `getUserMedia()` promise rejection, not through `ref.current.error`.
+
+These omissions are because the underlying view is an `AVCaptureVideoPreviewLayer`, not an `AVPlayerLayer`. Adding URL playback would require a different native view (likely shared with `expo-video`).
+
+## Open questions
+
+1. Should `ended` event also fire on the underlying `MediaStreamTrack` objects we observe? Yes — the spec says the track fires `ended`, and the video element listens. We wire this via the native track's `ended` event being forwarded into JS, where the `MediaStream` aggregates them and the `<Video>` listens.
+2. Should we expose `error: MediaError | null`? Out of scope until a use case appears.

@@ -8,7 +8,12 @@
     "scheme": "standardcameraapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "dev.ide.standardcameraapp",
+      "deploymentTarget": "16.4",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs camera access to display the live camera preview."
+      }
     },
     "android": {
       "adaptiveIcon": {
