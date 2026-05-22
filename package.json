@@ -7,6 +7,7 @@
     "event-target-polyfill": "^0.0.4",
     "expo": "~56.0.0-preview.13",
     "expo-constants": "~56.0.12",
+    "expo-dev-client": "~56.0.12",
     "expo-device": "~56.0.4",
     "expo-font": "~56.0.5",
     "expo-glass-effect": "~56.0.4",
