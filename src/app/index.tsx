@@ -1,13 +1,15 @@
 import * as React from 'react';
-import { Button, StyleSheet, Text, View } from 'react-native';
+import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTheme } from '@/hooks/use-theme';
 import { Video, type HTMLVideoElement } from '../../modules/standard-camera';
 
 // @ref LLP 0000 — Demo screen: the entire surface a developer interacts with
 // is the spec-shaped navigator.mediaDevices.getUserMedia + <Video srcObject>.
 
 export default function HomeScreen(): React.JSX.Element {
+  const theme = useTheme();
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const [stream, setStream] = React.useState<MediaStream | null>(null);
   const [status, setStatus] = React.useState<string>('idle');
@@ -90,42 +92,53 @@ export default function HomeScreen(): React.JSX.Element {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>standard-camera-app</Text>
-      <Text style={styles.subtitle}>navigator.mediaDevices.getUserMedia → &lt;Video srcObject&gt;</Text>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]} edges={['top', 'left', 'right']}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.contentContainer}
+        contentInsetAdjustmentBehavior="automatic">
+        <Text style={[styles.title, { color: theme.text }]}>standard-camera-app</Text>
+        <Text style={[styles.subtitle, { color: theme.textSecondary }]}>navigator.mediaDevices.getUserMedia → &lt;Video srcObject&gt;</Text>
 
-      <View style={styles.videoContainer}>
-        <Video ref={videoRef} style={styles.video} />
-      </View>
+        <View style={styles.videoContainer}>
+          <Video ref={videoRef} style={styles.video} />
+        </View>
 
-      <View style={styles.controls}>
-        {!stream ? (
-          <Button title="Start camera" onPress={start} />
-        ) : (
-          <Button title="Stop camera" onPress={stop} />
-        )}
-      </View>
+        <View style={styles.controls}>
+          {!stream ? (
+            <Button title="Start camera" onPress={start} />
+          ) : (
+            <Button title="Stop camera" onPress={stop} />
+          )}
+        </View>
 
-      <View style={styles.statusBlock}>
-        <Text style={styles.statusLine}>status: {status}</Text>
-        <Text style={styles.statusLine}>active: {stream?.active ? 'true' : 'false'}</Text>
-        <Text style={styles.statusLine}>tracks: {stream?.getTracks().length ?? 0}</Text>
-        {stream?.getVideoTracks().map((t) => (
-          <Text key={t.id} style={styles.statusLine}>
-            {t.label} • {t.kind} • {t.readyState}
-          </Text>
-        ))}
-        {error && <Text style={styles.errorLine}>{error}</Text>}
-      </View>
+        <View style={styles.statusBlock}>
+          <Text style={[styles.statusLine, { color: theme.text }]}>status: {status}</Text>
+          <Text style={[styles.statusLine, { color: theme.text }]}>active: {stream?.active ? 'true' : 'false'}</Text>
+          <Text style={[styles.statusLine, { color: theme.text }]}>tracks: {stream?.getTracks().length ?? 0}</Text>
+          {stream?.getVideoTracks().map((t) => (
+            <Text key={t.id} style={[styles.statusLine, { color: theme.text }]}>
+              {t.label} • {t.kind} • {t.readyState}
+            </Text>
+          ))}
+          {error && <Text style={styles.errorLine}>{error}</Text>}
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  contentContainer: {
     padding: 16,
     gap: 16,
+    paddingBottom: 32,
   },
   title: {
     fontSize: 24,
@@ -134,7 +147,6 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 13,
     fontFamily: 'Menlo',
-    opacity: 0.7,
   },
   videoContainer: {
     aspectRatio: 3 / 4,

@@ -3,6 +3,8 @@ import * as React from 'react';
 import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTheme } from '@/hooks/use-theme';
+
 // @ref LLP 0007 — In-app WPT-style test runner screen.
 // Renders one shared <Video> element. Tests reset its srcObject between runs.
 // Output: WPT_RESULT / WPT_DONE lines emitted to console for the CLI driver.
@@ -12,6 +14,7 @@ import { Video, type HTMLVideoElement, testing } from '../../modules/standard-ca
 type Result = testing.TestResult;
 
 export default function RunTestsScreen(): React.JSX.Element {
+  const theme = useTheme();
   const params = useLocalSearchParams<{ autorun?: string }>();
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const [results, setResults] = React.useState<Result[]>([]);
@@ -40,32 +43,45 @@ export default function RunTestsScreen(): React.JSX.Element {
   }, [params.autorun, run, running, results.length]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>WPT runner</Text>
-      <Text style={styles.subtitle}>
-        {testing.getRegisteredTestCount()} tests registered
-      </Text>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]} edges={['top', 'left', 'right']}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.contentContainer}
+        contentInsetAdjustmentBehavior="automatic">
+        <Text style={[styles.title, { color: theme.text }]}>WPT runner</Text>
+        <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+          {testing.getRegisteredTestCount()} tests registered
+        </Text>
 
-      <View style={styles.videoSlot}>
-        <Video ref={videoRef} style={styles.video} />
-      </View>
+        <View style={styles.videoSlot}>
+          <Video ref={videoRef} style={styles.video} />
+        </View>
 
-      <View style={styles.controls}>
-        <Button title={running ? 'Running…' : 'Run tests'} onPress={run} disabled={running} />
-      </View>
+        <View style={styles.controls}>
+          <Button title={running ? 'Running…' : 'Run tests'} onPress={run} disabled={running} />
+        </View>
 
-      {summary ? <Text style={styles.summary}>{summary}</Text> : null}
+        {summary ? <Text style={[styles.summary, { color: theme.text }]}>{summary}</Text> : null}
 
-      <ScrollView style={styles.results} contentContainerStyle={styles.resultsContent}>
-        {results.map((r) => (
-          <ResultRow key={r.name} result={r} />
-        ))}
+        <View style={styles.resultsList}>
+          {results.map((r) => (
+            <ResultRow key={r.name} result={r} textColor={theme.text} mutedColor={theme.textSecondary} />
+          ))}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function ResultRow({ result }: { result: Result }): React.JSX.Element {
+function ResultRow({
+  result,
+  textColor,
+  mutedColor,
+}: {
+  result: Result;
+  textColor: string;
+  mutedColor: string;
+}): React.JSX.Element {
   const color =
     result.status === 'pass'
       ? '#0a0'
@@ -77,19 +93,25 @@ function ResultRow({ result }: { result: Result }): React.JSX.Element {
     <View style={styles.row}>
       <Text style={[styles.rowStatus, { color }]}>{glyph}</Text>
       <View style={{ flex: 1 }}>
-        <Text style={styles.rowName}>{result.name}</Text>
+        <Text style={[styles.rowName, { color: textColor }]}>{result.name}</Text>
         {result.message ? <Text style={styles.rowMessage}>{result.message}</Text> : null}
       </View>
-      <Text style={styles.rowDuration}>{result.durationMs}ms</Text>
+      <Text style={[styles.rowDuration, { color: mutedColor }]}>{result.durationMs}ms</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  contentContainer: {
     padding: 16,
     gap: 12,
+    paddingBottom: 32,
   },
   title: {
     fontSize: 22,
@@ -98,7 +120,6 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 12,
     fontFamily: 'Menlo',
-    opacity: 0.6,
   },
   videoSlot: {
     width: 120,
@@ -118,12 +139,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  results: {
-    flex: 1,
-  },
-  resultsContent: {
+  resultsList: {
     gap: 6,
-    paddingBottom: 32,
   },
   row: {
     flexDirection: 'row',
@@ -148,6 +165,5 @@ const styles = StyleSheet.create({
   rowDuration: {
     fontFamily: 'Menlo',
     fontSize: 11,
-    opacity: 0.6,
   },
 });
