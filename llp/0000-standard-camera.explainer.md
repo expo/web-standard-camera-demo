@@ -93,7 +93,8 @@ See [LLP 0005](./0005-ios-native-mapping.decision.md) for the details of the iOS
 │   ├── 0004-htmlmediaelement-srcobject.spec.md
 │   ├── 0005-ios-native-mapping.decision.md
 │   ├── 0006-navigator-polyfill.decision.md
-│   └── 0007-in-app-wpt-runner.guide.md
+│   ├── 0007-in-app-wpt-runner.guide.md
+│   └── 0008-w3c-spec-text.spec.md     verbatim spec source-of-truth
 ├── modules/
 │   └── standard-camera/               local Expo module
 └── scripts/

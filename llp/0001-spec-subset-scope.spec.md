@@ -9,7 +9,10 @@
 
 ## Summary
 
-This document is the index of which clauses of [W3C Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/) (Editor's Draft) and the [HTML `srcObject` section](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject) we implement, stub, or omit. Every line in our implementation that exists because of a spec clause should `@ref` an anchor in this document or in one of the per-interface spec LLPs (0002–0004).
+This document is the index of which clauses of [W3C Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/) (Editor's Draft) and the [HTML `srcObject` section](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject) we implement, stub, or omit.
+
+- **[LLP 0008](./0008-w3c-spec-text.spec.md)** holds the spec text itself, with each member at the matching W3C anchor (e.g. `dom-mediastreamtrack-stop`). Code annotations that exist *because of* a spec clause should cite that anchor: `@ref LLP 0008#<anchor>`.
+- **This LLP (0001)** and the per-interface notes (0002–0004) record our *scope decisions* — which clauses are in vs. out, and the iOS-specific implementation paths through them.
 
 The scope is intentionally tiny: enough to let `navigator.mediaDevices.getUserMedia({ video: true })` resolve to a `MediaStream` whose video track displays in a `<Video srcObject={stream} />`.
 
@@ -60,9 +63,9 @@ Section: [§ MediaStreamTrack](https://www.w3.org/TR/mediacapture-streams/#media
 |---|---|---|---|
 | `mediastreamtrack-id` | `id` | **Implemented** | |
 | `mediastreamtrack-kind` | `kind` | **Implemented** | Always `"video"` in v1. |
-| `mediastreamtrack-label` | `label` | **Implemented** | `AVCaptureDevice.localizedName`. |
+| `mediastreamtrack-label` | `label` | **Implemented** | `AVCaptureDevice.localizedName`; set at construction, never changes (per [LLP 0008#dom-mediastreamtrack-label](./0008-w3c-spec-text.spec.md#attribute-label-dom-mediastreamtrack-label)). |
 | `mediastreamtrack-enabled` | `enabled` (get/set) | **Implemented** | Set toggles whether frames are forwarded (we flip the connection's `isEnabled`). |
-| `mediastreamtrack-muted` | `muted` | **Implemented** | Always `false` in v1. |
+| `mediastreamtrack-muted` | `muted` | **Implemented** | Mirrors AVCaptureSession interruption state (overheating, backgrounding, in-use-by-another-app). |
 | `mediastreamtrack-readystate` | `readyState` | **Implemented** | `"live"` until `stop()`. |
 | `mediastreamtrack-stop` | `stop()` | **Implemented** | Transitions to `"ended"`, fires `ended`. |
 | `mediastreamtrack-clone` | `clone()` | **Out of scope** | Throws. |
@@ -70,7 +73,7 @@ Section: [§ MediaStreamTrack](https://www.w3.org/TR/mediacapture-streams/#media
 | `mediastreamtrack-getconstraints` | `getConstraints()` | **Implemented** | Returns the constraints passed to `getUserMedia`. |
 | `mediastreamtrack-getsettings` | `getSettings()` | **Implemented** | `{ deviceId, groupId, facingMode, width, height, frameRate, aspectRatio }`. |
 | `mediastreamtrack-applyconstraints` | `applyConstraints()` | **Out of scope** | Rejects. |
-| `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **`ended` implemented** | `mute`/`unmute` never fire in v1. |
+| `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **Implemented** | `mute`/`unmute` fire on AVCaptureSession interruption notifications. `ended` fires on `stop()` or a session runtime error. |
 
 ## `HTMLMediaElement.srcObject` integration
 

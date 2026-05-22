@@ -78,11 +78,28 @@ We tried KVO on `previewLayer.isPreviewing` first; it was unreliable on iPhone 1
 
 ## Passing SharedObjects to view props (the big landmine)
 
-Pre-Fabric Expo views **cannot accept SharedObject references as view props directly.** A prop declared on the Swift side as `(view, stream: MediaStream?)` *will silently receive `nil`* if JS passes the SharedObject's JS-side handle. You have to pass the shared-object id (an integer stored on the JS proxy as `__expo_shared_object_id__`), and the prop converter resolves it back to the Swift instance.
+Expo views (under either architecture, as of SDK 56) **cannot accept SharedObject references as view props directly.** A prop declared on the Swift side as `(view, stream: MediaStream?)` *will silently receive `nil`* if JS passes the SharedObject's JS-side handle. You have to pass the shared-object id (an integer stored on the JS proxy as `__expo_shared_object_id__`), and the prop converter resolves it back to the Swift instance.
 
-`modules/standard-camera/src/HTMLVideoElement.tsx` unwraps with `unwrap(stream)` → `stream._native.__expo_shared_object_id__`. expo-video does the same thing with the same explanatory comment ("Temporary solution to pass the shared object ID instead of the player object…") — see `expo-video/src/VideoView.tsx`.
+The recommended pattern is documented in [expo/expo#46054](https://github.com/expo/expo/pull/46054), which adds first-class support for this in `create-expo-module`'s generated wrappers. Three ingredients:
 
-This is a known issue that will go away when the new architecture (Fabric) becomes the default and supports passing shared objects through view props natively. Until then, every Expo view prop that takes a SharedObject needs the id-unwrap dance.
+1. **Two-tier types.** The consumer-facing component prop type takes the actual SharedObject; the bridge-level type takes a `number`.
+   - `VideoProps.srcObject: MediaStream | null`
+   - `NativeVideoViewProps.srcObject: number | null`
+2. **A named helper for the unwrap:**
+   ```ts
+   function getSharedObjectId(object: unknown): number | null {
+     return (object as { __expo_shared_object_id__?: number } | null)?.__expo_shared_object_id__ ?? null;
+   }
+   ```
+3. **The wrapper component encapsulates the unwrap** so the consumer never touches `__expo_shared_object_id__`:
+   ```tsx
+   <NativeView {...nativeProps} srcObject={getStreamNativeId(srcObject)} />
+   ```
+   The native `Prop("srcObject")` is still typed as `MediaStream?` — Swift resolves the id back to the instance via the registered SharedObject class.
+
+In our case `MediaStream` is a TS wrapper class with `_native` pointing at the actual SharedObject proxy (the wrapper exists so the public type can be DOM-compatible). The wrapper exposes `__expo_shared_object_id__` as a getter that returns `this._native.__expo_shared_object_id__`, so `getSharedObjectId(stream)` works on the wrapper directly — matching the PR's recommended call site verbatim.
+
+This is a known limitation that will be addressed in the Expo bridge; until then, every view prop that takes a SharedObject needs this dance.
 
 ## EventTarget polyfill
 

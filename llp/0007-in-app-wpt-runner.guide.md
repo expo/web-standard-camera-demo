@@ -61,12 +61,49 @@ The `createElement("video")` polyfill is the only complex piece. It returns a th
 
 ## Ported tests
 
-Located in `modules/standard-camera/src/tests/wpt/`:
+Located in `modules/standard-camera/src/testing/wpt/`:
 
-- `MediaDevices-getUserMedia.test.ts` — adapted from [`wpt/mediacapture-streams/MediaDevices-getUserMedia.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaDevices-getUserMedia.https.html). Asserts API presence and that the returned stream contains exactly one live video track with reasonable settings.
-- `MediaStream-MediaElement-srcObject.test.ts` — adapted from [`wpt/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html). Verifies the LLP 0004 invariants.
+- `MediaDevices-getUserMedia.ts` — adapted from [`wpt/mediacapture-streams/MediaDevices-getUserMedia.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaDevices-getUserMedia.https.html). Asserts API presence and that the returned stream contains exactly one live video track with reasonable settings.
+- `MediaStream-MediaElement-srcObject.ts` — adapted from [`wpt/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html). Verifies the LLP 0004 invariants.
+- `MediaStreamTrack-mute.ts` — covers `track.muted`, `mute` / `unmute` events, the empty-label-after-stop invariant, and the stop-stops-session step from LLP 0003. The mute/unmute path is exercised via a test-only native hook (`stream._native.__simulateInterruptionForTesting`) that posts a synthetic `AVCaptureSession.wasInterruptedNotification`.
 
-Adding a new test: drop a file under `tests/wpt/`, import it from `tests/index.ts`, and add a one-line entry in this LLP.
+Adding a new test: drop a file under `testing/wpt/`, import it from `testing/index.ts`, and add a one-line entry in this LLP.
+
+## The simulator does not have a camera device
+
+The iOS 26 simulator in current Xcode exposes no `AVCaptureDevice` to apps:
+
+- `AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera], mediaType: .video, position: …)` returns an empty array regardless of `position`.
+- `AVCaptureDevice.default(for: .video)` returns `nil`.
+- The kernel-side capture daemon logs `FigCaptureSourceSimulator signalled err=-12784` and `SpringBoard: No capture application found for the dev.ide.standardcameraapp`.
+
+Empirically, running the WPT suite on a freshly-booted iOS 26 simulator gives **3 passed / 16 failed**: only the three tests that don't call `getUserMedia({video:true})` pass (`getUserMedia exists`, `getUserMedia({}) rejects with TypeError`, `getSupportedConstraints`). Every other test fails with `NotFoundError: Requested device not found` from `pickDevice`. The mute/unmute tests in particular can't be validated on the simulator because the synthetic-interruption hook needs a `MediaStream` to be posted-against, and getUserMedia rejects before the hook can be reached.
+
+A real device (iPhone running iOS 26) passes 19/19.
+
+## Testing overheating (thermal pressure) end-to-end
+
+Two layers to think about:
+
+**Layer 1 — our `NotificationCenter` observers and event fan-out.** Covered deterministically by the `MediaStreamTrack-mute.ts` tests, which call the test-only native hook `stream._native.__simulateInterruptionForTesting(reasonCode, ended)`. That hook posts the same `AVCaptureSession.wasInterruptedNotification` iOS would post. Our observers fire identically whether the notification came from iOS or from this hook, so this fully validates the handler path — `track.muted` flips, the JS DOM `mute` event dispatches, etc.
+
+Validating Layer 1 requires a real device, because as documented above the simulator can't even open a capture session.
+
+**Layer 2 — iOS actually deciding to interrupt because the device is hot.** This is iOS-internal behavior; we just consume the notification. Real-device-only:
+
+- `simctl` has no thermal-pressure subcommand in current Xcode (verified: `strings $(xcrun -f simctl) | grep -iE "thermal|pressure"` returns nothing).
+- I don't have a verified claim about Xcode Simulator app GUI controls for thermal state on this Xcode build. If one is added in a future Xcode and you use it, document the exact menu path here.
+- Real-device induction path: sustained GPU/CPU load (e.g. a Metal benchmark in another foreground app) until `ProcessInfo.thermalState` escalates to `.serious` or `.critical`. Observe `ProcessInfo.thermalStateDidChangeNotification` to know when iOS is in that regime; verify `track.muted` flips and the `mute` event fires while the camera session is open. This is manual; not automated.
+
+## Implications for `bun run test:ios`
+
+The current CLI boots a simulator, which means it can't validate anything that needs `getUserMedia` to resolve — i.e. 16 of 19 tests are unreachable without modifying the CLI to target a real device. Practical options:
+
+1. **Accept the limitation** and treat `bun run test:ios` as a smoke test (3 tests) plus a sanity check that the JS bundle loads.
+2. **Add a `--device` flag** to `scripts/test-ios.ts` that targets a connected real device via `devicectl` instead of `simctl`. The same WPT runner code runs; only the install / launch / log-stream path differs.
+3. **Wait for an Xcode build that adds a simulator camera device.** Apple has shipped this in older betas; whether it returns is up to them.
+
+Until one of those happens, the canonical green-test claim is "19/19 on iPhone 15 Pro / iOS 26"; the simulator number ("3/19") is informational only and should not be used as a release gate.
 
 ## CLI flow (`bun run test:ios`)
 

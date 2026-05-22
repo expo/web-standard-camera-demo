@@ -1,118 +1,155 @@
-# LLP 0003: `MediaStream` and `MediaStreamTrack` subset
+# LLP 0003: `MediaStream` and `MediaStreamTrack` — iOS implementation
 
 **Type:** Spec
 **Status:** Active
-**Systems:** standard-camera
+**Systems:** standard-camera, ios
 **Author:** James Ide
-**Date:** 2026-05-19
-**Related:** 0001, 0002, 0004
+**Date:** 2026-05-19 (refactored 2026-05-21)
+**Related:** 0001, 0002, 0005, 0008
 
 ## Summary
 
-Subset of [W3C § MediaStream](https://www.w3.org/TR/mediacapture-streams/#mediastream) and [§ MediaStreamTrack](https://www.w3.org/TR/mediacapture-streams/#mediastreamtrack).
+This document records the iOS-specific behavior of our `MediaStream` and `MediaStreamTrack` SharedObjects. The spec text (IDL, MUSTs, algorithms) lives in [LLP 0008#dom-mediastream](./0008-w3c-spec-text.spec.md#mediastream-interface-dom-mediastream) and [#dom-mediastreamtrack](./0008-w3c-spec-text.spec.md#mediastreamtrack-interface-dom-mediastreamtrack). The in-scope/out-of-scope decisions are in [LLP 0001](./0001-spec-subset-scope.spec.md). What follows is the AVFoundation realization of those clauses and the small set of iOS-specific concerns that have no spec analog (notification observers, session lifecycle, simulator behavior).
 
-## `MediaStream` (subset)
+Section anchors below are stable; code annotations cite them as `@ref LLP 0003#<anchor>`. Each section pairs the spec anchor it implements with the iOS specifics.
+
+---
+
+## `MediaStream`
+
+`MediaStream` is a [`SharedRef`-like](https://github.com/expo/expo/blob/main/packages/expo-modules-core/ios/Core/SharedObjects/SharedObject.swift) `SharedObject` that owns an `AVCaptureSession` and a snapshot array of tracks. The session is the unit of capture; tracks describe what's flowing through it. JS receives an opaque handle and uses the spec-shaped methods on the TS wrapper class.
 
 ### `stream-id`
 
-Type: `string`. Each `MediaStream` has a unique id, set at construction, read-only thereafter. Implementation: UUIDv4 generated in native.
+Implements [LLP 0008#dom-mediastream-id](./0008-w3c-spec-text.spec.md#attribute-id-dom-mediastream-id). UUIDv4 generated in `MediaDevices.swift`'s `getUserMedia` and stored as `let id` on the Swift `MediaStream`.
 
 ### `stream-active`
 
-Type: `boolean`. Per spec: "A MediaStream object is said to be active when it has at least one MediaStreamTrack that has not ended." Computed each access as `tracks.some(t => t.readyState === "live")`.
+Implements [LLP 0008#dom-mediastream-active](./0008-w3c-spec-text.spec.md#attribute-active-dom-mediastream-active). Computed each access: `tracks.contains { $0.readyState == "live" }`. Not cached — cheap enough.
 
 ### `stream-getTracks`
 
-Returns a snapshot array of all `MediaStreamTrack` objects in insertion order. Mutating the returned array does not affect the stream.
+Implements [LLP 0008#dom-mediastream-gettracks](./0008-w3c-spec-text.spec.md#method-gettracks-dom-mediastream-gettracks). Returns the `tracks` array directly. Swift arrays are value types, so the caller gets a copy — the "snapshot" semantics the spec requires are preserved.
 
 ### `stream-getVideoTracks` / `stream-getAudioTracks`
 
-Filtered by `kind === "video"` / `"audio"`. In v1, audio is always empty.
+Implements [LLP 0008#dom-mediastream-getvideotracks](./0008-w3c-spec-text.spec.md#method-getvideotracks-dom-mediastream-getvideotracks) and `#dom-mediastream-getaudiotracks`. Filtered by `kind`. `getAudioTracks` always returns `[]` in v1 (audio out of scope).
 
 ### `stream-getTrackById`
 
-```
-function getTrackById(id: string): MediaStreamTrack | null
-```
-
-Linear scan; return first match.
+Implements [LLP 0008#dom-mediastream-gettrackbyid](./0008-w3c-spec-text.spec.md#method-gettrackbyidtrackid-dom-mediastream-gettrackbyid). Linear scan; first match.
 
 ### `stream-events`
 
-We implement `EventTarget` shape but never dispatch `addtrack` / `removetrack` events in v1, since `addTrack`/`removeTrack` are out of scope.
+The spec's `addtrack` / `removetrack` events ([LLP 0008#event-mediastream-addtrack](./0008-w3c-spec-text.spec.md#event-addtrack-event-mediastream-addtrack)) are not fired in v1 because `addTrack` / `removeTrack` are out of scope. The native `MediaStream` does install three other observers on its `AVCaptureSession`:
 
-## `MediaStreamTrack` (subset)
+- `AVCaptureSession.wasInterruptedNotification` → every track's `muted` flips to `true` and fires `mute`.
+- `AVCaptureSession.interruptionEndedNotification` → every track's `muted` flips to `false` and fires `unmute`.
+- `AVCaptureSession.runtimeErrorNotification` → every track is ended (readyState → `"ended"`, fires `ended`).
 
-### `track-kind`
+These are stream-scoped observers because `AVCaptureSession` is the unit iOS notifies; we fan out to per-track events because that's what the spec exposes to JS.
 
-`"video"` (always in v1).
+### Session lifecycle
+
+- The session is created and started inside `getUserMedia` ([LLP 0002#gum-build-session](./0002-getusermedia.spec.md#gum-build-session)).
+- It is stopped when:
+  1. The last live track has its `stop()` called ([LLP 0008#dom-mediastreamtrack-stop](./0008-w3c-spec-text.spec.md#method-stop-dom-mediastreamtrack-stop) step 3; spec says "notify track's source that track is ended", which on AVFoundation means stopping the capture session if no other tracks need it).
+  2. The JS-side `MediaStream` handle is garbage-collected (`sharedObjectWillRelease` posts a `stopRunning` to the session queue).
+- The session is **not** stopped when a `VideoView` is removed from the React tree — the stream lives independently of any view. Multiple views can show the same stream.
+
+---
+
+## `MediaStreamTrack`
+
+A `SharedObject` holding metadata (`id`, `kind`, `label`, `enabled`, `muted`, `readyState`, `settings`, `constraints`) plus a weak back-reference to the owning `MediaStream` and to the `AVCaptureConnection` between the capture device input and the FrameSink output.
 
 ### `track-id`
 
-UUIDv4, set at construction, read-only.
+Implements [LLP 0008#dom-mediastreamtrack-id](./0008-w3c-spec-text.spec.md#attribute-id-dom-mediastreamtrack-id). UUIDv4 from `gum-build-session`. Stored as `let`.
+
+### `track-kind`
+
+Implements [LLP 0008#dom-mediastreamtrack-kind](./0008-w3c-spec-text.spec.md#attribute-kind-dom-mediastreamtrack-kind). Always `"video"` in v1 (audio out of scope).
 
 ### `track-label`
 
-Returns `AVCaptureDevice.localizedName` of the underlying device. Empty string after `stop()` per spec.
+Implements [LLP 0008#dom-mediastreamtrack-label](./0008-w3c-spec-text.spec.md#attribute-label-dom-mediastreamtrack-label). Set to `AVCaptureDevice.localizedName` at construction. Stored as `let` — never mutated. (An earlier revision of this LLP and the implementation incorrectly cleared `label` after `stop()`; the spec mandates no such clearing. Fixed 2026-05-21.)
 
 ### `track-enabled`
 
-Get/set boolean. Default `true`. Setting flips `AVCaptureConnection.isEnabled` so frames are not forwarded when `false`. Does **not** change `readyState`.
+Implements [LLP 0008#dom-mediastreamtrack-enabled](./0008-w3c-spec-text.spec.md#attribute-enabled-dom-mediastreamtrack-enabled). Read/write `Bool`, default `true`. Setting flips the `AVCaptureConnection.isEnabled` on the FrameSink data output, which stops frames from being delivered downstream.
+
+Caveat: the spec describes the `enabled = false` effect as "the track is muted at the source" (frames become black for video / silence for audio, but the track still nominally produces samples). On our preview path, the `AVCaptureVideoPreviewLayer` has its own internal connection that we don't toggle, so the on-screen preview keeps showing the most recent frame after `enabled = false`. Downstream consumers (FrameSink, future MediaRecorder, etc.) stop receiving samples as expected. Documented divergence; consider it good enough until someone needs strict "produce black frames" behavior.
 
 ### `track-muted`
 
-Always `false` in v1. We never simulate mute.
+Implements [LLP 0008#dom-mediastreamtrack-muted](./0008-w3c-spec-text.spec.md#attribute-muted-dom-mediastreamtrack-muted). Reflects the parent `AVCaptureSession`'s interruption state — see `stream-events` above.
+
+iOS interruption reasons that map to `muted = true` (all of them; the spec only cares that the source is temporarily unable to provide data):
+
+- `videoDeviceNotAvailableInBackground` — app went to background
+- `videoDeviceInUseByAnotherClient` — another app opened the camera
+- `videoDeviceNotAvailableWithMultipleForegroundApps` — Split View on iPad
+- `videoDeviceNotAvailableDueToSystemPressure` — **thermal pressure / overheating**
+- `sensitiveContentMitigationActivated` — iOS 17+ content moderation
 
 ### `track-readyState`
 
-`"live"` initially; transitions to `"ended"` exactly once when `stop()` is called or when the underlying device becomes unavailable. Read-only.
+Implements [LLP 0008#dom-mediastreamtrack-readystate](./0008-w3c-spec-text.spec.md#attribute-readystate-dom-mediastreamtrack-readystate). `"live"` initially; transitions to `"ended"` exactly once via either:
+
+- `stop()` (explicit JS call) — see `track-stop` below
+- An `AVCaptureSessionRuntimeErrorNotification` on the underlying session — see `stream-events`
+
+Once `"ended"`, `setMuted` calls are no-ops; `label` is unchanged.
 
 ### `track-stop`
 
-1. If `readyState === "ended"`, return (idempotent per spec).
-2. Set `readyState = "ended"`.
-3. Disable the corresponding `AVCaptureConnection`.
-4. If the stream has no other live tracks, stop the `AVCaptureSession`.
-5. Fire `ended` event asynchronously (queue a task; do not fire synchronously inside `stop()` — spec says fire as a separate task).
+Implements [LLP 0008#dom-mediastreamtrack-stop](./0008-w3c-spec-text.spec.md#method-stop-dom-mediastreamtrack-stop). Our algorithm:
+
+1. If `readyState == "ended"` → return (idempotent per spec).
+2. Set `readyState = "ended"` synchronously.
+3. Disable the data-output `AVCaptureConnection` so frames stop flowing downstream.
+4. Ask the owning `MediaStream` whether any live tracks remain; if not, stop the `AVCaptureSession`. This is the AVFoundation realization of "notify track's source that track is ended" — for single-track video streams it means releasing the camera and turning off the indicator light.
+5. Fire `ended` via `SharedObject.emit`, which schedules it asynchronously on the JS runtime's thread — matching the spec's "fire as a separate task" requirement.
 
 ### `track-events`
 
-- `ended` — fired once when `readyState` transitions to `"ended"`. Fired regardless of whether transition was caused by `stop()` or external (device unplugged on hardware; never in v1 simulator).
-- `mute` / `unmute` — never fired in v1.
+`ended` / `mute` / `unmute` — see [LLP 0008#dom-mediastreamtrack-mute-algorithm](./0008-w3c-spec-text.spec.md#event-setting-muted-state-dom-mediastreamtrack-mute-algorithm) and `#event-mediastreamtrack-ended`. Native side uses `SharedObject.emit`, which runs the dispatch on the JS runtime — the JS-side `MediaStreamTrack` class subscribes once in its constructor and re-dispatches as DOM `Event` objects.
 
 ### `track-getSettings`
 
-Returns the actual settings of the underlying capture:
+Implements [LLP 0008#dom-mediastreamtrack-getsettings](./0008-w3c-spec-text.spec.md#method-getsettings-dom-mediastreamtrack-getsettings). Returns the snapshot captured in `gum-build-session`:
 
 ```ts
 {
-  deviceId: string,    // AVCaptureDevice.uniqueID
-  groupId: string,     // matches deviceId in v1 (single-camera groups)
+  deviceId: string,          // AVCaptureDevice.uniqueID
+  groupId: string,           // matches deviceId in v1 (single-camera groups)
   facingMode: "user" | "environment",
-  width: number,       // pixels of the chosen preset
+  width: number,             // active format dimensions, not the preset
   height: number,
-  frameRate: number,
-  aspectRatio: number  // width / height
+  frameRate: number,         // device.activeFormat.videoSupportedFrameRateRanges[0].maxFrameRate
+  aspectRatio: number
 }
 ```
 
+Per spec, after `readyState == "ended"` we still return the settings as they were at end time. We get this for free because the snapshot is captured at construction and never reread.
+
 ### `track-getConstraints`
 
-Returns the constraints object passed to `getUserMedia()` for this track. Read-only snapshot taken at construction.
+Implements [LLP 0008#dom-mediastreamtrack-getconstraints](./0008-w3c-spec-text.spec.md#method-getconstraints-dom-mediastreamtrack-getconstraints). Returns the flattened constraints we received from JS — *not* the original `ConstrainDOMString`-shaped input. Strictly, the spec returns "the constraints currently applied to the track"; our return value reflects the applied scalars but doesn't reconstruct the original exact/ideal envelope. Known divergence (see [LLP 0002 open question #3](./0002-getusermedia.spec.md#open-questions)).
 
 ### `track-getCapabilities`
 
-Returns `{}` in v1 (out of scope but spec allows an empty MediaTrackCapabilities).
+Implements [LLP 0008#dom-mediastreamtrack-getcapabilities](./0008-w3c-spec-text.spec.md#method-getcapabilities-dom-mediastreamtrack-getcapabilities). Returns `{}` in v1. The spec allows an empty `MediaTrackCapabilities`.
 
-### `track-clone`
+### Out of scope
 
-Throws `NotSupportedError` in v1.
+- `track-clone` — throws `NotSupportedError`. See [LLP 0001](./0001-spec-subset-scope.spec.md).
+- `track-applyConstraints` — rejects with `OverconstrainedError`. See [LLP 0001](./0001-spec-subset-scope.spec.md).
 
-### `track-applyConstraints`
-
-Rejects with `OverconstrainedError` always in v1.
+---
 
 ## Open questions
 
-- Should `stop()` synchronously reflect the new `readyState`, or only after the queued task? Spec says synchronously; we follow that. Only the `ended` event is asynchronous.
-- For multi-track streams (which we don't have in v1), how do we coordinate session stop? Out of scope until audio lands.
+- Multi-track streams (e.g., when we add audio): how do we coordinate session stop across tracks? `track-stop` step 4 already checks for other live tracks, but the audio track and video track will share a session in our v1+audio plan, so we'll need to make sure stopping one doesn't break the other.
+- `track-getConstraints` should ideally round-trip the original constraint shape. Today the bridge loses the `{exact: ...}` / `{ideal: ...}` envelope (see [LLP 0002 open question #3](./0002-getusermedia.spec.md#open-questions)).
