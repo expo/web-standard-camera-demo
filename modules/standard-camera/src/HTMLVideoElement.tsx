@@ -8,18 +8,20 @@ import type { StyleProp, ViewStyle } from 'react-native';
 // ported from a browser type-checks 1:1 against `navigator.mediaDevices`.
 type Stream = globalThis.MediaStream;
 
-// Unwrap our TS MediaStream into its native shared-object id. The Swift view
-// prop is typed as `MediaStream?` but Expo's view manager only accepts the
-// shared-object id (a number) for now — expo-video uses the same workaround.
-// See expo-video/src/VideoView.tsx getPlayerId().
-function unwrap(stream: Stream | null): number | null {
-  if (stream == null) return null;
-  const native = (stream as unknown as { _native?: { __expo_shared_object_id__?: number } })._native;
-  return native?.__expo_shared_object_id__ ?? null;
+// @ref LLP 0005#sharedobject-view-prop — Canonical helper from
+// https://github.com/expo/expo/pull/46054. Expo's view-prop marshaller can't
+// resolve a SharedObject proxy passed directly; the JS side forwards the
+// proxy's id (a number) and the native Prop converter — typed normally as the
+// SharedObject — resolves the id back. Our MediaStream class exposes
+// `__expo_shared_object_id__` via a getter so this helper works on it.
+function getSharedObjectId(object: unknown): number | null {
+  return (object as { __expo_shared_object_id__?: number } | null)?.__expo_shared_object_id__ ?? null;
 }
 
+// Bridge-level prop type — the native view receives only the id.
+// (Public-facing prop type is `VideoProps` below, which takes the stream.)
 interface NativeVideoViewProps {
-  srcObject?: unknown;
+  srcObject?: number | null;
   style?: StyleProp<ViewStyle>;
   onLoadedData?: (event: { nativeEvent: object }) => void;
   onDurationChange?: (event: { nativeEvent: object }) => void;
@@ -138,7 +140,7 @@ export const Video = React.forwardRef<HTMLVideoElement, VideoProps>(function Vid
   return (
     <NativeView
       ref={nativeRef}
-      srcObject={unwrap(srcObjectState)}
+      srcObject={getSharedObjectId(srcObjectState)}
       style={props.style}
       onLoadedData={() => el.__handleLoadedData()}
       onDurationChange={() => el.__handleDurationChange()}

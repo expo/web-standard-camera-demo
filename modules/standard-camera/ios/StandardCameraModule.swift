@@ -70,6 +70,15 @@ public final class StandardCameraModule: Module {
       Function("getTrackById") { (stream: MediaStream, trackId: String) -> MediaStreamTrack? in
         stream.getTrackById(trackId)
       }
+
+      // Test hook — posts a synthetic AVCaptureSession interruption notification
+      // so WPT tests can verify the mute/unmute path without needing real
+      // thermal pressure. reasonCode follows AVCaptureSession.InterruptionReason
+      // (4 == videoDeviceNotAvailableDueToSystemPressure, i.e. overheating).
+      Function("__simulateInterruptionForTesting") {
+        (stream: MediaStream, reasonCode: Int, ended: Bool) in
+        stream.simulateInterruption(reasonCode: reasonCode, ended: ended)
+      }
     }
 
     // MARK: - MediaStreamTrack class

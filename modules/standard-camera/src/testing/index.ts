@@ -2,5 +2,6 @@
 
 import './wpt/MediaDevices-getUserMedia';
 import './wpt/MediaStream-MediaElement-srcObject';
+import './wpt/MediaStreamTrack-mute';
 
 export * from './testharness';

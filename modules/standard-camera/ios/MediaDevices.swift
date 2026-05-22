@@ -21,7 +21,6 @@ internal struct FlatVideoConstraints: Record {
   @Field var height: Int?
   @Field var frameRate: Double?
   @Field var aspectRatio: Double?
-  @Field var audioHardRequired: Bool = false
 }
 
 // MARK: - DOMException-shaped throws
@@ -29,29 +28,34 @@ internal struct FlatVideoConstraints: Record {
 // the OverconstrainedError constraint into the message as "...: <name>" so the
 // TS layer can parse it onto .constraint.
 
+// @ref LLP 0008#error-notallowederror — user denied permission
 private func notAllowed() -> Exception {
   Exception(name: "NotAllowedError", description: "Permission denied")
 }
 
+// @ref LLP 0008#error-notfounderror — no suitable device matching constraints
 private func notFound() -> Exception {
   Exception(name: "NotFoundError", description: "Requested device not found")
 }
 
+// @ref LLP 0008#error-overconstrainederror — required constraint unsatisfiable;
+//   carries the offending constraint name in the message for TS to parse onto .constraint.
 private func overconstrained(_ constraint: String) -> Exception {
   Exception(name: "OverconstrainedError", description: "Constraint cannot be satisfied: \(constraint)")
 }
 
+// @ref LLP 0008#error-notreadableerror — hardware/system level capture failure
 private func notReadable(_ underlying: Error) -> Exception {
   Exception(name: "NotReadableError", description: "Camera could not be opened: \(underlying.localizedDescription)")
 }
 
 // MARK: - Implementation
-// @ref LLP 0002 — full algorithm
+// @ref LLP 0008#dom-mediadevices-getusermedia — spec algorithm
+// @ref LLP 0002 — our subset of the algorithm
 
 internal func getUserMedia(constraints: GetUserMediaConstraints) async throws -> MediaStream {
   // @ref LLP 0002#gum-validate-constraints
   guard let videoConstraints = constraints.video else {
-    // No video requested. We don't support audio-only.
     if constraints.audioRequested {
       throw overconstrained("audio")
     }
@@ -75,32 +79,22 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
   // @ref LLP 0002#gum-pick-device
   let device = try pickDevice(constraints: videoConstraints)
 
-  // @ref LLP 0002#gum-build-session
-  let (session, connection, settings) = try await buildSession(device: device, constraints: videoConstraints)
+  // @ref LLP 0002#gum-build-session — build session and add FrameSink atomically
+  // so the data-output connection is available when the track is constructed.
+  let frameSink = FrameSink()
+  let (session, trackConnection, settings) = try await buildSession(
+    device: device,
+    constraints: videoConstraints,
+    frameSink: frameSink
+  )
 
   let track = MediaStreamTrack(
     id: UUID().uuidString,
     label: device.localizedName,
-    session: session,
-    connection: connection,
     settings: settings,
     constraints: constraintsAsDictionary(videoConstraints)
   )
-
-  // @ref LLP 0005#first-frame-detection — Attach a hidden frame sink so frames
-  // are actively pulled through the session and we have a delegate to drive
-  // the loadeddata event reliably (more reliable than KVO on isPreviewing).
-  let frameSink = FrameSink()
-  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-    MediaStream.sessionQueue.async {
-      session.beginConfiguration()
-      if session.canAddOutput(frameSink.output) {
-        session.addOutput(frameSink.output)
-      }
-      session.commitConfiguration()
-      continuation.resume()
-    }
-  }
+  track.connection = trackConnection
 
   return MediaStream(id: UUID().uuidString, session: session, tracks: [track], frameSink: frameSink)
 }
@@ -113,11 +107,15 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
     throw overconstrained("deviceId")
   }
 
+  // @ref LLP 0002#gum-pick-device — default to back camera when no facingMode is
+  // specified. AVCaptureDevice.DiscoverySession with .unspecified returns devices
+  // in undefined order; back is the better default for a "camera demo" surface.
+  let facingModeRequested = constraints.facingMode != nil
   let position: AVCaptureDevice.Position
   switch constraints.facingMode {
   case "user": position = .front
   case "environment": position = .back
-  default: position = .unspecified
+  default: position = .back
   }
 
   let discovery = AVCaptureDevice.DiscoverySession(
@@ -129,6 +127,17 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   if let device = discovery.devices.first {
     return device
   }
+
+  // @ref LLP 0002#gum-pick-device — If the caller explicitly asked for a
+  // facingMode and we can't honor it, fail instead of silently substituting
+  // the other camera. The JS-side normalizer collapses `{exact: ...}` and the
+  // basic-constraint forms into the same flat string, so we treat any
+  // explicit facingMode as a hard requirement.
+  if facingModeRequested {
+    throw overconstrained("facingMode")
+  }
+
+  // No explicit facingMode — fall back to whatever video device the system has.
   if let fallback = AVCaptureDevice.default(for: .video) {
     return fallback
   }
@@ -137,7 +146,8 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
 
 private func buildSession(
   device: AVCaptureDevice,
-  constraints: FlatVideoConstraints
+  constraints: FlatVideoConstraints,
+  frameSink: FrameSink
 ) async throws -> (AVCaptureSession, AVCaptureConnection?, [String: Any]) {
   return try await withCheckedThrowingContinuation { continuation in
     MediaStream.sessionQueue.async {
@@ -167,6 +177,12 @@ private func buildSession(
       }
       session.addInput(input)
 
+      // Add the FrameSink output inside the same configuration block so the
+      // data-output connection comes up in one atomic transaction.
+      if session.canAddOutput(frameSink.output) {
+        session.addOutput(frameSink.output)
+      }
+
       session.commitConfiguration()
       session.startRunning()
 
@@ -185,11 +201,10 @@ private func buildSession(
         "aspectRatio": Double(width) / Double(max(height, 1))
       ]
 
-      // @ref LLP 0005#first-frame-detection — the view observes isPreviewing;
-      // we don't attach an output for frame detection here.
-      let connection = session.connections.first
-
-      continuation.resume(returning: (session, connection, settings))
+      // Hand back the AVCaptureConnection from the input to the data output so
+      // MediaStreamTrack.enabled can gate frame delivery to FrameSink.
+      let trackConnection = frameSink.output.connection(with: .video)
+      continuation.resume(returning: (session, trackConnection, settings))
     }
   }
 }

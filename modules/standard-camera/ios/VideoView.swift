@@ -42,10 +42,16 @@ internal final class VideoView: ExpoView {
 
   public override func layoutSubviews() {
     super.layoutSubviews()
+    // Disable Core Animation's implicit animations so the preview layer doesn't
+    // animate its frame/transform when bounds change (which produced a visible
+    // slide-in when the screen first laid out).
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
     previewLayer.frame = bounds
     if previewLayer.superlayer == nil {
       layer.insertSublayer(previewLayer, at: 0)
     }
+    CATransaction.commit()
   }
 
   // @ref LLP 0004#srcobject-readyState — Reset to HAVE_NOTHING; fire
@@ -55,11 +61,20 @@ internal final class VideoView: ExpoView {
     firstFrameObserver = nil
 
     guard let stream = srcObject else {
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
       previewLayer.session = nil
+      CATransaction.commit()
       return
     }
     let session = stream.session
 
+    // Attaching a session and rotating the connection mutate animatable
+    // properties on the preview layer; wrap them so Core Animation doesn't
+    // animate the transition (which appeared as a slide-in from the left
+    // when the test run kicked off and the session first attached).
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
     previewLayer.session = session
 
     // @ref LLP 0005#first-frame-detection — Explicitly enable the connection
@@ -68,6 +83,7 @@ internal final class VideoView: ExpoView {
       connection.isEnabled = true
       configurePreviewOrientation(connection)
     }
+    CATransaction.commit()
 
     // @ref LLP 0005#first-frame-detection — Drive loadeddata off the FrameSink's
     // first sample callback. Reliable across sim and device; works whether the

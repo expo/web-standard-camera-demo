@@ -1,3 +1,4 @@
+// @ref LLP 0008#dom-mediastreamtrack — Upstream spec text
 // @ref LLP 0003 — MediaStreamTrack subset
 
 import type { EventSubscription } from 'expo-modules-core';
@@ -11,7 +12,7 @@ import type { MediaTrackCapabilities, MediaTrackSettings, MediaStreamTrackKind, 
 export class MediaStreamTrack extends EventTarget {
   /** @internal */
   readonly _native: NativeMediaStreamTrack;
-  #nativeSubscription: EventSubscription | null = null;
+  #nativeSubscriptions: EventSubscription[] = [];
   #onended: ((ev: Event) => void) | null = null;
   #onmute: ((ev: Event) => void) | null = null;
   #onunmute: ((ev: Event) => void) | null = null;
@@ -21,10 +22,12 @@ export class MediaStreamTrack extends EventTarget {
     super();
     this._native = native;
 
-    // @ref LLP 0003#track-stop — Native emits "ended" asynchronously; forward it.
-    this.#nativeSubscription = native.addListener('ended', () => {
-      this.dispatchEvent(new Event('ended'));
-    });
+    // @ref LLP 0003#track-events — Forward native events to DOM-style events.
+    this.#nativeSubscriptions.push(
+      native.addListener('ended', () => this.dispatchEvent(new Event('ended'))),
+      native.addListener('mute', () => this.dispatchEvent(new Event('mute'))),
+      native.addListener('unmute', () => this.dispatchEvent(new Event('unmute'))),
+    );
   }
 
   // @ref LLP 0003#track-id
@@ -46,10 +49,12 @@ export class MediaStreamTrack extends EventTarget {
   // @ref LLP 0003#track-readyState
   get readyState(): MediaStreamTrackState { return this._native.readyState; }
 
-  // Spec compatibility — we don't honor these but the DOM type requires them.
+  // Spec compatibility — we don't honor these meaningfully, but the DOM type requires them.
+  // `isolated` is spec-readonly; we expose it as such.
   contentHint: string = '';
-  isolated: boolean = false;
+  readonly isolated: boolean = false;
 
+  // @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
   // @ref LLP 0003#track-stop
   stop(): void { this._native.stop(); }
 
@@ -62,11 +67,13 @@ export class MediaStreamTrack extends EventTarget {
   // @ref LLP 0003#track-getCapabilities
   getCapabilities(): MediaTrackCapabilities { return this._native.getCapabilities(); }
 
+  // @ref LLP 0008#dom-mediastreamtrack-clone — spec method
   // @ref LLP 0001#mediastreamtrack-clone — out of scope
   clone(): MediaStreamTrack {
     throw new DOMException('MediaStreamTrack.clone() is not supported', 'NotSupportedError');
   }
 
+  // @ref LLP 0008#dom-mediastreamtrack-applyconstraints — spec method
   // @ref LLP 0001#mediastreamtrack-applyConstraints — out of scope
   async applyConstraints(_constraints?: unknown): Promise<void> {
     throw new DOMException('applyConstraints is not supported', 'OverconstrainedError');

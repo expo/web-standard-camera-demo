@@ -6,7 +6,11 @@ import type { NativeMediaStream } from './native';
 
 // Private state uses `#field` syntax so it does not appear in the structural
 // type — this lets our class be assignment-compatible with the DOM lib's
-// MediaStream (whose private fields are also not part of the structural type).
+// MediaStream.
+//
+// `__expo_shared_object_id__` is exposed as a getter so the canonical
+// `getSharedObjectId(obj)` helper (https://github.com/expo/expo/pull/46054)
+// works on a MediaStream wrapper directly when forwarding it as a view prop.
 
 export class MediaStream extends EventTarget {
   /** @internal */
@@ -21,6 +25,13 @@ export class MediaStream extends EventTarget {
     this._native = native;
     // @ref LLP 0003#stream-getTracks — Wrap native tracks once at construction
     this.#tracks = native.getTracks().map((t) => new MediaStreamTrack(t));
+  }
+
+  // @ref LLP 0005#sharedobject-view-prop — Expose the underlying SharedObject's id
+  // so the canonical `getSharedObjectId(obj)` helper works on the wrapper directly.
+  // See https://github.com/expo/expo/pull/46054.
+  get __expo_shared_object_id__(): number | undefined {
+    return (this._native as unknown as { __expo_shared_object_id__?: number }).__expo_shared_object_id__;
   }
 
   // @ref LLP 0003#stream-id

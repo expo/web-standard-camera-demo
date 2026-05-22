@@ -26,7 +26,10 @@ export interface NativeMediaStreamTrack {
   getConstraints(): Record<string, unknown>;
   getCapabilities(): MediaTrackCapabilities;
 
-  addListener(eventName: 'ended', listener: () => void): EventSubscription;
+  addListener(
+    eventName: 'ended' | 'mute' | 'unmute',
+    listener: () => void
+  ): EventSubscription;
 }
 
 // JS-side handle to native MediaStream SharedObject.
@@ -38,6 +41,9 @@ export interface NativeMediaStream {
   getVideoTracks(): NativeMediaStreamTrack[];
   getAudioTracks(): NativeMediaStreamTrack[];
   getTrackById(id: string): NativeMediaStreamTrack | null;
+
+  /** @internal Test-only hook. Posts a synthetic AVCaptureSession interruption. */
+  __simulateInterruptionForTesting(reasonCode: number, ended: boolean): void;
 }
 
 interface NativeStandardCameraModule {
