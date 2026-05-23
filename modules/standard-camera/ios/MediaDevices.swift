@@ -125,8 +125,7 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   }
 
   // @ref LLP 0002#gum-pick-device — default to back camera when no facingMode is
-  // specified. AVCaptureDevice.DiscoverySession with .unspecified returns devices
-  // in undefined order; back is the better default for a "camera demo" surface.
+  // specified. Back is the better default for a "camera demo" surface.
   // If facingMode was explicitly requested and isn't one of the spec's "user" /
   // "environment" values, reject with OverconstrainedError — the JS normalizer
   // collapses `{exact: X}` into a flat scalar, so any explicit value is exact.
@@ -139,14 +138,29 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   default: throw overconstrained("facingMode")
   }
 
+  // Prefer the system's virtual auto-switching multi-lens devices when present
+  // (Triple → DualWide → Dual), then fall back to the single wide-angle, then
+  // ultra-wide / telephoto / TrueDepth. The discovery session returns them in
+  // an undefined order, so we filter and pick by priority ourselves.
+  let priorityTypes: [AVCaptureDevice.DeviceType] = [
+    .builtInTripleCamera,
+    .builtInDualWideCamera,
+    .builtInDualCamera,
+    .builtInWideAngleCamera,
+    .builtInTrueDepthCamera,
+    .builtInUltraWideCamera,
+    .builtInTelephotoCamera,
+    .builtInLiDARDepthCamera,
+  ]
   let discovery = AVCaptureDevice.DiscoverySession(
-    deviceTypes: [.builtInWideAngleCamera],
+    deviceTypes: priorityTypes,
     mediaType: .video,
     position: position
   )
-
-  if let device = discovery.devices.first {
-    return device
+  for type in priorityTypes {
+    if let device = discovery.devices.first(where: { $0.deviceType == type }) {
+      return device
+    }
   }
 
   // @ref LLP 0002#gum-pick-device — If the caller explicitly asked for a

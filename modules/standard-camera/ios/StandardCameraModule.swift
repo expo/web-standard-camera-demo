@@ -22,16 +22,45 @@ public final class StandardCameraModule: Module {
       }
     }
 
-    // @ref LLP 0001#mediadevices-enumeratedevices — Stub: default camera only
+    // @ref LLP 0001#mediadevices-enumeratedevices — Walk every built-in camera
+    // type and surface each as its own MediaDeviceInfo. Modern iPhones expose
+    // a mix of physical lenses (`.builtInWideAngleCamera`,
+    // `.builtInUltraWideCamera`, `.builtInTelephotoCamera`,
+    // `.builtInTrueDepthCamera`) and virtual auto-switching cameras
+    // (`.builtInDualCamera`, `.builtInDualWideCamera`, `.builtInTripleCamera`,
+    // `.builtInLiDARDepthCamera`); each has a stable `uniqueID` we use as both
+    // `deviceId` and `groupId`. Per LLP 0002 the JS layer hides `deviceId` /
+    // `label` / `groupId` until a successful video gUM, so calling this
+    // pre-grant just reveals the count and kind.
     AsyncFunction("enumerateDevicesAsync") { () -> [[String: Any]] in
-      let device = AVCaptureDevice.default(for: .video)
-      guard let device else { return [] }
-      return [[
-        "deviceId": device.uniqueID,
-        "groupId": device.uniqueID,
-        "kind": "videoinput",
-        "label": device.localizedName
-      ]]
+      let types: [AVCaptureDevice.DeviceType] = [
+        .builtInWideAngleCamera,
+        .builtInUltraWideCamera,
+        .builtInTelephotoCamera,
+        .builtInTrueDepthCamera,
+        .builtInDualCamera,
+        .builtInDualWideCamera,
+        .builtInTripleCamera,
+        .builtInLiDARDepthCamera,
+      ]
+      let discovery = AVCaptureDevice.DiscoverySession(
+        deviceTypes: types,
+        mediaType: .video,
+        position: .unspecified
+      )
+      var seen = Set<String>()
+      var out: [[String: Any]] = []
+      for device in discovery.devices {
+        if seen.insert(device.uniqueID).inserted {
+          out.append([
+            "deviceId": device.uniqueID,
+            "groupId": device.uniqueID,
+            "kind": "videoinput",
+            "label": device.localizedName,
+          ])
+        }
+      }
+      return out
     }
 
     // @ref LLP 0007#harness-surface — Native passthrough so WPT_RESULT / WPT_DONE
