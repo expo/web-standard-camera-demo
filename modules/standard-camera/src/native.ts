@@ -12,6 +12,10 @@ import type {
   MediaStreamTrackState,
 } from './types';
 
+// @ref LLP 0009#audio-track-events — Audio interruption notifications come
+// from AVAudioSession in addition to AVCaptureSession. The native module
+// emits the same mute/unmute/ended events for both.
+
 // JS-side handle to native MediaStreamTrack SharedObject.
 export interface NativeMediaStreamTrack {
   readonly id: string;

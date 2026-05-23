@@ -4,8 +4,8 @@
 **Status:** Active
 **Systems:** standard-camera, ios
 **Author:** James Ide
-**Date:** 2026-05-19 (refactored 2026-05-21)
-**Related:** 0001, 0003, 0005, 0008
+**Date:** 2026-05-19 (refactored 2026-05-21; audio added 2026-05-22)
+**Related:** 0001, 0003, 0005, 0008, 0009
 
 ## Summary
 
@@ -27,11 +27,23 @@ interface FlatGetUserMediaConstraints {
     frameRate?: number;
     aspectRatio?: number;
   };
-  audioRequested?: boolean;
+  audio?: {
+    deviceId?: string;
+    sampleRate?: number;
+    sampleSize?: number;
+    channelCount?: number;
+    latency?: number;
+    echoCancellation?: boolean;  // true / false / "all" / "remote-only" all collapse to a bool
+    autoGainControl?: boolean;
+    noiseSuppression?: boolean;
+    voiceIsolation?: boolean;
+  };
 }
 ```
 
 `ConstrainDOMString` / `ConstrainULong` / `ConstrainDouble` shapes collapse to single scalars: `{exact: 'user'}`, `{ideal: 'user'}`, and bare `'user'` all become `'user'`. We lose the exact-vs-ideal distinction at the bridge — see the open question on this.
+
+For `echoCancellation` the spec allows `boolean` *or* the `"all"` / `"remote-only"` enum members ([LLP 0008#audio-properties](./0008-w3c-spec-text.spec.md#audio-properties)). We accept all four forms on JS, but the native side only distinguishes "on" vs "off" — see [LLP 0009#audio-session-configuration](./0009-audio-ios-mapping.decision.md#audio-session-configuration). The original value is preserved through `getSettings()` so `assert_equals(settings.echoCancellation, "all")` works.
 
 ## `gum-validate-constraints`
 
@@ -39,20 +51,18 @@ Done on the JS side, before the native bridge call. Rules:
 
 1. `constraints` not an object → reject with `TypeError`.
 2. Neither `video` nor `audio` truthy → reject with `TypeError` ("at least one of audio and video must be requested").
-3. `audio` is anything truthy → reject with `OverconstrainedError(constraint: "audio")`. Audio is out of scope for v1.
-4. Otherwise, normalize `video` to the flat record above and forward.
+3. Normalize `video` and `audio` to the flat records above and forward.
 
-Audio is rejected on JS (faster, no bridge round-trip). All other failures surface from native.
+All other failures surface from native.
 
 ## `gum-request-permission`
 
-Done on iOS. Async; runs before any `AVCaptureSession` setup.
+Done on iOS. Async; runs before any `AVCaptureSession` setup. Performed *for each requested media type* in the call:
 
-1. Call `AVCaptureDevice.authorizationStatus(for: .video)`.
-2. If `.notDetermined` → call `AVCaptureDevice.requestAccess(for: .video)`, await the system prompt's resolution.
-3. If the final status is `.denied`, `.restricted`, or the request returned `false` → throw `NotAllowedError`.
+1. For video: `AVCaptureDevice.authorizationStatus(for: .video)`; `.notDetermined` → `requestAccess(for: .video)`; `.denied` / `.restricted` / `false` → throw `NotAllowedError`.
+2. For audio: same flow with `.audio`. Per spec the rejection covers the whole call — denying either denies both.
 
-Permission state is per-app, persistent across launches. The prompt is the iOS system prompt driven by `NSCameraUsageDescription` in `app.json` → `Info.plist`.
+Permission state is per-app, persistent across launches. The prompts are the iOS system prompts driven by `NSCameraUsageDescription` and `NSMicrophoneUsageDescription` in `app.json` → `Info.plist`. Audio device picking and session configuration live in [LLP 0009](./0009-audio-ios-mapping.decision.md).
 
 ## `gum-pick-device`
 
@@ -98,7 +108,6 @@ The thrown `Error.name` MUST match a spec-defined name ([LLP 0008#errors](./0008
 | `AVCaptureDeviceInput(device:)` threw | `NotReadableError` | `gum-build-session` step 4 |
 | `canAddInput` returned false | `NotReadableError` | `gum-build-session` step 5 |
 | JS-side normalizer rejected (neither audio nor video, malformed) | `TypeError` | `gum-validate-constraints` step 1–2 |
-| JS-side normalizer rejected (audio requested) | `OverconstrainedError` (`.constraint = "audio"`) | `gum-validate-constraints` step 3 |
 
 `OverconstrainedError` is constructed with the `.constraint` field encoded into the message as `"Constraint cannot be satisfied: <name>"`. The TS-side `rewrapNativeError` in `src/DOMException.ts` parses it back out and re-attaches it as a typed property — see [LLP 0008#error-overconstrainederror](./0008-w3c-spec-text.spec.md#overconstrainederror-error-overconstrainederror).
 

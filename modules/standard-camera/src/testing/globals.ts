@@ -6,7 +6,13 @@
 // `globalThis.video` and `globalThis.audio`. The runner resets `srcObject` on
 // both between tests.
 
-import { __resetCaptureGrantsForTesting } from '../MediaDevices';
+import { __installTestDeniedCheck, __resetCaptureGrantsForTesting } from '../MediaDevices';
+import { __getDeniedKindsForTesting, __resetDeniedPermissionsForTesting } from './testharness';
+
+// Wire `setMediaPermission('denied', …)` (testharness helper) into the gUM
+// path so a denied kind rejects with `NotAllowedError`. The install happens
+// once at module load; the per-test reset is below.
+__installTestDeniedCheck(__getDeniedKindsForTesting);
 import type { HTMLVideoElement } from '../HTMLVideoElement';
 
 // @ref LLP 0004 — Stub HTMLAudioElement. Audio is out of scope (LLP 0001), so
@@ -204,4 +210,6 @@ export function resetTestGlobals(): void {
   // enumerateDevices() returns gated, empty objects — matching a fresh page
   // load per spec.
   __resetCaptureGrantsForTesting();
+  // Forget synthetic denials installed by `setMediaPermission('denied', …)`.
+  __resetDeniedPermissionsForTesting();
 }

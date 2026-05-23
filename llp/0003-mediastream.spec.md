@@ -4,8 +4,8 @@
 **Status:** Active
 **Systems:** standard-camera, ios
 **Author:** James Ide
-**Date:** 2026-05-19 (refactored 2026-05-21; expanded for clone/addTrack/removeTrack on 2026-05-21)
-**Related:** 0001, 0002, 0005, 0008
+**Date:** 2026-05-19 (refactored 2026-05-21; expanded for clone/addTrack/removeTrack on 2026-05-21; audio added 2026-05-22)
+**Related:** 0001, 0002, 0005, 0008, 0009
 
 ## Summary
 
@@ -50,7 +50,7 @@ Implements [LLP 0008#dom-mediastream-gettracks](./0008-w3c-spec-text.spec.md#met
 
 ### `stream-getVideoTracks` / `stream-getAudioTracks`
 
-Implements [LLP 0008#dom-mediastream-getvideotracks](./0008-w3c-spec-text.spec.md#method-getvideotracks-dom-mediastream-getvideotracks) and `#dom-mediastream-getaudiotracks`. Filtered by `kind`. `getAudioTracks` always returns `[]` in v1 (audio out of scope).
+Implements [LLP 0008#dom-mediastream-getvideotracks](./0008-w3c-spec-text.spec.md#method-getvideotracks-dom-mediastream-getvideotracks) and `#dom-mediastream-getaudiotracks`. Filtered by `kind`. A `getUserMedia({ audio: true })` stream contains one audio track; a combined `{audio, video}` stream contains both.
 
 ### `stream-getTrackById`
 
@@ -107,7 +107,7 @@ Implements [LLP 0008#dom-mediastreamtrack-id](./0008-w3c-spec-text.spec.md#attri
 
 ### `track-kind`
 
-Implements [LLP 0008#dom-mediastreamtrack-kind](./0008-w3c-spec-text.spec.md#attribute-kind-dom-mediastreamtrack-kind). Always `"video"` in v1 (audio out of scope).
+Implements [LLP 0008#dom-mediastreamtrack-kind](./0008-w3c-spec-text.spec.md#attribute-kind-dom-mediastreamtrack-kind). `"video"` for camera tracks; `"audio"` for microphone tracks. The audio implementation lives in [LLP 0009](./0009-audio-ios-mapping.decision.md).
 
 ### `track-label`
 
@@ -156,7 +156,9 @@ Implements [LLP 0008#dom-mediastreamtrack-stop](./0008-w3c-spec-text.spec.md#met
 
 ### `track-getSettings`
 
-Implements [LLP 0008#dom-mediastreamtrack-getsettings](./0008-w3c-spec-text.spec.md#method-getsettings-dom-mediastreamtrack-getsettings). Returns the snapshot captured in `gum-build-session`:
+Implements [LLP 0008#dom-mediastreamtrack-getsettings](./0008-w3c-spec-text.spec.md#method-getsettings-dom-mediastreamtrack-getsettings). Returns the snapshot captured at construction:
+
+For a video track (settings come from [LLP 0002#gum-build-session](./0002-getusermedia.spec.md#gum-build-session)):
 
 ```ts
 {
@@ -166,7 +168,25 @@ Implements [LLP 0008#dom-mediastreamtrack-getsettings](./0008-w3c-spec-text.spec
   width: number,             // active format dimensions, not the preset
   height: number,
   frameRate: number,         // device.activeFormat.videoSupportedFrameRateRanges[0].maxFrameRate
-  aspectRatio: number
+  aspectRatio: number,
+  resizeMode: "none"
+}
+```
+
+For an audio track (settings come from [LLP 0009#audio-track-settings](./0009-audio-ios-mapping.decision.md#audio-track-settings)):
+
+```ts
+{
+  deviceId: string,
+  groupId: string,
+  sampleRate: number,        // AVAudioSession.sampleRate
+  sampleSize: number,        // 16 in v1
+  echoCancellation: boolean | "all" | "remote-only",
+  autoGainControl: boolean,
+  noiseSuppression: boolean,
+  voiceIsolation: boolean,
+  latency: number,           // AVAudioSession.inputLatency, seconds
+  channelCount: number
 }
 ```
 
@@ -178,7 +198,7 @@ Implements [LLP 0008#dom-mediastreamtrack-getconstraints](./0008-w3c-spec-text.s
 
 ### `track-getCapabilities`
 
-Implements [LLP 0008#dom-mediastreamtrack-getcapabilities](./0008-w3c-spec-text.spec.md#method-getcapabilities-dom-mediastreamtrack-getcapabilities). Returns `{}` in v1. The spec allows an empty `MediaTrackCapabilities`.
+Implements [LLP 0008#dom-mediastreamtrack-getcapabilities](./0008-w3c-spec-text.spec.md#method-getcapabilities-dom-mediastreamtrack-getcapabilities). Video tracks report `width`, `height`, `aspectRatio`, `frameRate` (as `{min, max}`), `facingMode` and `resizeMode` (as arrays), plus `deviceId` and `groupId`. Audio tracks report `sampleRate`, `sampleSize`, `latency`, `channelCount` (as `{min, max}`), `echoCancellation`, `autoGainControl`, `noiseSuppression`, `voiceIsolation` (as boolean arrays), plus `deviceId` and `groupId`. See [LLP 0009#audio-track-capabilities](./0009-audio-ios-mapping.decision.md#audio-track-capabilities) for the audio derivation.
 
 ### `track-clone`
 
@@ -209,5 +229,5 @@ Implements [LLP 0008#dom-mediastreamtrack-applyconstraints](./0008-w3c-spec-text
 
 ## Open questions
 
-- Multi-track streams (e.g., when we add audio): how do we coordinate session stop across tracks? `track-stop` step 4 already checks for other live tracks, but the audio track and video track will share a session in our v1+audio plan, so we'll need to make sure stopping one doesn't break the other.
+- ~~Multi-track streams: how do we coordinate session stop across tracks?~~ Resolved: `CaptureSource.liveTrackCount` covers any kind of track. When a combined audio/video stream's video track stops, the live count drops to 1 (audio is still live), so the session keeps running until the audio track also ends. Stopping the audio track first behaves symmetrically.
 - `track-getConstraints` should ideally round-trip the original constraint shape. Today the bridge loses the `{exact: ...}` / `{ideal: ...}` envelope (see [LLP 0002 open question #3](./0002-getusermedia.spec.md#open-questions)).

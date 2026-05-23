@@ -5,8 +5,8 @@
 **Systems:** standard-camera, demo-app
 **Role:** Root
 **Author:** James Ide
-**Date:** 2026-05-19
-**Related:** 0001, 0005, 0006, 0007
+**Date:** 2026-05-19 (audio added 2026-05-22)
+**Related:** 0001, 0005, 0006, 0007, 0009
 
 ## Summary
 
@@ -17,7 +17,7 @@ This is a learning exercise more than a production library. The hypothesis being
 ## What is in scope
 
 - iOS only (Swift, AVFoundation)
-- Video only (no audio / no microphone) — `getUserMedia({ video: true })`
+- Camera (video) and microphone (audio) capture — `getUserMedia({ video: true })`, `getUserMedia({ audio: true })`, and `getUserMedia({ audio: true, video: true })`
 - The `navigator.mediaDevices.getUserMedia()` entry point, polyfilled onto `globalThis.navigator`
 - The `MediaStream` and `MediaStreamTrack` interfaces (the subset listed in LLP 0003)
 - A `<Video>` component that mirrors `HTMLMediaElement` closely enough that the assignment `videoRef.srcObject = stream` works, plus the `srcObject`-related invariants from the spec (LLP 0004)
@@ -26,10 +26,9 @@ This is a learning exercise more than a production library. The hypothesis being
 ## What is out of scope (for v1)
 
 - Android (call it out in the module manifest; no Kotlin)
-- Microphone / audio tracks
-- `getDisplayMedia`, `enumerateDevices` beyond a stub, `MediaRecorder`
+- `getDisplayMedia`, `MediaRecorder`
 - Web platform output of the module
-- Permissions UI beyond the native iOS prompt (driven by `NSCameraUsageDescription`)
+- Permissions UI beyond the native iOS prompts (driven by `NSCameraUsageDescription` + `NSMicrophoneUsageDescription`)
 
 The complete list of what's in vs out, clause-by-clause, lives in [LLP 0001](./0001-spec-subset-scope.spec.md).
 
@@ -74,7 +73,7 @@ See [LLP 0005](./0005-ios-native-mapping.decision.md) for the details of the iOS
 2. **Global polyfill, not module import.** We install `globalThis.navigator.mediaDevices` so that copy-pasted browser code runs unchanged. The trade-off is that other modules can collide with the global; we accept that risk because the value of "DOM code just works" is the whole point of the project. See [LLP 0006](./0006-navigator-polyfill.decision.md).
 3. **`@ref` everywhere it matters.** Any line that exists because the spec says so gets an `@ref LLP NNNN#anchor` comment so a future agent can trace it back. Validated with `ref-check`.
 4. **Tests are the source of truth.** The in-app WPT runner is what proves we're spec-compliant. If a WPT case can be ported, it should be. See [LLP 0007](./0007-in-app-wpt-runner.guide.md).
-5. **One direction at a time.** Add Android, audio, recording, etc. only after the iOS video happy path is locked down and green under tests.
+5. **One direction at a time.** Add Android, recording, etc. only after the iOS capture happy path is locked down and green under tests. (Audio was the first "second direction" — added 2026-05-22 after the video subset shipped green.)
 
 ## Repo layout
 
@@ -94,7 +93,8 @@ See [LLP 0005](./0005-ios-native-mapping.decision.md) for the details of the iOS
 │   ├── 0005-ios-native-mapping.decision.md
 │   ├── 0006-navigator-polyfill.decision.md
 │   ├── 0007-in-app-wpt-runner.guide.md
-│   └── 0008-w3c-spec-text.spec.md     verbatim spec source-of-truth
+│   ├── 0008-w3c-spec-text.spec.md     verbatim spec source-of-truth
+│   └── 0009-audio-ios-mapping.decision.md
 ├── modules/
 │   └── standard-camera/               local Expo module
 └── scripts/

@@ -33,7 +33,7 @@ public final class StandardCameraModule: Module {
     // `label` / `groupId` until a successful video gUM, so calling this
     // pre-grant just reveals the count and kind.
     AsyncFunction("enumerateDevicesAsync") { () -> [[String: Any]] in
-      let types: [AVCaptureDevice.DeviceType] = [
+      let videoTypes: [AVCaptureDevice.DeviceType] = [
         .builtInWideAngleCamera,
         .builtInUltraWideCamera,
         .builtInTelephotoCamera,
@@ -43,20 +43,38 @@ public final class StandardCameraModule: Module {
         .builtInTripleCamera,
         .builtInLiDARDepthCamera,
       ]
-      let discovery = AVCaptureDevice.DiscoverySession(
-        deviceTypes: types,
+      let videoDiscovery = AVCaptureDevice.DiscoverySession(
+        deviceTypes: videoTypes,
         mediaType: .video,
         position: .unspecified
       )
       var seen = Set<String>()
       var out: [[String: Any]] = []
-      for device in discovery.devices {
+      for device in videoDiscovery.devices {
         if seen.insert(device.uniqueID).inserted {
           out.append([
             "deviceId": device.uniqueID,
             "groupId": device.uniqueID,
             "kind": "videoinput",
             "label": device.localizedName,
+          ])
+        }
+      }
+      // @ref LLP 0009#audio-pick-device — Single audio device entry: the
+      // system's currently-routed input. We don't enumerate every port
+      // (built-in / headset / bluetooth) because the iOS audio capture API
+      // surfaces only the active route as an AVCaptureDevice.
+      if let audio = AVCaptureDevice.default(for: .audio) {
+        // Fall back to a stable synthetic id if the device's uniqueID is
+        // empty — iOS simulators sometimes return empty strings here, and
+        // the spec requires the deviceId be non-empty once granted.
+        let audioId = audio.uniqueID.isEmpty ? "default-audio-input" : audio.uniqueID
+        if seen.insert(audioId).inserted {
+          out.append([
+            "deviceId": audioId,
+            "groupId": audioId,
+            "kind": "audioinput",
+            "label": audio.localizedName,
           ])
         }
       }

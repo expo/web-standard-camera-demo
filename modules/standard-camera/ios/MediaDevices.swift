@@ -11,7 +11,7 @@ internal struct GetUserMediaConstraints: Record {
   var video: FlatVideoConstraints?
 
   @Field
-  var audioRequested: Bool = false
+  var audio: FlatAudioConstraints?
 }
 
 internal struct FlatVideoConstraints: Record {
@@ -21,6 +21,24 @@ internal struct FlatVideoConstraints: Record {
   @Field var height: Int?
   @Field var frameRate: Double?
   @Field var aspectRatio: Double?
+}
+
+// @ref LLP 0009#audio-build-session — Flat audio constraints from JS. The
+// spec's `echoCancellation` is `boolean | "all" | "remote-only"`; we split it
+// into two fields at the bridge so the Record can stay strongly typed.
+// `echoCancellationMode` is set only when the caller supplies the enum string.
+internal struct FlatAudioConstraints: Record {
+  @Field var deviceId: String?
+  @Field var groupId: String?
+  @Field var sampleRate: Double?
+  @Field var sampleSize: Int?
+  @Field var channelCount: Int?
+  @Field var latency: Double?
+  @Field var echoCancellation: Bool?
+  @Field var echoCancellationMode: String?
+  @Field var autoGainControl: Bool?
+  @Field var noiseSuppression: Bool?
+  @Field var voiceIsolation: Bool?
 }
 
 // MARK: - DOMException-shaped throws
@@ -61,59 +79,120 @@ private func notReadable(_ underlying: Error) -> Exception {
 // MARK: - Implementation
 // @ref LLP 0008#dom-mediadevices-getusermedia — spec algorithm
 // @ref LLP 0002 — our subset of the algorithm
+// @ref LLP 0009 — audio implementation
 
 internal func getUserMedia(constraints: GetUserMediaConstraints) async throws -> MediaStream {
-  // @ref LLP 0002#gum-validate-constraints
-  guard let videoConstraints = constraints.video else {
-    if constraints.audioRequested {
-      throw overconstrained("audio")
-    }
+  // @ref LLP 0002#gum-validate-constraints — at least one of audio/video required
+  let videoConstraints = constraints.video
+  let audioConstraints = constraints.audio
+  if videoConstraints == nil && audioConstraints == nil {
     throw spec("TypeError", "At least one of audio and video must be requested")
   }
 
-  // @ref LLP 0002#gum-request-permission
-  let status = AVCaptureDevice.authorizationStatus(for: .video)
+  // @ref LLP 0002#gum-request-permission — request for each requested type
+  if videoConstraints != nil {
+    try await requestPermission(for: .video)
+  }
+  if audioConstraints != nil {
+    try await requestPermission(for: .audio)
+  }
+
+  // @ref LLP 0009#audio-pick-device
+  let videoDevice = try videoConstraints.map { try pickDevice(constraints: $0) }
+  let audioDevice = try audioConstraints.map { try pickAudioDevice(constraints: $0) }
+
+  // @ref LLP 0002#gum-build-session, LLP 0009#audio-build-session — build the
+  // shared session and attach inputs/outputs atomically.
+  let frameSink = videoDevice != nil ? FrameSink() : nil
+  let audioSink = audioDevice != nil ? AudioSink() : nil
+  let buildResult = try await buildCaptureSession(
+    videoDevice: videoDevice,
+    videoConstraints: videoConstraints,
+    frameSink: frameSink,
+    audioDevice: audioDevice,
+    audioConstraints: audioConstraints,
+    audioSink: audioSink
+  )
+
+  let source = CaptureSource(
+    session: buildResult.session,
+    device: videoDevice,
+    audioDevice: audioDevice,
+    frameSink: frameSink,
+    audioSink: audioSink,
+    videoConnection: buildResult.videoConnection,
+    audioConnection: buildResult.audioConnection
+  )
+
+  var tracks: [MediaStreamTrack] = []
+  if let videoDevice {
+    tracks.append(MediaStreamTrack(
+      id: UUID().uuidString,
+      kind: "video",
+      label: videoDevice.localizedName,
+      settings: buildResult.videoSettings ?? [:],
+      constraints: videoConstraints.map { constraintsAsDictionary($0) } ?? [:],
+      source: source
+    ))
+  }
+  if let audioDevice {
+    tracks.append(MediaStreamTrack(
+      id: UUID().uuidString,
+      kind: "audio",
+      label: audioDevice.localizedName,
+      settings: buildResult.audioSettings ?? [:],
+      constraints: audioConstraints.map { audioConstraintsAsDictionary($0) } ?? [:],
+      source: source
+    ))
+  }
+
+  return MediaStream(id: UUID().uuidString, tracks: tracks)
+}
+
+// @ref LLP 0002#gum-request-permission — per-mediaType permission gate.
+private func requestPermission(for mediaType: AVMediaType) async throws {
+  let status = AVCaptureDevice.authorizationStatus(for: mediaType)
   switch status {
   case .authorized:
-    break
+    return
   case .notDetermined:
-    let granted = await AVCaptureDevice.requestAccess(for: .video)
+    let granted = await AVCaptureDevice.requestAccess(for: mediaType)
     if !granted { throw notAllowed() }
   case .denied, .restricted:
     throw notAllowed()
   @unknown default:
     throw notAllowed()
   }
+}
 
-  // @ref LLP 0002#gum-pick-device
-  let device = try pickDevice(constraints: videoConstraints)
-
-  // @ref LLP 0002#gum-build-session — build session and add FrameSink atomically
-  // so the data-output connection is available when the track is constructed.
-  let frameSink = FrameSink()
-  let (session, trackConnection, settings) = try await buildSession(
-    device: device,
-    constraints: videoConstraints,
-    frameSink: frameSink
-  )
-
-  let source = CaptureSource(
-    session: session,
-    device: device,
-    frameSink: frameSink,
-    connection: trackConnection
-  )
-
-  let track = MediaStreamTrack(
-    id: UUID().uuidString,
-    kind: "video",
-    label: device.localizedName,
-    settings: settings,
-    constraints: constraintsAsDictionary(videoConstraints),
-    source: source
-  )
-
-  return MediaStream(id: UUID().uuidString, tracks: [track])
+// @ref LLP 0009#audio-pick-device — Single audio device per call. Honors
+// `deviceId` and `groupId` separately so an unsatisfied `groupId` rejects
+// with the matching `OverconstrainedError(constraint: "groupId")`.
+private func pickAudioDevice(constraints: FlatAudioConstraints) throws -> AVCaptureDevice {
+  if let deviceId = constraints.deviceId, !deviceId.isEmpty {
+    if let device = AVCaptureDevice(uniqueID: deviceId), device.hasMediaType(.audio) {
+      return device
+    }
+    throw overconstrained("deviceId")
+  }
+  if let groupId = constraints.groupId {
+    if !groupId.isEmpty {
+      if let device = AVCaptureDevice(uniqueID: groupId), device.hasMediaType(.audio) {
+        return device
+      }
+      // Also accept the synthetic id we report when iOS hands back an empty
+      // uniqueID — see `audioDeviceIdFor` / `enumerateDevicesAsync`.
+      if groupId == "default-audio-input", let fallback = AVCaptureDevice.default(for: .audio) {
+        return fallback
+      }
+    }
+    // Empty-string or unrecognized groupId — no audio device matches.
+    throw overconstrained("groupId")
+  }
+  if let device = AVCaptureDevice.default(for: .audio) {
+    return device
+  }
+  throw notFound()
 }
 
 private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDevice {
@@ -168,8 +247,20 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   // the other camera. The JS-side normalizer collapses `{exact: ...}` and the
   // basic-constraint forms into the same flat string, so we treat any
   // explicit facingMode as a hard requirement.
+  //
+  // Distinguish the two cases:
+  //   - There are video devices on this system, just none matching the
+  //     requested facingMode → `OverconstrainedError(facingMode)`.
+  //   - There are no video devices at all (the typical iOS simulator) →
+  //     `NotFoundError`. This lets the WPT runner mark the test as
+  //     `environment-skip` rather than reporting it as a regression
+  //     (see [LLP 0007#harness-surface](./0007-in-app-wpt-runner.guide.md)).
+  let hasAnyVideoDevice = AVCaptureDevice.default(for: .video) != nil
   if facingModeRequested {
-    throw overconstrained("facingMode")
+    if hasAnyVideoDevice {
+      throw overconstrained("facingMode")
+    }
+    throw notFound()
   }
 
   // No explicit facingMode — fall back to whatever video device the system has.
@@ -179,16 +270,43 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   throw notFound()
 }
 
-private func buildSession(
-  device: AVCaptureDevice,
-  constraints: FlatVideoConstraints,
-  frameSink: FrameSink
-) async throws -> (AVCaptureSession, AVCaptureConnection?, [String: Any]) {
+internal struct SessionBuildResult {
+  let session: AVCaptureSession
+  let videoConnection: AVCaptureConnection?
+  let videoSettings: [String: Any]?
+  let audioConnection: AVCaptureConnection?
+  let audioSettings: [String: Any]?
+}
+
+// @ref LLP 0002#gum-build-session, LLP 0009#audio-build-session — atomic
+// build of an AVCaptureSession containing zero/one video input + sink and
+// zero/one audio input + sink. Combined audio + video calls share this
+// session so the lifecycle is naturally coordinated.
+private func buildCaptureSession(
+  videoDevice: AVCaptureDevice?,
+  videoConstraints: FlatVideoConstraints?,
+  frameSink: FrameSink?,
+  audioDevice: AVCaptureDevice?,
+  audioConstraints: FlatAudioConstraints?,
+  audioSink: AudioSink?
+) async throws -> SessionBuildResult {
   return try await withCheckedThrowingContinuation { continuation in
     MediaStream.sessionQueue.async {
+      // @ref LLP 0009#audio-session-configuration — Configure AVAudioSession
+      // before the AVCaptureSession is started so the audio chain is ready.
+      if audioDevice != nil {
+        do {
+          try configureAudioSession(constraints: audioConstraints)
+        } catch {
+          continuation.resume(throwing: notReadable(error))
+          return
+        }
+      }
+
       let session = AVCaptureSession()
       session.beginConfiguration()
 
+      // === Video path ===========================================================
       // Are we picking a specific device format, or letting AVCaptureSession
       // manage it via a preset? The two paths are mutually exclusive per the
       // AVCaptureSession docs — setting `sessionPreset` overrides any
@@ -198,104 +316,200 @@ private func buildSession(
       // write `activeFormat`, and that has to happen *after* the device is
       // added to the session, otherwise `addInput` re-applies the preset's
       // chosen format on top of our pick.
-      let chosenFormat: (format: AVCaptureDevice.Format, frameRate: Double)? = {
-        if constraints.width == nil && constraints.height == nil && constraints.frameRate == nil {
-          return nil
+      var videoSettings: [String: Any]? = nil
+      var videoConnection: AVCaptureConnection? = nil
+
+      if let videoDevice, let videoConstraints, let frameSink {
+        let chosenFormat: (format: AVCaptureDevice.Format, frameRate: Double)? = {
+          if videoConstraints.width == nil && videoConstraints.height == nil && videoConstraints.frameRate == nil {
+            return nil
+          }
+          return pickActiveFormat(device: videoDevice, constraints: videoConstraints)
+        }()
+
+        if chosenFormat != nil {
+          session.sessionPreset = .inputPriority
+        } else {
+          let preset = pickPreset(width: videoConstraints.width, height: videoConstraints.height)
+          if session.canSetSessionPreset(preset) {
+            session.sessionPreset = preset
+          }
         }
-        return pickActiveFormat(device: device, constraints: constraints)
-      }()
 
-      if chosenFormat != nil {
-        // .inputPriority — "the session does not change the active capture
-        // device's settings." Required when we manage the active format below.
-        session.sessionPreset = .inputPriority
-      } else {
-        let preset = pickPreset(width: constraints.width, height: constraints.height)
-        if session.canSetSessionPreset(preset) {
-          session.sessionPreset = preset
-        }
-      }
-
-      let input: AVCaptureDeviceInput
-      do {
-        input = try AVCaptureDeviceInput(device: device)
-      } catch {
-        session.commitConfiguration()
-        continuation.resume(throwing: notReadable(error))
-        return
-      }
-      guard session.canAddInput(input) else {
-        session.commitConfiguration()
-        continuation.resume(throwing: notReadable(
-          NSError(domain: "StandardCamera", code: -1,
-                  userInfo: [NSLocalizedDescriptionKey: "Cannot add input"])
-        ))
-        return
-      }
-      session.addInput(input)
-
-      // Now that the device is part of the session, write activeFormat under
-      // the device lock. This is the only point at which the session won't
-      // immediately overwrite us, because we're holding the device's
-      // configuration lock and the session is in .inputPriority.
-      if let chosen = chosenFormat {
+        let input: AVCaptureDeviceInput
         do {
-          try device.lockForConfiguration()
-          device.activeFormat = chosen.format
-          let timescale = CMTimeScale(chosen.frameRate.rounded())
-          device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: timescale)
-          device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: timescale)
-          device.unlockForConfiguration()
+          input = try AVCaptureDeviceInput(device: videoDevice)
         } catch {
-          // Lock failed — leave the session in .inputPriority with whatever
-          // format the device defaulted to when added. Better than throwing,
-          // because the stream still works at the device's default rate.
+          session.commitConfiguration()
+          continuation.resume(throwing: notReadable(error))
+          return
         }
+        guard session.canAddInput(input) else {
+          session.commitConfiguration()
+          continuation.resume(throwing: notReadable(
+            NSError(domain: "StandardCamera", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Cannot add video input"])
+          ))
+          return
+        }
+        session.addInput(input)
+
+        if let chosen = chosenFormat {
+          do {
+            try videoDevice.lockForConfiguration()
+            videoDevice.activeFormat = chosen.format
+            let timescale = CMTimeScale(chosen.frameRate.rounded())
+            videoDevice.activeVideoMinFrameDuration = CMTime(value: 1, timescale: timescale)
+            videoDevice.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: timescale)
+            videoDevice.unlockForConfiguration()
+          } catch {
+            // Lock failed — keep .inputPriority with the device default.
+          }
+        }
+
+        if session.canAddOutput(frameSink.output) {
+          session.addOutput(frameSink.output)
+        }
+
+        let dims = CMVideoFormatDescriptionGetDimensions(videoDevice.activeFormat.formatDescription)
+        let width = Int(dims.width)
+        let height = Int(dims.height)
+        let configuredDuration = videoDevice.activeVideoMinFrameDuration
+        let frameRate: Double = {
+          if configuredDuration.isValid && configuredDuration.value > 0 {
+            return Double(configuredDuration.timescale) / Double(configuredDuration.value)
+          }
+          return videoDevice.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
+        }()
+        videoSettings = [
+          "deviceId": videoDevice.uniqueID,
+          "groupId": videoDevice.uniqueID,
+          "facingMode": positionToFacingMode(videoDevice.position),
+          "width": width,
+          "height": height,
+          "frameRate": frameRate,
+          "aspectRatio": Double(width) / Double(max(height, 1)),
+          "resizeMode": "none",
+        ]
+        videoConnection = frameSink.output.connection(with: .video)
       }
 
-      // Add the FrameSink output inside the same configuration block so the
-      // data-output connection comes up in one atomic transaction.
-      if session.canAddOutput(frameSink.output) {
-        session.addOutput(frameSink.output)
+      // === Audio path ===========================================================
+      // @ref LLP 0009#audio-build-session — Add audio input/output inside the
+      // same configuration block as the video side. Connections come up
+      // together when we commit.
+      var audioSettings: [String: Any]? = nil
+      var audioConnection: AVCaptureConnection? = nil
+      if let audioDevice, let audioSink {
+        let audioInput: AVCaptureDeviceInput
+        do {
+          audioInput = try AVCaptureDeviceInput(device: audioDevice)
+        } catch {
+          session.commitConfiguration()
+          continuation.resume(throwing: notReadable(error))
+          return
+        }
+        guard session.canAddInput(audioInput) else {
+          session.commitConfiguration()
+          continuation.resume(throwing: notReadable(
+            NSError(domain: "StandardCamera", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Cannot add audio input"])
+          ))
+          return
+        }
+        session.addInput(audioInput)
+
+        if session.canAddOutput(audioSink.output) {
+          session.addOutput(audioSink.output)
+        }
+        audioConnection = audioSink.output.connection(with: .audio)
+
+        // Snapshot the audio settings from the actual AVAudioSession state.
+        // @ref LLP 0009#audio-track-settings
+        let avs = AVAudioSession.sharedInstance()
+        audioSettings = makeAudioSettings(
+          device: audioDevice,
+          session: avs,
+          requested: audioConstraints
+        )
       }
 
       session.commitConfiguration()
       session.startRunning()
 
-      let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-      let width = Int(dims.width)
-      let height = Int(dims.height)
-      // Report the actually-configured frame rate (via the device's
-      // `activeVideoMinFrameDuration`) rather than the format's max — the
-      // settings dict must reflect what the consumer is going to observe.
-      let configuredDuration = device.activeVideoMinFrameDuration
-      let frameRate: Double = {
-        if configuredDuration.isValid && configuredDuration.value > 0 {
-          return Double(configuredDuration.timescale) / Double(configuredDuration.value)
-        }
-        return device.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
-      }()
-
-      let settings: [String: Any] = [
-        "deviceId": device.uniqueID,
-        "groupId": device.uniqueID,
-        "facingMode": positionToFacingMode(device.position),
-        "width": width,
-        "height": height,
-        "frameRate": frameRate,
-        "aspectRatio": Double(width) / Double(max(height, 1)),
-        // We don't crop or scale; we always serve the camera's active-format
-        // dimensions. WPT tests assert this string is present on
-        // `track.getSettings()`.
-        "resizeMode": "none",
-      ]
-
-      // Hand back the AVCaptureConnection from the input to the data output so
-      // MediaStreamTrack.enabled can gate frame delivery to FrameSink.
-      let trackConnection = frameSink.output.connection(with: .video)
-      continuation.resume(returning: (session, trackConnection, settings))
+      continuation.resume(returning: SessionBuildResult(
+        session: session,
+        videoConnection: videoConnection,
+        videoSettings: videoSettings,
+        audioConnection: audioConnection,
+        audioSettings: audioSettings
+      ))
     }
   }
+}
+
+// @ref LLP 0009#audio-session-configuration — Set category/mode/active.
+private func configureAudioSession(constraints: FlatAudioConstraints?) throws {
+  let session = AVAudioSession.sharedInstance()
+  try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+
+  // Determine echoCancellation. Either Bool or String enum forms map to
+  // .voiceChat (on) or .default (off).
+  let echoOn: Bool = {
+    if let mode = constraints?.echoCancellationMode, !mode.isEmpty {
+      return true
+    }
+    return constraints?.echoCancellation ?? false
+  }()
+  try session.setMode(echoOn ? .voiceChat : .default)
+  try session.setActive(true, options: [])
+}
+
+// @ref LLP 0009#audio-track-settings — Snapshot for `track.getSettings()`.
+private func makeAudioSettings(
+  device: AVCaptureDevice,
+  session: AVAudioSession,
+  requested: FlatAudioConstraints?
+) -> [String: Any] {
+  // Echo the caller-supplied echoCancellation value back verbatim per spec.
+  // If the caller didn't supply one, report whatever the session ended up in.
+  let echoValue: Any = {
+    if let mode = requested?.echoCancellationMode, !mode.isEmpty {
+      return mode
+    }
+    if let b = requested?.echoCancellation {
+      return b
+    }
+    return session.mode == .voiceChat
+  }()
+  let echoOn: Bool = {
+    if requested?.echoCancellationMode != nil && requested?.echoCancellationMode?.isEmpty == false {
+      return true
+    }
+    if let b = requested?.echoCancellation { return b }
+    return session.mode == .voiceChat
+  }()
+
+  // Same synthetic-id fallback as in enumerateDevicesAsync — iOS simulators
+  // sometimes return empty strings for the audio device's uniqueID.
+  let deviceId = device.uniqueID.isEmpty ? "default-audio-input" : device.uniqueID
+  return [
+    "deviceId": deviceId,
+    "groupId": deviceId,
+    "sampleRate": session.sampleRate,
+    // The spec's `sampleSize` is an integer hint about captured representation.
+    // iOS delivers Float32 PCM internally, but Chrome / Safari macOS report 16
+    // here so callers compare a familiar baseline.
+    "sampleSize": 16,
+    "echoCancellation": echoValue,
+    // iOS bundles AGC / NS / voice isolation under voice-chat mode; we report
+    // them in lockstep with `echoCancellation`'s effective state.
+    "autoGainControl": requested?.autoGainControl ?? echoOn,
+    "noiseSuppression": requested?.noiseSuppression ?? echoOn,
+    "voiceIsolation": requested?.voiceIsolation ?? echoOn,
+    "latency": session.inputLatency,
+    "channelCount": max(1, requested?.channelCount ?? session.inputNumberOfChannels),
+  ]
 }
 
 private func pickPreset(width: Int?, height: Int?) -> AVCaptureSession.Preset {
@@ -366,5 +580,28 @@ private func constraintsAsDictionary(_ c: FlatVideoConstraints) -> [String: Any]
   if let v = c.height { dict["height"] = v }
   if let v = c.frameRate { dict["frameRate"] = v }
   if let v = c.aspectRatio { dict["aspectRatio"] = v }
+  return dict
+}
+
+// @ref LLP 0009#audio-build-session — Round-trip the caller's audio
+// constraints into the track's getConstraints() output.
+private func audioConstraintsAsDictionary(_ c: FlatAudioConstraints) -> [String: Any] {
+  var dict: [String: Any] = [:]
+  if let v = c.deviceId { dict["deviceId"] = v }
+  if let v = c.groupId { dict["groupId"] = v }
+  if let v = c.sampleRate { dict["sampleRate"] = v }
+  if let v = c.sampleSize { dict["sampleSize"] = v }
+  if let v = c.channelCount { dict["channelCount"] = v }
+  if let v = c.latency { dict["latency"] = v }
+  // Reassemble the spec's boolean | "all" | "remote-only" shape we split at
+  // the bridge — see FlatAudioConstraints above.
+  if let mode = c.echoCancellationMode, !mode.isEmpty {
+    dict["echoCancellation"] = mode
+  } else if let b = c.echoCancellation {
+    dict["echoCancellation"] = b
+  }
+  if let v = c.autoGainControl { dict["autoGainControl"] = v }
+  if let v = c.noiseSuppression { dict["noiseSuppression"] = v }
+  if let v = c.voiceIsolation { dict["voiceIsolation"] = v }
   return dict
 }

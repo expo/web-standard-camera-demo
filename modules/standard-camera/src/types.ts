@@ -4,15 +4,35 @@ export type ConstrainDOMString = string | string[] | { exact?: string | string[]
 export type ConstrainULong = number | { exact?: number; ideal?: number; min?: number; max?: number };
 export type ConstrainDouble = number | { exact?: number; ideal?: number; min?: number; max?: number };
 export type ConstrainBoolean = boolean | { exact?: boolean; ideal?: boolean };
+// @ref LLP 0008#echocancellationmode — boolean | "all" | "remote-only"
+export type ConstrainBooleanOrEchoCancellationMode =
+  | boolean
+  | 'all'
+  | 'remote-only'
+  | {
+      exact?: boolean | 'all' | 'remote-only';
+      ideal?: boolean | 'all' | 'remote-only';
+    };
 
 export interface MediaTrackConstraints {
+  // Shared between video and audio
   deviceId?: ConstrainDOMString;
   groupId?: ConstrainDOMString;
+  // Video
   facingMode?: ConstrainDOMString;
   width?: ConstrainULong;
   height?: ConstrainULong;
   frameRate?: ConstrainDouble;
   aspectRatio?: ConstrainDouble;
+  // Audio — @ref LLP 0008#audio-properties
+  sampleRate?: ConstrainULong;
+  sampleSize?: ConstrainULong;
+  channelCount?: ConstrainULong;
+  latency?: ConstrainDouble;
+  echoCancellation?: ConstrainBooleanOrEchoCancellationMode;
+  autoGainControl?: ConstrainBoolean;
+  noiseSuppression?: ConstrainBoolean;
+  voiceIsolation?: ConstrainBoolean;
 }
 
 export interface MediaStreamConstraints {
@@ -20,18 +40,34 @@ export interface MediaStreamConstraints {
   audio?: boolean | MediaTrackConstraints;
 }
 
+// @ref LLP 0008#video-properties — Constrainable video track settings.
+// @ref LLP 0008#audio-properties — Constrainable audio track settings (below).
 export interface MediaTrackSettings {
+  // Shared
   deviceId?: string;
   groupId?: string;
+  // Video
   facingMode?: 'user' | 'environment';
   width?: number;
   height?: number;
   frameRate?: number;
   aspectRatio?: number;
+  resizeMode?: 'none' | 'crop-and-scale';
+  // Audio — @ref LLP 0008#audio-properties
+  sampleRate?: number;
+  sampleSize?: number;
+  channelCount?: number;
+  latency?: number;
+  echoCancellation?: boolean | 'all' | 'remote-only';
+  autoGainControl?: boolean;
+  noiseSuppression?: boolean;
+  voiceIsolation?: boolean;
 }
 
 export interface MediaTrackCapabilities {
-  // Empty in v1 per LLP 0001.
+  // Video and audio capability shape — see LLP 0009#audio-track-capabilities for audio,
+  // LLP 0003#track-getCapabilities for video.
+  [key: string]: unknown;
 }
 
 export type MediaStreamTrackKind = 'video' | 'audio';
@@ -54,7 +90,28 @@ export interface FlatVideoConstraints {
   aspectRatio?: number;
 }
 
+// @ref LLP 0002#surface-accepted-from-js — Flat audio constraints. We split
+// `echoCancellation`'s `boolean | "all" | "remote-only"` shape into two
+// scalar fields so the native Record can stay strongly typed; the original
+// caller-supplied value is recovered on `getSettings()`.
+// `groupId` is passed separately from `deviceId` so unsatisfied groupId
+// requests reject with `OverconstrainedError(constraint: "groupId")` rather
+// than collapsing into a "deviceId" rejection.
+export interface FlatAudioConstraints {
+  deviceId?: string;
+  groupId?: string;
+  sampleRate?: number;
+  sampleSize?: number;
+  channelCount?: number;
+  latency?: number;
+  echoCancellation?: boolean;
+  echoCancellationMode?: 'all' | 'remote-only';
+  autoGainControl?: boolean;
+  noiseSuppression?: boolean;
+  voiceIsolation?: boolean;
+}
+
 export interface FlatGetUserMediaConstraints {
   video?: FlatVideoConstraints;
-  audioRequested?: boolean;
+  audio?: FlatAudioConstraints;
 }

@@ -25,13 +25,19 @@ internal final class MediaStreamTrack: SharedObject {
   // @ref LLP 0003#track-enabled
   var enabled: Bool = true {
     didSet {
-      // The data-output connection controls whether frames flow into FrameSink
-      // (and any future MediaRecorder-style consumers). The AVCaptureVideoPreviewLayer
-      // has its own internal connection that we don't toggle here, so disabling
-      // a track freezes downstream consumers but leaves the on-screen preview
-      // showing the most recent frame. Clones share the connection with the
-      // original — documented divergence in LLP 0003#track-clone.
-      source?.connection?.isEnabled = enabled
+      // The data-output connection controls whether frames / audio samples
+      // flow into the sink (and any future MediaRecorder-style consumers).
+      // The AVCaptureVideoPreviewLayer has its own internal connection that
+      // we don't toggle here, so disabling a video track freezes downstream
+      // consumers but leaves the on-screen preview showing the most recent
+      // frame. Clones share the connection with the original — documented
+      // divergence in LLP 0003#track-clone.
+      // @ref LLP 0009#audio-build-session — audio uses its own connection.
+      if kind == "audio" {
+        source?.audioConnection?.isEnabled = enabled
+      } else {
+        source?.videoConnection?.isEnabled = enabled
+      }
     }
   }
 
@@ -120,8 +126,16 @@ internal final class MediaStreamTrack: SharedObject {
   // @ref LLP 0008#dom-mediastreamtrack-getcapabilities — Reports the
   // capabilities of the underlying AVCaptureDevice. For video tracks we
   // expose the spec-required fields, ranges derived from the device's
-  // supported formats / frame-rate ranges where applicable.
+  // supported formats / frame-rate ranges where applicable. For audio
+  // tracks we report the spec-required fields from LLP 0008#audio-properties.
   func capabilities() -> [String: Any] {
+    if kind == "audio" {
+      return audioCapabilities()
+    }
+    return videoCapabilities()
+  }
+
+  private func videoCapabilities() -> [String: Any] {
     guard let device = source?.device else {
       // Capabilities for a track without a backing device are minimal.
       return ["deviceId": "", "groupId": ""]
@@ -166,6 +180,33 @@ internal final class MediaStreamTrack: SharedObject {
       "deviceId": device.uniqueID,
       "groupId": device.uniqueID,
     ]
+  }
+
+  // @ref LLP 0009#audio-track-capabilities — Audio capability shape.
+  private func audioCapabilities() -> [String: Any] {
+    let device = source?.audioDevice
+    let avs = AVAudioSession.sharedInstance()
+    let inputLatency = avs.inputLatency
+    let inputChannels = max(1, avs.inputNumberOfChannels)
+    return [
+      "sampleRate": ["min": 8000, "max": 96000],
+      "sampleSize": ["min": 16, "max": 16],
+      "echoCancellation": [true, false],
+      "autoGainControl": [true, false],
+      "noiseSuppression": [true, false],
+      "voiceIsolation": [true, false],
+      "latency": ["min": inputLatency, "max": inputLatency],
+      "channelCount": ["min": 1, "max": inputChannels],
+      "deviceId": audioDeviceIdFor(device),
+      "groupId": audioDeviceIdFor(device),
+    ]
+  }
+
+  // @ref LLP 0009#audio-pick-device — Stable id for an audio device even when
+  // iOS reports an empty `uniqueID` (the simulator's audio device sometimes does).
+  private func audioDeviceIdFor(_ device: AVCaptureDevice?) -> String {
+    guard let device else { return "" }
+    return device.uniqueID.isEmpty ? "default-audio-input" : device.uniqueID
   }
 
   // Called by CaptureSource when an AVCaptureSession runtime error fires.

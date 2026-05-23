@@ -4,8 +4,8 @@
 **Status:** Active
 **Systems:** standard-camera
 **Author:** James Ide
-**Date:** 2026-05-21
-**Related:** 0001, 0002, 0003, 0004
+**Date:** 2026-05-21 (audio added 2026-05-22)
+**Related:** 0001, 0002, 0003, 0004, 0009
 
 ## Purpose
 
@@ -314,6 +314,49 @@ Thrown when:
 - Invalid constraint syntax or values are provided
 - Required arguments are missing or malformed
 - Neither `audio` nor `video` is requested
+
+---
+
+# Constrainable properties — Video [video-properties]
+
+Per the spec's [§ Media Capture and Streams: Constrainable Properties for Video](https://www.w3.org/TR/mediacapture-streams/#media-track-supported-constraints), a video track's `MediaTrackSettings` contains:
+
+- `width` — width of the video frame in pixels
+- `height` — height of the video frame in pixels
+- `aspectRatio` — `width / height`
+- `frameRate` — frames per second
+- `facingMode` — one of `"user"`, `"environment"`, `"left"`, `"right"`
+- `resizeMode` — one of `"none"`, `"crop-and-scale"`
+- `deviceId`, `groupId`
+
+# Constrainable properties — Audio [audio-properties]
+
+Per the spec's [§ Media Capture and Streams: Constrainable Properties for Audio](https://www.w3.org/TR/mediacapture-streams/#media-track-supported-constraints), an audio track's `MediaTrackSettings` contains:
+
+- `sampleRate` — sample rate in samples per second
+- `sampleSize` — linear sample size in bits
+- `echoCancellation` — `boolean` or one of `"all"` / `"remote-only"` (the `EchoCancellationMode` enum from the mediacapture-main extensions)
+- `autoGainControl` — `boolean`
+- `noiseSuppression` — `boolean`
+- `voiceIsolation` — `boolean`
+- `latency` — target latency in seconds (a number; `0` means "as low as possible")
+- `channelCount` — number of independent channels (typically `1` for mono, `2` for stereo)
+- `deviceId`, `groupId`
+
+`getCapabilities()` reports each property as either a `{ min, max }` range (for numeric properties), an array of supported values (for booleans and enums — e.g. `[true, false]` if both are supported), or a fixed string (for `deviceId` / `groupId`).
+
+## EchoCancellationMode [echocancellationmode]
+
+The [Audio Output Devices API extension](https://w3c.github.io/mediacapture-main/#dom-echocancellationmode) defines the `EchoCancellationMode` enum:
+
+```webidl
+enum EchoCancellationMode {
+  "all",          // Cancel echoes from any audio rendered by the device, including this app's playback.
+  "remote-only",  // Cancel only echoes from remote sources (e.g., the other party in a call).
+};
+```
+
+When `echoCancellation` is set to a boolean, `true` is equivalent to `"all"` and `false` disables cancellation.
 
 ---
 

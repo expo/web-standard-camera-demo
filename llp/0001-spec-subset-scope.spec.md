@@ -4,8 +4,8 @@
 **Status:** Active
 **Systems:** standard-camera
 **Author:** James Ide
-**Date:** 2026-05-19
-**Related:** 0000, 0002, 0003, 0004
+**Date:** 2026-05-19 (audio brought into scope 2026-05-22)
+**Related:** 0000, 0002, 0003, 0004, 0009
 
 ## Summary
 
@@ -14,11 +14,13 @@ This document is the index of which clauses of [W3C Media Capture and Streams](h
 - **[LLP 0008](./0008-w3c-spec-text.spec.md)** holds the spec text itself, with each member at the matching W3C anchor (e.g. `dom-mediastreamtrack-stop`). Code annotations that exist *because of* a spec clause should cite that anchor: `@ref LLP 0008#<anchor>`.
 - **This LLP (0001)** and the per-interface notes (0002–0004) record our *scope decisions* — which clauses are in vs. out, and the iOS-specific implementation paths through them.
 
-The scope is intentionally tiny: enough to let `navigator.mediaDevices.getUserMedia({ video: true })` resolve to a `MediaStream` whose video track displays in a `<Video srcObject={stream} />`.
+The scope covers `navigator.mediaDevices.getUserMedia({ video: true })`, `getUserMedia({ audio: true })`, and the combined `getUserMedia({ audio: true, video: true })` resolving to a `MediaStream` whose video track displays in a `<Video srcObject={stream} />` while the audio track is fed through the iOS audio output.
 
-### Audio is deferred
+### Audio is in scope (as of 2026-05-22)
 
-v1 is video-only. `getUserMedia({ audio: <anything truthy> })` rejects with `OverconstrainedError` carrying `constraint: 'audio'`. `MediaStream.getAudioTracks()` always returns `[]`. The audio constraint family (`sampleRate`, `sampleSize`, `echoCancellation`, `autoGainControl`, `noiseSuppression`, `voiceIsolation`, `latency`, `channelCount`) appears in `getSupportedConstraints()` for IDL conformance, but no audio settings or capabilities are reported because no audio track is ever returned. The in-app WPT runner uses its `ENV_SKIPPED_SOURCES` / `ENV_SKIPPED_TEST_NAMES` mechanism to mark audio-dependent tests as `skip` with the rationale "audio capture is deferred (LLP 0001 v1 is video-only)" so they are visible but distinguished from regressions. A follow-up LLP will define the audio scope (mic device pick, audio track type, capabilities) when an audio consumer asks for it.
+`getUserMedia({ audio: <truthy> })` resolves to a `MediaStream` containing exactly one `MediaStreamTrack` whose `kind === "audio"`. Audio devices are surfaced via `enumerateDevices()` once the caller has been granted microphone access. Audio track `getSettings()` reports `sampleRate`, `sampleSize`, `echoCancellation`, `autoGainControl`, `noiseSuppression`, `voiceIsolation`, `latency`, `channelCount`, `deviceId`, `groupId`. `getCapabilities()` reports the matching capability ranges / enums. iOS implementation details — `AVCaptureDevice(for: .audio)`, `AVAudioSession` configuration, `AVCaptureAudioDataOutput` as the audio FrameSink, echo-cancellation via `setMode(.voiceChat)` — are documented in [LLP 0009](./0009-audio-ios-mapping.decision.md).
+
+`getUserMedia({ audio: true, video: true })` returns a `MediaStream` containing one video track and one audio track sharing a single `AVCaptureSession`. Stopping either track is independent of the other; the session is stopped when both tracks (across any clones) have ended.
 
 ## Status legend
 
@@ -33,9 +35,9 @@ Section: [§ MediaDevices](https://www.w3.org/TR/mediacapture-streams/#mediadevi
 
 | Anchor | Member | Status | Notes |
 |---|---|---|---|
-| `mediadevices-getusermedia` | `getUserMedia(constraints)` | **Implemented** | Video-only; see [LLP 0002](./0002-getusermedia.spec.md). |
-| `mediadevices-enumeratedevices` | `enumerateDevices()` | **Stubbed** | Returns the default front camera as a single `MediaDeviceInfo`. |
-| `mediadevices-getsupportedconstraints` | `getSupportedConstraints()` | **Stubbed** | Returns `{ width: true, height: true, facingMode: true }`. |
+| `mediadevices-getusermedia` | `getUserMedia(constraints)` | **Implemented** | Video + audio + combined audio/video; see [LLP 0002](./0002-getusermedia.spec.md) and [LLP 0009](./0009-audio-ios-mapping.decision.md). |
+| `mediadevices-enumeratedevices` | `enumerateDevices()` | **Implemented** | Returns every built-in camera and the default microphone as separate `MediaDeviceInfo` / `InputDeviceInfo` entries. `deviceId` / `label` / `groupId` are gated until the matching kind has been granted via `getUserMedia()`. |
+| `mediadevices-getsupportedconstraints` | `getSupportedConstraints()` | **Implemented** | Returns every recognized video + audio constraint name from the spec. |
 | `mediadevices-ondevicechange` | `ondevicechange` / `devicechange` event | **Out of scope** | We never fire it. |
 | `mediadevices-getdisplaymedia` | `getDisplayMedia()` | **Out of scope** | — |
 
@@ -50,7 +52,7 @@ Section: [§ MediaStream](https://www.w3.org/TR/mediacapture-streams/#mediastrea
 | `mediastream-active` | `active` | **Implemented** | True iff at least one track is `live`. Computed JS-side over `#tracks`. |
 | `mediastream-gettracks` | `getTracks()` | **Implemented** | |
 | `mediastream-getvideotracks` | `getVideoTracks()` | **Implemented** | |
-| `mediastream-getaudiotracks` | `getAudioTracks()` | **Implemented** | Always returns `[]` in v1. |
+| `mediastream-getaudiotracks` | `getAudioTracks()` | **Implemented** | Returns the audio tracks in the stream. |
 | `mediastream-gettrackbyid` | `getTrackById(id)` | **Implemented** | |
 | `mediastream-addtrack` | `addTrack(track)` | **Implemented** | Add to the track set if not already present. Script-initiated; per spec no `addtrack` event fires. |
 | `mediastream-removetrack` | `removeTrack(track)` | **Implemented** | Remove from the track set if present. Script-initiated; per spec no `removetrack` event fires. |
@@ -66,18 +68,18 @@ Section: [§ MediaStreamTrack](https://www.w3.org/TR/mediacapture-streams/#media
 | Anchor | Member | Status | Notes |
 |---|---|---|---|
 | `mediastreamtrack-id` | `id` | **Implemented** | |
-| `mediastreamtrack-kind` | `kind` | **Implemented** | Always `"video"` in v1. |
+| `mediastreamtrack-kind` | `kind` | **Implemented** | `"video"` for camera tracks; `"audio"` for microphone tracks. |
 | `mediastreamtrack-label` | `label` | **Implemented** | `AVCaptureDevice.localizedName`; set at construction, never changes (per [LLP 0008#dom-mediastreamtrack-label](./0008-w3c-spec-text.spec.md#attribute-label-dom-mediastreamtrack-label)). |
-| `mediastreamtrack-enabled` | `enabled` (get/set) | **Implemented** | Set toggles whether frames are forwarded (we flip the connection's `isEnabled`). |
-| `mediastreamtrack-muted` | `muted` | **Implemented** | Mirrors AVCaptureSession interruption state (overheating, backgrounding, in-use-by-another-app). |
+| `mediastreamtrack-enabled` | `enabled` (get/set) | **Implemented** | Set toggles whether frames / audio samples are forwarded (we flip the connection's `isEnabled`). |
+| `mediastreamtrack-muted` | `muted` | **Implemented** | Mirrors AVCaptureSession interruption state (overheating, backgrounding, in-use-by-another-app, audio-session interruption). |
 | `mediastreamtrack-readystate` | `readyState` | **Implemented** | `"live"` until `stop()`. |
 | `mediastreamtrack-stop` | `stop()` | **Implemented** | Transitions to `"ended"`, fires `ended`. |
 | `mediastreamtrack-clone` | `clone()` | **Implemented** | New `id`, new JS object; shares the underlying capture source. Stopping the original does not stop the clone (per spec). See [LLP 0003#track-clone](./0003-mediastream.spec.md#track-clone). |
-| `mediastreamtrack-getcapabilities` | `getCapabilities()` | **Implemented** | Returns `{}` — spec allows an empty `MediaTrackCapabilities`. |
+| `mediastreamtrack-getcapabilities` | `getCapabilities()` | **Implemented** | Returns video capabilities (`width`/`height`/`aspectRatio`/`frameRate`/`facingMode`/`resizeMode`/`deviceId`/`groupId`) for video tracks; audio capabilities (`sampleRate`/`sampleSize`/`echoCancellation`/`autoGainControl`/`noiseSuppression`/`voiceIsolation`/`latency`/`channelCount`/`deviceId`/`groupId`) for audio tracks. |
 | `mediastreamtrack-getconstraints` | `getConstraints()` | **Implemented** | Returns the constraints passed to `getUserMedia`. |
-| `mediastreamtrack-getsettings` | `getSettings()` | **Implemented** | `{ deviceId, groupId, facingMode, width, height, frameRate, aspectRatio }`. |
+| `mediastreamtrack-getsettings` | `getSettings()` | **Implemented** | Video: `{ deviceId, groupId, facingMode, width, height, frameRate, aspectRatio, resizeMode }`. Audio: `{ deviceId, groupId, sampleRate, sampleSize, echoCancellation, autoGainControl, noiseSuppression, voiceIsolation, latency, channelCount }`. |
 | `mediastreamtrack-applyconstraints` | `applyConstraints(constraints?)` | **Implemented (partial)** | Empty constraints `{}` resolves as a no-op; non-empty constraints reject with `OverconstrainedError` (we do not actually re-apply). Per spec, when `readyState == "ended"`, the promise resolves regardless of constraints. |
-| `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **Implemented** | `mute`/`unmute` fire on AVCaptureSession interruption notifications. `ended` fires on `stop()` or a session runtime error. |
+| `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **Implemented** | `mute`/`unmute` fire on AVCaptureSession / AVAudioSession interruption notifications. `ended` fires on `stop()` or a session runtime error. |
 
 ## `HTMLMediaElement.srcObject` integration
 
@@ -108,10 +110,10 @@ See [LLP 0004](./0004-htmlmediaelement-srcobject.spec.md).
 
 | Anchor | DOMException name | When |
 |---|---|---|
-| `error-NotAllowedError` | `NotAllowedError` | User denied the camera permission prompt. |
-| `error-NotFoundError` | `NotFoundError` | No matching camera (e.g., front camera requested but none available). |
-| `error-OverconstrainedError` | `OverconstrainedError` | A required constraint cannot be satisfied (e.g., `audio: { exact: true }`). |
-| `error-NotSupportedError` | `NotSupportedError` | Operation is out of scope (e.g., `MediaStream.clone()`). |
+| `error-NotAllowedError` | `NotAllowedError` | User denied the camera or microphone permission prompt. |
+| `error-NotFoundError` | `NotFoundError` | No matching camera or microphone (e.g., front camera requested but none available, or no audio input device on the host). |
+| `error-OverconstrainedError` | `OverconstrainedError` | A required constraint cannot be satisfied (e.g., a `sampleRate: { exact: 999999 }` that no device delivers). |
+| `error-NotSupportedError` | `NotSupportedError` | Operation is out of scope (e.g., `getDisplayMedia()`). |
 | `error-TypeError` | `TypeError` | Constraints object is malformed or contains neither `audio` nor `video`. |
 
 ## Open questions

@@ -82,6 +82,7 @@ export class MediaStream extends EventTarget {
     return (this._native as unknown as { __expo_shared_object_id__?: number }).__expo_shared_object_id__;
   }
 
+  // @ref LLP 0008#dom-mediastream-id — spec attribute
   // @ref LLP 0003#stream-id
   get id(): string { return this._native.id; }
 
@@ -159,6 +160,9 @@ export class MediaStream extends EventTarget {
     return new MediaStream(clonedTracks);
   }
 
+  // @ref LLP 0008#event-mediastream-addtrack — IDL handler attribute. Per spec
+  // the `addtrack` event is UA-initiated only; our subset never adds tracks
+  // outside of script, so addEventListener wires up but listeners never fire.
   get onaddtrack(): ((ev: Event) => void) | null { return this.#onaddtrack; }
   set onaddtrack(handler: ((ev: Event) => void) | null) {
     if (this.#onaddtrack) this.removeEventListener('addtrack', this.#onaddtrack);
@@ -166,6 +170,9 @@ export class MediaStream extends EventTarget {
     if (handler) this.addEventListener('addtrack', handler);
   }
 
+  // @ref LLP 0008#event-mediastream-removetrack — IDL handler attribute. Same
+  // UA-initiated-only semantics as `addtrack`; our script-initiated
+  // `removeTrack` is silent per spec.
   get onremovetrack(): ((ev: Event) => void) | null { return this.#onremovetrack; }
   set onremovetrack(handler: ((ev: Event) => void) | null) {
     if (this.#onremovetrack) this.removeEventListener('removetrack', this.#onremovetrack);

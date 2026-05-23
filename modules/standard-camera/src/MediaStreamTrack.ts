@@ -30,9 +30,11 @@ export class MediaStreamTrack extends EventTarget {
     );
   }
 
+  // @ref LLP 0008#dom-mediastreamtrack-id — spec attribute
   // @ref LLP 0003#track-id
   get id(): string { return this._native.id; }
 
+  // @ref LLP 0008#dom-mediastreamtrack-kind — spec attribute
   // @ref LLP 0003#track-kind
   get kind(): MediaStreamTrackKind { return this._native.kind; }
 
@@ -58,9 +60,11 @@ export class MediaStreamTrack extends EventTarget {
   // @ref LLP 0003#track-stop
   stop(): void { this._native.stop(); }
 
+  // @ref LLP 0008#dom-mediastreamtrack-getsettings — spec algorithm
   // @ref LLP 0003#track-getSettings
   getSettings(): MediaTrackSettings { return this._native.getSettings(); }
 
+  // @ref LLP 0008#dom-mediastreamtrack-getconstraints — spec algorithm
   // @ref LLP 0003#track-getConstraints
   getConstraints(): Record<string, unknown> { return this._native.getConstraints(); }
 

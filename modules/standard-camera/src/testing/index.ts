@@ -65,7 +65,6 @@ import './local/facingMode-switch';
 import './local/frameRate-resolution';
 import './local/MediaStream-construction';
 import './local/MediaStreamTrack-mute';
-import './local/overconstrained-error';
 
 // WPT — not applicable in React Native. These depend on browser-platform
 // constructs we don't ship: cross-origin iframes / postMessage transfer,

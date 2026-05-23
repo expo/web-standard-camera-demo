@@ -54,9 +54,14 @@ async function main(): Promise<number> {
     // Ensure the build is installed; bail with a clear error if not.
     await ensureAppInstalled(udid);
 
-    // @ref LLP 0007#cli-flow — grant camera so AVCaptureDevice.requestAccess returns true
+    // @ref LLP 0007#cli-flow — grant camera + microphone so
+    // AVCaptureDevice.requestAccess returns true for both kinds.
+    // @ref LLP 0009#audio-permission
     await sh(['xcrun', 'simctl', 'privacy', udid, 'grant', 'camera', APP_BUNDLE_ID]).catch(
       () => console.warn('Could not grant camera permission (may already be granted)')
+    );
+    await sh(['xcrun', 'simctl', 'privacy', udid, 'grant', 'microphone', APP_BUNDLE_ID]).catch(
+      () => console.warn('Could not grant microphone permission (may already be granted)')
     );
 
     // Terminate any prior instance so launch is clean.

@@ -7,6 +7,7 @@ import type {
   ConstrainDOMString,
   ConstrainDouble,
   ConstrainULong,
+  FlatAudioConstraints,
   FlatVideoConstraints,
   MediaDeviceInfo,
   MediaStreamConstraints,
@@ -14,14 +15,32 @@ import type {
 } from './types';
 
 // Per spec, `enumerateDevices()` exposes deviceId/label/groupId only after the
-// caller has successfully gotten a stream of the matching kind via gUM. This
-// flag mirrors that — false until a successful `getUserMedia({video:…})`.
+// caller has successfully gotten a stream of the matching kind via gUM. These
+// flags mirror that — flipped on a successful getUserMedia of the matching kind.
+// @ref LLP 0002#gum-pick-device — pre-grant gating
 let hasGrantedVideo = false;
+let hasGrantedAudio = false;
 
 // Subscribers (PermissionStatus instances) waiting to be notified when a
 // permission flips. The shim in `dom-shim.ts` registers callbacks here so the
 // `change` event fires on its PermissionStatus objects when gUM succeeds.
 const grantSubscribers = new Set<(name: 'camera' | 'microphone') => void>();
+
+// Test-only synthetic denial set. WPT bodies call `setMediaPermission('denied')`
+// from the harness; the harness stores the kinds in a set and we consult it
+// here so gUM rejects with `NotAllowedError` for the matching kind. In a
+// browser this would be wired through test_driver; in our Expo-app context
+// we play the UA's role, so a programmatic hook is the natural fit.
+// @ref LLP 0008#error-notallowederror
+let testDeniedCheck: (() => { camera: boolean; microphone: boolean }) | null = null;
+
+/** @internal Test-only hook: install a function the gUM path calls to check
+ *  whether a kind is synthetically denied by `setMediaPermission('denied')`. */
+export function __installTestDeniedCheck(
+  fn: (() => { camera: boolean; microphone: boolean }) | null
+): void {
+  testDeniedCheck = fn;
+}
 
 /** @internal Subscribe to permission-grant flips for the testing permissions
  *  shim. Returns an unsubscribe function. */
@@ -47,45 +66,52 @@ function notifyGrantsChanged(name: 'camera' | 'microphone'): void {
  *  WPT runner between tests so per-test isolation matches a fresh document. */
 export function __resetCaptureGrantsForTesting(): void {
   hasGrantedVideo = false;
+  hasGrantedAudio = false;
 }
 
 /** @internal Test-only hook: surface the current grant state to the
  *  in-app permissions stub so `navigator.permissions.query({name:'camera'})`
- *  flips to `granted` after a successful video gUM. */
+ *  / `{name:'microphone'}` flip to `granted` after a successful gUM. */
 export function __getCaptureGrantsForTesting(): { camera: boolean; microphone: boolean } {
-  return { camera: hasGrantedVideo, microphone: false };
+  return { camera: hasGrantedVideo, microphone: hasGrantedAudio };
 }
 
+// @ref LLP 0008#dom-mediadevices — MediaDevices interface
 export class MediaDevices extends EventTarget {
   // @ref LLP 0002 — getUserMedia
   async getUserMedia(constraints?: MediaStreamConstraints): Promise<MediaStream> {
     // @ref LLP 0002#gum-validate-constraints — normalize before sending to native
-    const { video, audioRequested } = normalizeConstraints(constraints);
+    const { video, audio } = normalizeConstraints(constraints);
 
-    if (!video && !audioRequested) {
-      // Per spec, this is a JS `TypeError`, not a DOMException with the
-      // TypeError name. The WPT `GUM-empty-option-param` test asserts
-      // `e instanceof TypeError`, which requires a real `TypeError`.
+    if (!video && !audio) {
+      // @ref LLP 0008#error-typeerror — Per spec, "neither audio nor video"
+      // is a JS `TypeError`, not a DOMException with name "TypeError". The
+      // WPT `GUM-empty-option-param` test asserts `e instanceof TypeError`,
+      // which requires a real `TypeError`.
       throw new TypeError('At least one of audio and video must be requested');
     }
-    if (!video && audioRequested) {
-      // We have no audio support; per LLP 0001 this throws OverconstrainedError.
-      throw new DOMException(
-        'Constraint cannot be satisfied: audio',
-        'OverconstrainedError',
-        'audio'
-      );
+
+    // @ref LLP 0008#error-notallowederror — Synthetic denial set by
+    // `setMediaPermission('denied')` (WPT helper). We're the UA in this
+    // context, so honoring the test-driver-style denial here is legitimate.
+    const denied = testDeniedCheck?.();
+    if (denied && ((video && denied.camera) || (audio && denied.microphone))) {
+      throw new DOMException('Permission denied', 'NotAllowedError');
     }
 
     let nativeStream;
     try {
-      nativeStream = await NativeModule.getUserMediaAsync({ video, audioRequested });
+      nativeStream = await NativeModule.getUserMediaAsync({ video, audio });
     } catch (e) {
       rewrapNativeError(e);
     }
     if (video && !hasGrantedVideo) {
       hasGrantedVideo = true;
       notifyGrantsChanged('camera');
+    }
+    if (audio && !hasGrantedAudio) {
+      hasGrantedAudio = true;
+      notifyGrantsChanged('microphone');
     }
     // @ref LLP 0003#stream-construction — internal native-handle path
     return new MediaStream(nativeStream);
@@ -102,18 +128,32 @@ export class MediaDevices extends EventTarget {
     // @ref LLP 0008#mediadevices-enumeratedevices — Per spec, if the document
     // does not have permission to use a device of a kind, the UA MUST report
     // at most one device of that kind (and with empty deviceId/label/groupId).
-    // Collapse video inputs to a single representative pre-grant.
-    if (!hasGrantedVideo) {
-      const firstVideo = raw.find((d) => d.kind === 'videoinput');
-      raw = firstVideo ? [firstVideo] : [];
+    // Collapse each kind to a single representative pre-grant. WPT's
+    // enumerateDevices test asserts audioinput precedes videoinput in the
+    // returned list, so emit in that order.
+    const out: typeof raw = [];
+    if (hasGrantedAudio) {
+      out.push(...raw.filter((d) => d.kind === 'audioinput'));
+    } else {
+      const firstAudio = raw.find((d) => d.kind === 'audioinput');
+      if (firstAudio) out.push(firstAudio);
     }
+    if (hasGrantedVideo) {
+      out.push(...raw.filter((d) => d.kind === 'videoinput'));
+    } else {
+      const firstVideo = raw.find((d) => d.kind === 'videoinput');
+      if (firstVideo) out.push(firstVideo);
+    }
+    raw = out;
     const InputDeviceInfoCls = (globalThis as unknown as {
       InputDeviceInfo?: new () => MediaDeviceInfo & { __capabilities?: Record<string, unknown> };
     }).InputDeviceInfo;
     return raw.map((d) => {
+      const granted = d.kind === 'videoinput' ? hasGrantedVideo : hasGrantedAudio;
       // Capabilities for the device itself (independent of whether the caller
       // has captured a stream yet). Mirrors the per-track getCapabilities()
       // shape so InputDeviceInfo.getCapabilities() is non-empty.
+      // @ref LLP 0009#audio-track-capabilities — audio device capabilities
       const capabilities: Record<string, unknown> = d.kind === 'videoinput'
         ? {
             width: { min: 0, max: 1920 },
@@ -122,15 +162,28 @@ export class MediaDevices extends EventTarget {
             frameRate: { min: 0, max: 60 },
             facingMode: ['environment'],
             resizeMode: ['none'],
-            deviceId: hasGrantedVideo ? d.deviceId : '',
-            groupId: hasGrantedVideo ? d.groupId : '',
+            deviceId: granted ? d.deviceId : '',
+            groupId: granted ? d.groupId : '',
           }
-        : {};
+        : d.kind === 'audioinput'
+          ? {
+              sampleRate: { min: 8000, max: 96000 },
+              sampleSize: { min: 16, max: 16 },
+              echoCancellation: [true, false],
+              autoGainControl: [true, false],
+              noiseSuppression: [true, false],
+              voiceIsolation: [true, false],
+              latency: { min: 0, max: 1 },
+              channelCount: { min: 1, max: 2 },
+              deviceId: granted ? d.deviceId : '',
+              groupId: granted ? d.groupId : '',
+            }
+          : {};
 
       const info: MediaDeviceInfo = {
-        deviceId: hasGrantedVideo ? d.deviceId : '',
-        label: hasGrantedVideo ? d.label : '',
-        groupId: hasGrantedVideo ? d.groupId : '',
+        deviceId: granted ? d.deviceId : '',
+        label: granted ? d.label : '',
+        groupId: granted ? d.groupId : '',
         kind: d.kind,
       };
 
@@ -169,10 +222,10 @@ export const mediaDevices = new MediaDevices();
 // @ref LLP 0002#gum-validate-constraints — flatten spec constraints to native shape
 function normalizeConstraints(c: MediaStreamConstraints | undefined): {
   video: FlatVideoConstraints | undefined;
-  audioRequested: boolean;
+  audio: FlatAudioConstraints | undefined;
 } {
   if (c == null) {
-    return { video: undefined, audioRequested: false };
+    return { video: undefined, audio: undefined };
   }
   if (typeof c !== 'object') {
     throw new DOMException('constraints must be an object', 'TypeError');
@@ -185,10 +238,14 @@ function normalizeConstraints(c: MediaStreamConstraints | undefined): {
     video = flattenVideo(c.video);
   }
 
-  return {
-    video,
-    audioRequested: !!c.audio,
-  };
+  let audio: FlatAudioConstraints | undefined;
+  if (c.audio === true) {
+    audio = {};
+  } else if (c.audio && typeof c.audio === 'object') {
+    audio = flattenAudio(c.audio);
+  }
+
+  return { video, audio };
 }
 
 // @ref LLP 0002#gum-validate-constraints — Capability ranges for the
@@ -263,6 +320,104 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
     }
   }
   return out;
+}
+
+// @ref LLP 0009#audio-track-capabilities — Ranges supported by AVAudioSession
+// for audio capture. Used to reject impossible `min`/`max` constraints before
+// the bridge call.
+const AUDIO_DEVICE_RANGES: Record<'sampleRate' | 'sampleSize' | 'channelCount' | 'latency', { min: number; max: number }> = {
+  sampleRate: { min: 8000, max: 96000 },
+  sampleSize: { min: 16, max: 16 },
+  channelCount: { min: 1, max: 2 },
+  latency: { min: 0, max: 1 },
+};
+
+function flattenAudio(c: MediaTrackConstraints): FlatAudioConstraints {
+  const out: FlatAudioConstraints = {};
+  if (c.deviceId !== undefined) {
+    const v = pickString(c.deviceId);
+    if (v !== undefined) out.deviceId = v;
+  }
+  // groupId is forwarded separately so an unsatisfied groupId rejects with
+  // `OverconstrainedError(constraint: "groupId")` rather than collapsing
+  // into a "deviceId" rejection. The WPT `groupId is correctly supported
+  // by getUserMedia() for audio devices` test asserts the constraint name
+  // matches.
+  if ((c as { groupId?: ConstrainDOMString }).groupId !== undefined) {
+    const v = pickString((c as { groupId: ConstrainDOMString }).groupId);
+    if (v !== undefined) out.groupId = v;
+  }
+  if (c.sampleRate !== undefined) {
+    validateAudioNumericConstraint('sampleRate', c.sampleRate);
+    const v = pickNumber(c.sampleRate);
+    if (v !== undefined) out.sampleRate = v;
+  }
+  if (c.sampleSize !== undefined) {
+    validateAudioNumericConstraint('sampleSize', c.sampleSize);
+    const v = pickNumber(c.sampleSize);
+    if (v !== undefined) out.sampleSize = v;
+  }
+  if (c.channelCount !== undefined) {
+    validateAudioNumericConstraint('channelCount', c.channelCount);
+    const v = pickNumber(c.channelCount);
+    if (v !== undefined) out.channelCount = v;
+  }
+  if (c.latency !== undefined) {
+    validateAudioNumericConstraint('latency', c.latency);
+    const v = pickNumber(c.latency);
+    if (v !== undefined) out.latency = v;
+  }
+  // @ref LLP 0008#echocancellationmode — boolean | "all" | "remote-only"
+  // Split into two scalar fields at the bridge: `echoCancellation` carries
+  // the boolean form, `echoCancellationMode` carries the enum string. Native
+  // sees only one of them set (or neither, if the caller omitted the field).
+  if (c.echoCancellation !== undefined) {
+    const v = pickBooleanOrEchoCancellationMode(c.echoCancellation);
+    if (typeof v === 'boolean') {
+      out.echoCancellation = v;
+    } else if (v === 'all' || v === 'remote-only') {
+      out.echoCancellationMode = v;
+    }
+  }
+  if (c.autoGainControl !== undefined) {
+    const v = pickBoolean(c.autoGainControl);
+    if (v !== undefined) out.autoGainControl = v;
+  }
+  if (c.noiseSuppression !== undefined) {
+    const v = pickBoolean(c.noiseSuppression);
+    if (v !== undefined) out.noiseSuppression = v;
+  }
+  if (c.voiceIsolation !== undefined) {
+    const v = pickBoolean(c.voiceIsolation);
+    if (v !== undefined) out.voiceIsolation = v;
+  }
+  return out;
+}
+
+// @ref LLP 0008#error-overconstrainederror — Reject audio `min`/`max` /
+// `exact` ranges that can't be satisfied by any AVAudioSession we'd produce.
+function validateAudioNumericConstraint(
+  name: 'sampleRate' | 'sampleSize' | 'channelCount' | 'latency',
+  c: ConstrainULong | ConstrainDouble
+): void {
+  if (typeof c === 'number') return;
+  if (!c || typeof c !== 'object') return;
+  const range = AUDIO_DEVICE_RANGES[name];
+  const min = (c as { min?: number }).min;
+  const max = (c as { min?: number; max?: number }).max;
+  const exact = (c as { exact?: number }).exact;
+  if (typeof max === 'number' && max < range.min) {
+    throw new DOMException(`Constraint cannot be satisfied: ${name}`, 'OverconstrainedError', name);
+  }
+  if (typeof min === 'number' && min > range.max) {
+    throw new DOMException(`Constraint cannot be satisfied: ${name}`, 'OverconstrainedError', name);
+  }
+  if (typeof min === 'number' && typeof max === 'number' && min > max) {
+    throw new DOMException(`Constraint cannot be satisfied: ${name}`, 'OverconstrainedError', name);
+  }
+  if (typeof exact === 'number' && (exact < range.min || exact > range.max)) {
+    throw new DOMException(`Constraint cannot be satisfied: ${name}`, 'OverconstrainedError', name);
+  }
 }
 
 // @ref LLP 0008#error-overconstrainederror — Reject `min`/`max` ranges that
@@ -345,6 +500,34 @@ function pickNumber(c: ConstrainULong | ConstrainDouble): number | undefined {
   if (c && typeof c === 'object') {
     if (typeof c.exact === 'number') return c.exact;
     if (typeof c.ideal === 'number') return c.ideal;
+  }
+  return undefined;
+}
+
+function pickBoolean(c: unknown): boolean | undefined {
+  if (typeof c === 'boolean') return c;
+  if (c && typeof c === 'object') {
+    const v = c as { exact?: unknown; ideal?: unknown };
+    if (typeof v.exact === 'boolean') return v.exact;
+    if (typeof v.ideal === 'boolean') return v.ideal;
+  }
+  return undefined;
+}
+
+// @ref LLP 0008#echocancellationmode — boolean | "all" | "remote-only"
+// The original input shape (including the enum string) is preserved through
+// the bridge so getSettings() can report it back verbatim.
+function pickBooleanOrEchoCancellationMode(
+  c: unknown
+): boolean | 'all' | 'remote-only' | undefined {
+  if (typeof c === 'boolean') return c;
+  if (c === 'all' || c === 'remote-only') return c;
+  if (c && typeof c === 'object') {
+    const v = c as { exact?: unknown; ideal?: unknown };
+    const e = v.exact;
+    if (typeof e === 'boolean' || e === 'all' || e === 'remote-only') return e;
+    const i = v.ideal;
+    if (typeof i === 'boolean' || i === 'all' || i === 'remote-only') return i;
   }
   return undefined;
 }
