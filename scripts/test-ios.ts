@@ -14,7 +14,7 @@ const VERBOSE = process.env.VERBOSE === '1';
 
 interface ParsedResult {
   name: string;
-  status: 'pass' | 'fail' | 'timeout';
+  status: 'pass' | 'fail' | 'timeout' | 'skip';
   message?: string;
   durationMs: number;
 }
@@ -23,6 +23,7 @@ interface ParsedSummary {
   passed: number;
   failed: number;
   timeout: number;
+  skipped?: number;
 }
 
 main()
@@ -64,7 +65,12 @@ async function main(): Promise<number> {
     // Start the log stream FIRST so we don't miss early WPT_RESULT lines.
     const logProc = startLogStream(udid);
 
-    // Deep-link to the test runner with autorun.
+    // iOS 26 simulator: `simctl openurl` does not reliably cold-launch the app.
+    // Explicitly launch the bundle first, then deep-link to the test runner.
+    // The launch alone navigates to `/index`; the openurl then switches the
+    // tab via Expo Router's URL handler.
+    await sh(['xcrun', 'simctl', 'launch', udid, APP_BUNDLE_ID]).catch(() => undefined);
+    await sleep(1500);
     await sh(['xcrun', 'simctl', 'openurl', udid, `${URL_SCHEME}:///run-tests?autorun=1`]);
     console.log('Opened test URL; waiting for results…');
 
@@ -76,9 +82,12 @@ async function main(): Promise<number> {
     }
 
     console.log('');
+    const skipped = summary.skipped ?? 0;
     console.log(
-      `Summary: ${summary.passed} passed, ${summary.failed} failed, ${summary.timeout} timeout`
+      `Summary: ${summary.passed} passed, ${summary.failed} failed, ${summary.timeout} timeout` +
+        (skipped > 0 ? `, ${skipped} skipped` : '')
     );
+    // Skips are environment-blocked (e.g. simulator has no AVCaptureDevice), not regressions.
     exitCode = summary.failed === 0 && summary.timeout === 0 ? 0 : 1;
   } finally {
     if (shouldShutdownOnExit) {
@@ -214,10 +223,11 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
 function handleLine(line: string): { summary?: ParsedSummary } | undefined {
   const resultIdx = line.indexOf('WPT_RESULT:');
   if (resultIdx >= 0) {
-    const json = line.slice(resultIdx + 'WPT_RESULT:'.length).trim();
+    const json = unescapeLogOctal(line.slice(resultIdx + 'WPT_RESULT:'.length).trim());
     try {
       const r = JSON.parse(json) as ParsedResult;
-      const glyph = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '⏱';
+      const glyph =
+        r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : r.status === 'skip' ? '↷' : '⏱';
       const tail = r.message ? `  ← ${r.message}` : '';
       console.log(`  ${glyph} ${r.name} (${r.durationMs}ms)${tail}`);
     } catch {
@@ -227,7 +237,7 @@ function handleLine(line: string): { summary?: ParsedSummary } | undefined {
   }
   const doneIdx = line.indexOf('WPT_DONE:');
   if (doneIdx >= 0) {
-    const json = line.slice(doneIdx + 'WPT_DONE:'.length).trim();
+    const json = unescapeLogOctal(line.slice(doneIdx + 'WPT_DONE:'.length).trim());
     try {
       return { summary: JSON.parse(json) as ParsedSummary };
     } catch {
@@ -235,6 +245,14 @@ function handleLine(line: string): { summary?: ParsedSummary } | undefined {
     }
   }
   return;
+}
+
+// `log stream --style compact` encodes non-printable / quoted bytes as octal
+// escapes (e.g. `\"` arrives as `\134"`). Reverse that so JSON.parse sees valid
+// JSON. We only need to convert `\134` (backslash) and `\012` (newline) since
+// those are what our WPT_RESULT payloads can contain.
+function unescapeLogOctal(s: string): string {
+  return s.replace(/\\134/g, '\\').replace(/\\012/g, '\\n');
 }
 
 // MARK: - Process helpers
@@ -246,6 +264,10 @@ async function sh(cmd: string[]): Promise<void> {
   if (code !== 0) {
     throw new Error(`Command failed (${code}): ${cmd.join(' ')}`);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function capture(cmd: string[]): Promise<string> {

@@ -1,0 +1,97 @@
+// @ts-nocheck
+// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/MediaStream-MediaElement-firstframe.https.html
+// Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStream-MediaElement-firstframe.https.html
+
+import { wptSource, test, assert_equals, assert_greater_than_equal, assert_not_equals, assert_unreached, promise_test, setMediaPermission } from '../testharness';
+
+wptSource('MediaStream-MediaElement-firstframe.https.html');
+
+try {
+// === BEGIN WPT BODY (verbatim) ===
+const vid = document.getElementById("vid");
+
+promise_test(async t => {
+  const wait = ms => new Promise(r => t.step_timeout(r, ms));
+  const timeout = (promise, time, msg) => Promise.race([
+    promise,
+    wait(time).then(() => Promise.reject(new Error(msg)))
+  ]);
+  await setMediaPermission("granted", ["camera"]);
+  const stream = await navigator.mediaDevices.getUserMedia({video: true});
+  t.add_cleanup(() => stream.getTracks().forEach(track => track.stop()));
+  vid.srcObject = stream;
+
+  await timeout(new Promise(r => vid.oncanplay = r), 8000, "canplay timeout");
+  assert_equals(vid.readyState, vid.HAVE_ENOUGH_DATA,
+    "readyState is HAVE_ENOUGH_DATA after \"canplay\"");
+}, "Tests that loading a MediaStream in a media element eventually results in \"canplay\" even when not playing or autoplaying");
+
+promise_test(async t => {
+  const wait = ms => new Promise(r => t.step_timeout(r, ms));
+  const timeout = (promise, time, msg) => Promise.race([
+    promise,
+    wait(time).then(() => Promise.reject(new Error(msg)))
+  ]);
+  const unexpected = e => assert_unreached(`Got unexpected event ${e.type}`);
+  const stream = await navigator.mediaDevices.getUserMedia({video: true});
+  t.add_cleanup(() => {
+    vid.ondurationchange = null;
+    stream.getTracks().forEach(track => track.stop())
+  });
+  vid.srcObject = stream;
+
+  vid.onloadstart = unexpected;
+  vid.ondurationchange = unexpected;
+  vid.onresize = unexpected;
+  vid.onloadedmetadata = unexpected;
+  vid.onloadeddata = unexpected;
+  vid.oncanplay = unexpected;
+  vid.oncanplaythrough = unexpected;
+
+  await timeout(new Promise(r => vid.onloadstart = r), 8000,
+    "loadstart timeout");
+  vid.onloadstart = unexpected;
+
+  await timeout(new Promise(r => vid.ondurationchange = r), 8000,
+    "durationchange timeout");
+  vid.ondurationchange = unexpected;
+  assert_equals(vid.duration, Infinity, "duration changes to Infinity");
+
+  await timeout(new Promise(r => vid.onresize = r), 8000,
+    "resize timeout");
+  vid.onresize = unexpected;
+  assert_not_equals(vid.videoWidth, 0,
+    "videoWidth is something after \"resize\"");
+  assert_not_equals(vid.videoHeight, 0,
+    "videoHeight is something after \"resize\"");
+
+  await timeout(new Promise(r => vid.onloadedmetadata = r), 8000,
+    "loadedmetadata timeout");
+  vid.onloadedmetadata = unexpected;
+  assert_greater_than_equal(vid.readyState, vid.HAVE_METADATA,
+    "readyState is at least HAVE_METADATA after \"loadedmetadata\"");
+
+  await timeout(new Promise(r => vid.onloadeddata = r), 8000,
+    "loadeddata timeout");
+  vid.onloadeddata = unexpected;
+  assert_equals(vid.readyState, vid.HAVE_ENOUGH_DATA,
+    "readyState is HAVE_ENOUGH_DATA after \"loadeddata\" since there's no buffering");
+
+  await timeout(new Promise(r => vid.oncanplay = r), 8000, "canplay timeout");
+  vid.oncanplay = unexpected;
+  assert_equals(vid.readyState, vid.HAVE_ENOUGH_DATA,
+    "readyState is HAVE_ENOUGH_DATA after \"canplay\" since there's no buffering");
+
+  await timeout(new Promise(r => vid.oncanplaythrough = r), 8000,
+    "canplaythrough timeout");
+  vid.oncanplaythrough = unexpected;
+  assert_equals(vid.readyState, vid.HAVE_ENOUGH_DATA,
+    "readyState is HAVE_ENOUGH_DATA after \"canplaythrough\"");
+
+  // Crank the event loop to see whether any more events are fired.
+  await wait(100);
+}, "Tests that loading a MediaStream in a media element sees all the expected (deterministic) events even when not playing or autoplaying");
+// === END WPT BODY ===
+} catch (__wptModuleLoadError) {
+  test(() => { throw __wptModuleLoadError; }, 'MediaStream-MediaElement-firstframe.https.html — module load failed');
+}

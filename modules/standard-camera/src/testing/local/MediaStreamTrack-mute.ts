@@ -10,7 +10,10 @@ import {
   assert_true,
   nextEvent,
   promise_test,
+  wptSource,
 } from '../testharness';
+
+wptSource(null);
 
 // AVCaptureSession.InterruptionReason raw values
 const REASON_VIDEO_DEVICE_NOT_AVAILABLE_IN_BACKGROUND = 1;

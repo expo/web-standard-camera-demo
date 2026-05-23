@@ -1,67 +1,148 @@
-// @ref LLP 0007 — Port of wpt/mediacapture-streams/MediaDevices-getUserMedia.https.html
+// @ts-nocheck
+// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/MediaDevices-getUserMedia.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaDevices-getUserMedia.https.html
 
-import {
-  assert_equals,
-  assert_not_equals,
-  assert_greater_than_equal,
-  assert_true,
-  promise_test,
-  test,
-} from '../testharness';
+import { wptSource, test, assert_equals, assert_less_than_equal, assert_not_equals, assert_true, promise_test, setMediaPermission } from '../testharness';
 
-// @ref LLP 0001#mediadevices-getusermedia
-test(() => {
-  assert_not_equals(
-    navigator.mediaDevices.getUserMedia,
-    undefined,
-    'navigator.mediaDevices.getUserMedia exists.'
-  );
-}, 'getUserMedia exists on navigator.mediaDevices');
+wptSource('MediaDevices-getUserMedia.https.html');
 
-// @ref LLP 0002 — happy path: video-only returns a MediaStream with one video track
-promise_test(async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  assert_true(stream.active, 'stream is active');
-  assert_equals(stream.getTracks().length, 1, 'stream has exactly one track');
-  assert_equals(stream.getVideoTracks().length, 1, 'stream has one video track');
-  assert_equals(stream.getAudioTracks().length, 0, 'stream has no audio tracks');
+try {
+// === BEGIN WPT BODY (verbatim) ===
+test(function () {
+  assert_not_equals(navigator.mediaDevices.getUserMedia, undefined, "navigator.mediaDevices.getUserMedia exists.");
+  // TODO: do some stuff with it
+  assert_not_equals(navigator.mediaDevices.getSupportedConstraints, undefined, "navigator.mediaDevices.getSupportedConstraints exists.");
+  var list = navigator.mediaDevices.getSupportedConstraints();
+  // TODO: we are supposed to check that all values returned can be used in a constraint ....
+  // NOTE: the current list of attributes that may or may not be here
+  // ...   FF for example has many no tin that list, should we fail if an attribute is present but not listed in the specs?
+  //   list.width
+  //   list.height
+  //   list.aspectRatio
+  //   list.frameRate
+  //   list.facingMode
+  //   list.volume
+  //   list.sampleRate
+  //   list.sampleSize
+  //   list.echoCancellation
+  //   list.latency
+  //   list.channelCount
+  //   list.deviceId
+  //   list.groupId
+  }, "mediaDevices.getUserMedia() is present on navigator");
 
-  const track = stream.getVideoTracks()[0];
-  assert_equals(track.kind, 'video', 'track.kind is "video"');
-  assert_equals(track.readyState, 'live', 'track.readyState is "live"');
+promise_test(async t => {
+  // Both permissions are needed at some point, asking both at once
+  await setMediaPermission();
+  // A successful camera gUM call is needed to expose camera information
+  const afterGum = await navigator.mediaDevices.getUserMedia({video: true});
+  afterGum.getTracks()[0].stop();
 
-  for (const t of stream.getTracks()) t.stop();
-}, 'getUserMedia({video:true}) returns a MediaStream with one live video track');
-
-// @ref LLP 0003#track-getSettings — settings shape
-promise_test(async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  const track = stream.getVideoTracks()[0];
-  const settings = track.getSettings();
-  assert_not_equals(settings.deviceId, undefined, 'settings.deviceId present');
-  assert_not_equals(settings.facingMode, undefined, 'settings.facingMode present');
-  assert_greater_than_equal(settings.width ?? 0, 1, 'settings.width > 0');
-  assert_greater_than_equal(settings.height ?? 0, 1, 'settings.height > 0');
-  assert_greater_than_equal(settings.frameRate ?? 0, 1, 'settings.frameRate > 0');
-  for (const t of stream.getTracks()) t.stop();
-}, 'video track getSettings() returns plausible settings');
-
-// @ref LLP 0002#gum-validate-constraints — empty constraints rejects with TypeError
-promise_test(async () => {
-  try {
-    await navigator.mediaDevices.getUserMedia({});
-    throw new Error('did not reject');
-  } catch (e) {
-    const err = e as Error;
-    assert_equals(err.name, 'TypeError', 'rejection name is TypeError');
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["groupId"],
+    "groupId should be supported");
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  for (const device of devices) {
+    await navigator.mediaDevices.getUserMedia(
+        {video: {groupId: {exact: device.groupId}}}).then(stream => {
+      const found_device = devices.find(({deviceId}) =>
+        deviceId == stream.getTracks()[0].getSettings().deviceId);
+      assert_not_equals(found_device, undefined);
+      assert_equals(found_device.kind, "videoinput");
+      assert_equals(found_device.groupId, device.groupId);
+      stream.getTracks().forEach(t => t.stop());
+    }, error => {
+      assert_equals(error.name, "OverconstrainedError");
+      assert_equals(error.constraint, "groupId");
+      const found_device = devices.find(element =>
+        element.kind == "videoinput" && element.groupId == device.groupId);
+      assert_equals(found_device, undefined);
+    });
   }
-}, 'getUserMedia({}) rejects with TypeError');
+}, 'groupId is correctly supported by getUserMedia() for video devices');
 
-// @ref LLP 0001#mediadevices-getsupportedconstraints
-test(() => {
-  const supported = navigator.mediaDevices.getSupportedConstraints();
-  assert_equals(supported.width, true, 'width supported');
-  assert_equals(supported.height, true, 'height supported');
-  assert_equals(supported.facingMode, true, 'facingMode supported');
-}, 'getSupportedConstraints reports the documented subset');
+promise_test(async t => {
+  // A successful microphone gUM call is needed to expose microphone information
+  const afterGum = await navigator.mediaDevices.getUserMedia({audio: true});
+  afterGum.getTracks()[0].stop();
+
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["groupId"],
+    "groupId should be supported");
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  for (const device of devices) {
+    await navigator.mediaDevices.getUserMedia(
+        {audio: {groupId: {exact: device.groupId}}}).then(stream => {
+      const found_device = devices.find(({deviceId}) =>
+        deviceId == stream.getTracks()[0].getSettings().deviceId);
+      assert_not_equals(found_device, undefined);
+      assert_equals(found_device.kind, "audioinput");
+      assert_equals(found_device.groupId, device.groupId);
+      stream.getTracks().forEach(t => t.stop());
+    }, error => {
+      assert_equals(error.name, "OverconstrainedError");
+      assert_equals(error.constraint, "groupId");
+      const found_device = devices.find(element =>
+        element.kind == "audioinput" && element.groupId == device.groupId);
+      assert_equals(found_device, undefined);
+    });
+  }
+}, 'groupId is correctly supported by getUserMedia() for audio devices');
+
+promise_test(async t => {
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["resizeMode"],
+    "resizeMode should be supported");
+  const stream = await navigator.mediaDevices.getUserMedia(
+      { video: {resizeMode: {exact: 'none'}}});
+  const [track] = stream.getVideoTracks();
+  t.add_cleanup(() => track.stop());
+  assert_equals(track.getSettings().resizeMode, 'none');
+}, 'getUserMedia() supports setting none as resizeMode.');
+
+promise_test(async t => {
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["resizeMode"],
+    "resizeMode should be supported");
+  const stream = await navigator.mediaDevices.getUserMedia(
+      { video: {resizeMode: {exact: 'crop-and-scale'}}});
+  const [track] = stream.getVideoTracks();
+  t.add_cleanup(() => track.stop());
+  assert_equals(track.getSettings().resizeMode, 'crop-and-scale');
+}, 'getUserMedia() supports setting crop-and-scale as resizeMode without downscaling.');
+
+promise_test(async t => {
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["resizeMode"],
+    "resizeMode should be supported");
+  const stream = await navigator.mediaDevices.getUserMedia(
+      { video: {resizeMode: {exact: 'crop-and-scale'}, width: {max: 30}}});
+  const [track] = stream.getVideoTracks();
+  t.add_cleanup(() => track.stop());
+  assert_equals(track.getSettings().resizeMode, 'crop-and-scale');
+  assert_less_than_equal(track.getSettings().width, 30);
+}, 'getUserMedia() supports setting crop-and-scale as resizeMode with downscaling.');
+
+promise_test(async t => {
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["resizeMode"],
+    "resizeMode should be supported");
+  const stream = await navigator.mediaDevices.getUserMedia(
+      { video: {resizeMode: {exact: 'crop-and-scale'}, frameRate: {max: 5}}});
+  const [track] = stream.getVideoTracks();
+  t.add_cleanup(() => track.stop());
+  assert_equals(track.getSettings().resizeMode, 'crop-and-scale');
+  assert_less_than_equal(track.getSettings().frameRate, 5);
+}, 'getUserMedia() supports setting crop-and-scale as resizeMode with decimation.');
+
+promise_test(async t => {
+  assert_true(navigator.mediaDevices.getSupportedConstraints()["resizeMode"],
+    "resizeMode should be supported");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(
+        { video: {resizeMode: {exact: 'INVALID'}}});
+    t.add_cleanup(() => stream.getVideoTracks()[0].stop());
+    t.unreached_func('getUserMedia() should fail with invalid resizeMode')();
+  } catch (e) {
+    assert_equals(e.name, 'OverconstrainedError');
+    assert_equals(e.constraint, 'resizeMode');
+  }
+}, 'getUserMedia() fails with exact invalid resizeMode.');
+// === END WPT BODY ===
+} catch (__wptModuleLoadError) {
+  test(() => { throw __wptModuleLoadError; }, 'MediaDevices-getUserMedia.https.html — module load failed');
+}
