@@ -515,12 +515,9 @@ const ENV_SKIPPED_TEST_NAMES = new Map<string, string>([
     'Tests that a media element with an assigned MediaStream does not start advancing currentTime until potentially playing',
     'environment-skip: requires HTMLCanvasElement.captureStream — out of scope',
   ],
-  // iPhones only have one front + one back camera; tests that require >1
-  // device with distinct deviceId/groupId never apply.
-  [
-    'deviceId and groupId are correctly reported by getSettings() for all input devices',
-    'environment-skip: requires more than one camera device',
-  ],
+  // (Previously env-skipped: `deviceId and groupId are correctly reported by
+  // getSettings() for all input devices` — required >1 camera. Now runnable
+  // since enumerateDevices() returns every built-in camera.)
   // crop-and-scale isn't supported by our AVFoundation pipeline (LLP 0001).
   [
     'getUserMedia() supports setting crop-and-scale as resizeMode without downscaling.',
