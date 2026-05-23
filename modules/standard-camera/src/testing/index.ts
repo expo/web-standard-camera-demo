@@ -62,6 +62,7 @@ import './wpt/parallel-capture-requests';
 import './local/deviceId-pick';
 import './local/enumerate-multi-device';
 import './local/facingMode-switch';
+import './local/frameRate-resolution';
 import './local/MediaStream-construction';
 import './local/MediaStreamTrack-mute';
 import './local/overconstrained-error';

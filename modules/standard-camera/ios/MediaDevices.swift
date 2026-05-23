@@ -189,35 +189,26 @@ private func buildSession(
       let session = AVCaptureSession()
       session.beginConfiguration()
 
-      // If the caller requested a specific resolution and/or frame rate, walk
-      // `device.formats` and pick the closest match — `AVCaptureSession.Preset`
-      // alone caps most devices at 30 fps, so requesting `frameRate: 60` via a
-      // preset silently degrades. Setting `activeFormat` + the frame-duration
-      // pair lets us deliver the requested rate when the underlying format
-      // supports it.
-      if constraints.width != nil || constraints.height != nil || constraints.frameRate != nil {
-        if let chosen = pickActiveFormat(device: device, constraints: constraints) {
-          do {
-            try device.lockForConfiguration()
-            device.activeFormat = chosen.format
-            let timescale = CMTimeScale(chosen.frameRate.rounded())
-            device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: timescale)
-            device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: timescale)
-            device.unlockForConfiguration()
-          } catch {
-            // Fall back to preset path if format lock failed.
-            let preset = pickPreset(width: constraints.width, height: constraints.height)
-            if session.canSetSessionPreset(preset) {
-              session.sessionPreset = preset
-            }
-          }
-        } else {
-          // No format match — use the preset path instead so we still produce a stream.
-          let preset = pickPreset(width: constraints.width, height: constraints.height)
-          if session.canSetSessionPreset(preset) {
-            session.sessionPreset = preset
-          }
+      // Are we picking a specific device format, or letting AVCaptureSession
+      // manage it via a preset? The two paths are mutually exclusive per the
+      // AVCaptureSession docs — setting `sessionPreset` overrides any
+      // `device.activeFormat` we picked, and setting `activeFormat` requires
+      // `sessionPreset == .inputPriority` to opt out of session-managed
+      // selection. Sequencing also matters: the device must be locked when we
+      // write `activeFormat`, and that has to happen *after* the device is
+      // added to the session, otherwise `addInput` re-applies the preset's
+      // chosen format on top of our pick.
+      let chosenFormat: (format: AVCaptureDevice.Format, frameRate: Double)? = {
+        if constraints.width == nil && constraints.height == nil && constraints.frameRate == nil {
+          return nil
         }
+        return pickActiveFormat(device: device, constraints: constraints)
+      }()
+
+      if chosenFormat != nil {
+        // .inputPriority — "the session does not change the active capture
+        // device's settings." Required when we manage the active format below.
+        session.sessionPreset = .inputPriority
       } else {
         let preset = pickPreset(width: constraints.width, height: constraints.height)
         if session.canSetSessionPreset(preset) {
@@ -242,6 +233,25 @@ private func buildSession(
         return
       }
       session.addInput(input)
+
+      // Now that the device is part of the session, write activeFormat under
+      // the device lock. This is the only point at which the session won't
+      // immediately overwrite us, because we're holding the device's
+      // configuration lock and the session is in .inputPriority.
+      if let chosen = chosenFormat {
+        do {
+          try device.lockForConfiguration()
+          device.activeFormat = chosen.format
+          let timescale = CMTimeScale(chosen.frameRate.rounded())
+          device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: timescale)
+          device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: timescale)
+          device.unlockForConfiguration()
+        } catch {
+          // Lock failed — leave the session in .inputPriority with whatever
+          // format the device defaulted to when added. Better than throwing,
+          // because the stream still works at the device's default rate.
+        }
+      }
 
       // Add the FrameSink output inside the same configuration block so the
       // data-output connection comes up in one atomic transaction.
