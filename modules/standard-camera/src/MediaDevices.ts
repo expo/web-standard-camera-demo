@@ -98,7 +98,15 @@ export class MediaDevices extends EventTarget {
   // MUST be empty strings — the rationale is that these fields can fingerprint
   // a user across origins, so they're gated behind explicit user grant.
   async enumerateDevices(): Promise<MediaDeviceInfo[]> {
-    const raw = await NativeModule.enumerateDevicesAsync();
+    let raw = await NativeModule.enumerateDevicesAsync();
+    // @ref LLP 0008#mediadevices-enumeratedevices — Per spec, if the document
+    // does not have permission to use a device of a kind, the UA MUST report
+    // at most one device of that kind (and with empty deviceId/label/groupId).
+    // Collapse video inputs to a single representative pre-grant.
+    if (!hasGrantedVideo) {
+      const firstVideo = raw.find((d) => d.kind === 'videoinput');
+      raw = firstVideo ? [firstVideo] : [];
+    }
     const InputDeviceInfoCls = (globalThis as unknown as {
       InputDeviceInfo?: new () => MediaDeviceInfo & { __capabilities?: Record<string, unknown> };
     }).InputDeviceInfo;
@@ -204,6 +212,15 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
   const out: FlatVideoConstraints = {};
   if (c.deviceId !== undefined) {
     const v = pickString(c.deviceId);
+    if (v !== undefined) out.deviceId = v;
+  }
+  // @ref LLP 0002#gum-pick-device — In v1 each `AVCaptureDevice.uniqueID` is
+  // used as both `deviceId` and `groupId`, so a `groupId: {exact}` constraint
+  // resolves to the same device as the corresponding `deviceId: {exact}`.
+  // Map it across when the caller specified only `groupId`, so the native
+  // pickDevice path can honor it without a separate constraint field.
+  if (out.deviceId === undefined && (c as { groupId?: ConstrainDOMString }).groupId !== undefined) {
+    const v = pickString((c as { groupId: ConstrainDOMString }).groupId);
     if (v !== undefined) out.deviceId = v;
   }
   if (c.facingMode !== undefined) {
