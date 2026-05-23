@@ -52,6 +52,8 @@ Composes a new stream out of existing tracks. When invoked:
 3. If the constructor's argument is present, construct the set of tracks from it (either a `MediaStream` or a `sequence<MediaStreamTrack>`). For each track: if already in `stream`'s track set, skip; otherwise add.
 4. Return `stream`.
 
+The newly-generated `id` value is a UA-chosen string that is 36 characters long and drawn from the spec's allowed character set (printable ASCII excluding whitespace and `"`). The UUIDv4 form is the canonical browser choice; we use it here.
+
 ## Attribute: `id` [dom-mediastream-id]
 
 > The `id` attribute MUST return the value to which it was initialized when the object was created.
@@ -99,8 +101,10 @@ When invoked:
 When invoked:
 1. Let `streamClone` be a newly constructed `MediaStream` object.
 2. Initialize `streamClone.id` to a newly generated value.
-3. Clone each track in this `MediaStream` and add the result to `streamClone`'s track set.
+3. Clone each track in this `MediaStream` (per `MediaStreamTrack.clone()` below) and add the result to `streamClone`'s track set.
 4. Return `streamClone`.
+
+Cloned tracks share their `[[Source]]` with the original. Stopping the original `MediaStream`'s tracks does not end the cloned tracks; the source stops only when every track (original and cloned) is ended.
 
 ## Event: `addtrack` [event-mediastream-addtrack]
 
@@ -109,12 +113,16 @@ To add a track to a stream:
 2. Add `track` to `stream`'s track set.
 3. Fire a track event named `addtrack` with `track` at `stream`.
 
+Note: when the `addTrack(track)` method is invoked from script, the track is added but the `addtrack` event is **not** fired (the spec defines `addtrack` for UA-initiated additions only). Script-initiated additions are silent.
+
 ## Event: `removetrack` [event-mediastream-removetrack]
 
 To remove a track from a stream:
 1. If `track` is not in `stream`'s track set, abort.
 2. Remove `track` from `stream`'s track set.
 3. Fire a track event named `removetrack` with `track` at `stream`.
+
+Note: when the `removeTrack(track)` method is invoked from script, the track is removed but the `removetrack` event is **not** fired (the spec defines `removetrack` for UA-initiated removals only). Script-initiated removals are silent. The WPT `MediaStream-removetrack` test asserts this by failing if `onremovetrack` fires during a scripted `removeTrack`.
 
 ---
 
@@ -186,6 +194,16 @@ When invoked:
 
 > When the `clone()` method is invoked, the User Agent MUST return the result of clone-a-track with this.
 
+The clone-a-track algorithm:
+
+1. Let `trackClone` be a new `MediaStreamTrack` object.
+2. Initialize `trackClone.[[Id]]` to a newly generated value.
+3. Let `trackClone` inherit `this`'s underlying source.
+4. Initialize the rest of `trackClone`'s state to the same as `this`'s, except for `[[Id]]` and the listeners associated with `this`'s `EventTarget`.
+5. Return `trackClone`.
+
+A cloned track represents an independent consumer of the same source. Operations that affect the source (e.g., stopping the source explicitly) affect every track that references it; operations on the track instance itself (`stop()`, `enabled`, event listeners) are independent.
+
 ## Method: `getCapabilities()` [dom-mediastreamtrack-getcapabilities]
 
 Returns the capabilities of the source that this `MediaStreamTrack` represents.
@@ -210,6 +228,8 @@ When invoked:
 1. Let `track` be the current `MediaStreamTrack`.
 2. If `track`'s [[ReadyState]] is `"ended"`, return a resolved promise.
 3. Otherwise, invoke and return the result of the applyConstraints template method.
+
+The applyConstraints template (Constrainable Pattern): if the supplied constraints object is empty, the operation is a no-op and the promise resolves with `undefined`. Otherwise, the UA attempts to apply the constraints; if it cannot satisfy them, the promise rejects with `OverconstrainedError` carrying the offending constraint name.
 
 ## Event: setting muted state [dom-mediastreamtrack-mute-algorithm]
 

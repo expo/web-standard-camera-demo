@@ -4,7 +4,7 @@
 **Status:** Active
 **Systems:** standard-camera, ios
 **Author:** James Ide
-**Date:** 2026-05-19 (refactored 2026-05-21)
+**Date:** 2026-05-19 (refactored 2026-05-21; expanded for clone/addTrack/removeTrack on 2026-05-21)
 **Related:** 0001, 0002, 0005, 0008
 
 ## Summary
@@ -17,11 +17,28 @@ Section anchors below are stable; code annotations cite them as `@ref LLP 0003#<
 
 ## `MediaStream`
 
-`MediaStream` is a [`SharedRef`-like](https://github.com/expo/expo/blob/main/packages/expo-modules-core/ios/Core/SharedObjects/SharedObject.swift) `SharedObject` that owns an `AVCaptureSession` and a snapshot array of tracks. The session is the unit of capture; tracks describe what's flowing through it. JS receives an opaque handle and uses the spec-shaped methods on the TS wrapper class.
+`MediaStream` is the JS-side track container. Construction can happen in two ways:
+
+1. **Native-backed** — `getUserMedia()` returns a JS wrapper over a native `MediaStream` SharedObject. The native handle carries the `id` and the initial track list.
+2. **Script-constructed** — `new MediaStream()`, `new MediaStream(stream)`, `new MediaStream(sequence<MediaStreamTrack>)` build a JS-only wrapper with a JS-generated `id` (UUIDv4) and no `_native` handle. This is `stream-construction` below.
+
+Live capture continues to live behind a Swift `CaptureSource` referenced (strong) by each `MediaStreamTrack` instance. `MediaStream` no longer owns the `AVCaptureSession` — the session is reference-counted by live tracks across original and cloned streams, so stopping all tracks of the original stream does not stop the camera when a clone is still consuming the same source.
+
+### `stream-construction`
+
+Implements [LLP 0008#mediastream-constructor](./0008-w3c-spec-text.spec.md#constructors-mediastream-constructor). All three constructor signatures are JS-side:
+
+1. `new MediaStream()` → empty track set, fresh `id`.
+2. `new MediaStream(otherStream)` → copy the tracks of `otherStream` into a new set (the tracks themselves are not cloned; they're added by reference).
+3. `new MediaStream(tracks)` → take a `sequence<MediaStreamTrack>`, dedupe, and add to the set.
+
+Script-constructed streams cannot be assigned to `<Video srcObject>` unless one of their tracks comes from a `getUserMedia` source — the `<Video>` view derives its `AVCaptureSession` from the first track's `CaptureSource`. A pure JS stream with no native-backed track is a JS-only construct and the video element will sit at `HAVE_NOTHING`.
 
 ### `stream-id`
 
-Implements [LLP 0008#dom-mediastream-id](./0008-w3c-spec-text.spec.md#attribute-id-dom-mediastream-id). UUIDv4 generated in `MediaDevices.swift`'s `getUserMedia` and stored as `let id` on the Swift `MediaStream`.
+### `stream-id`
+
+Implements [LLP 0008#dom-mediastream-id](./0008-w3c-spec-text.spec.md#attribute-id-dom-mediastream-id). UUIDv4 (36 characters; the printable-ASCII subset that excludes whitespace and double quote per the spec's "allowed character set"). Generated in `MediaDevices.swift`'s `getUserMedia` for native-backed streams; generated in JS (`crypto.randomUUID()` when available, falling back to a `Math.random`-based RFC 4122 v4 generator otherwise) for script-constructed streams.
 
 ### `stream-active`
 
@@ -39,9 +56,21 @@ Implements [LLP 0008#dom-mediastream-getvideotracks](./0008-w3c-spec-text.spec.m
 
 Implements [LLP 0008#dom-mediastream-gettrackbyid](./0008-w3c-spec-text.spec.md#method-gettrackbyidtrackid-dom-mediastream-gettrackbyid). Linear scan; first match.
 
+### `stream-addtrack`
+
+Implements [LLP 0008#dom-mediastream-addtrack](./0008-w3c-spec-text.spec.md#method-addtracktrack-dom-mediastream-addtrack). If the track is not already in `#tracks`, append it. The native `MediaStream` is also notified so its track set stays in sync (used by the `<Video>` view to resolve the first video track's `CaptureSource`).
+
+Per spec, `addTrack` is **script-initiated** and the `addtrack` event does **not** fire — it fires only when the user agent itself adds a track (e.g., a network-driven RTP path). Our subset has no such path, so we never fire it; the `onaddtrack` handler attribute still exists for IDL conformance and `addEventListener('addtrack', …)` works (listeners just never receive an event).
+
+### `stream-removetrack`
+
+Implements [LLP 0008#dom-mediastream-removetrack](./0008-w3c-spec-text.spec.md#method-removetracktrack-dom-mediastream-removetrack). If the track is in `#tracks`, remove it; otherwise this is a silent no-op (per spec, "abort").
+
+Per spec, `removeTrack` is **script-initiated** and the `removetrack` event does **not** fire. Removing a track does *not* implicitly call `track.stop()` — the track keeps its `readyState` and continues to deliver frames to any other stream / consumer that holds it. The WPT `MediaStream-removetrack` test verifies that after `stream.removeTrack(track)`, the `video.srcObject = stream` element's `ended` event fires only when the *other* tracks of the stream also leave or end — not because removing a track stops it.
+
 ### `stream-events`
 
-The spec's `addtrack` / `removetrack` events ([LLP 0008#event-mediastream-addtrack](./0008-w3c-spec-text.spec.md#event-addtrack-event-mediastream-addtrack)) are not fired in v1 because `addTrack` / `removeTrack` are out of scope. The native `MediaStream` does install three other observers on its `AVCaptureSession`:
+The native `MediaStream` (for native-backed streams) installs three observers on its `AVCaptureSession`:
 
 - `AVCaptureSession.wasInterruptedNotification` → every track's `muted` flips to `true` and fires `mute`.
 - `AVCaptureSession.interruptionEndedNotification` → every track's `muted` flips to `false` and fires `unmute`.
@@ -49,12 +78,21 @@ The spec's `addtrack` / `removetrack` events ([LLP 0008#event-mediastream-addtra
 
 These are stream-scoped observers because `AVCaptureSession` is the unit iOS notifies; we fan out to per-track events because that's what the spec exposes to JS.
 
+### `stream-clone`
+
+Implements [LLP 0008#dom-mediastream-clone](./0008-w3c-spec-text.spec.md#method-clone-dom-mediastream-clone). Algorithm:
+
+1. Build a new `MediaStream` with a freshly-generated `id`.
+2. For each track in `this.#tracks`, call `track.clone()` and add the result to the new stream's track set.
+3. Return the new stream.
+
+The clone is a JS-only stream (no `_native`) when constructed via this path. Each cloned track shares the underlying `CaptureSource` with its original, so the camera stays live as long as any clone references it. See `track-clone` below.
+
 ### Session lifecycle
 
 - The session is created and started inside `getUserMedia` ([LLP 0002#gum-build-session](./0002-getusermedia.spec.md#gum-build-session)).
-- It is stopped when:
-  1. The last live track has its `stop()` called ([LLP 0008#dom-mediastreamtrack-stop](./0008-w3c-spec-text.spec.md#method-stop-dom-mediastreamtrack-stop) step 3; spec says "notify track's source that track is ended", which on AVFoundation means stopping the capture session if no other tracks need it).
-  2. The JS-side `MediaStream` handle is garbage-collected (`sharedObjectWillRelease` posts a `stopRunning` to the session queue).
+- The `AVCaptureSession` is owned by a `CaptureSource` Swift object that is reference-counted by **live** `MediaStreamTrack` instances. Each native track strong-refs its source; on `stop()` (or runtime-error end), the track unregisters itself. When the live count reaches zero, the `CaptureSource`'s `unregisterTrack` posts `stopRunning` to the session queue.
+- This shape means clones keep the camera running: stopping every track of the original stream does *not* stop the session as long as a cloned track is still live. The session is stopped only when every original-and-cloned track has been ended.
 - The session is **not** stopped when a `VideoView` is removed from the React tree — the stream lives independently of any view. Multiple views can show the same stream.
 
 ---
@@ -142,10 +180,30 @@ Implements [LLP 0008#dom-mediastreamtrack-getconstraints](./0008-w3c-spec-text.s
 
 Implements [LLP 0008#dom-mediastreamtrack-getcapabilities](./0008-w3c-spec-text.spec.md#method-getcapabilities-dom-mediastreamtrack-getcapabilities). Returns `{}` in v1. The spec allows an empty `MediaTrackCapabilities`.
 
-### Out of scope
+### `track-clone`
 
-- `track-clone` — throws `NotSupportedError`. See [LLP 0001](./0001-spec-subset-scope.spec.md).
-- `track-applyConstraints` — rejects with `OverconstrainedError`. See [LLP 0001](./0001-spec-subset-scope.spec.md).
+Implements [LLP 0008#dom-mediastreamtrack-clone](./0008-w3c-spec-text.spec.md#method-clone-dom-mediastreamtrack-clone). Algorithm:
+
+1. If `this.readyState == "ended"`, the clone is born in the `"ended"` state with no live consumer of the source.
+2. Otherwise, create a new native `MediaStreamTrack` with:
+   - A fresh `id` (UUIDv4).
+   - The same `CaptureSource` (strong-referenced, increments the live count).
+   - The same `label`, `settings`, `constraints`, `kind`.
+   - `enabled = true` (independent of the original; the spec leaves the initial value of a clone's `enabled` unspecified but Chrome / Firefox both reset it to `true`).
+3. Return the new track.
+
+Two important consequences:
+
+- **Independent stop**. Stopping the original does not stop the clone; the clone keeps the underlying camera open via its strong reference to the same `CaptureSource`. This is how the canonical WPT `MediaStream-clone` test verifies cloning works.
+- **Shared `enabled` plumbing — divergence**. Our `enabled` setter toggles the shared `AVCaptureConnection.isEnabled` on the FrameSink. Because clones share a `CaptureSource` (and therefore the connection), setting `enabled = false` on one clone disables frame delivery for *all* consumers downstream of the FrameSink. This is the same divergence the original-only path has with `AVCaptureVideoPreviewLayer` (its internal connection isn't toggled), now also between clones. We accept this in v1; making `enabled` per-track would require switching to a per-track `AVAssetWriter`-style consumer pipeline.
+
+### `track-applyConstraints`
+
+Implements [LLP 0008#dom-mediastreamtrack-applyconstraints](./0008-w3c-spec-text.spec.md#method-applyconstraintsconstraints-dom-mediastreamtrack-applyconstraints). Algorithm:
+
+1. If `this.readyState == "ended"`, return a resolved promise. (Spec MUST.)
+2. If the constraints object is `undefined` or empty (`{}`), return a resolved promise without modifying the track. (Spec allows constraints to "be empty" and we treat that as a no-op.)
+3. Otherwise, return a rejected promise with `OverconstrainedError` whose `constraint` field names the first unsatisfiable constraint. v1 does not actually re-configure the AVCaptureSession; any non-empty constraints object is treated as unsatisfiable. See [LLP 0001 open question #3](./0001-spec-subset-scope.spec.md#open-questions).
 
 ---
 

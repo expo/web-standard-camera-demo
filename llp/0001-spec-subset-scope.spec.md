@@ -41,17 +41,17 @@ Section: [§ MediaStream](https://www.w3.org/TR/mediacapture-streams/#mediastrea
 
 | Anchor | Member | Status | Notes |
 |---|---|---|---|
-| `mediastream-constructor` | `new MediaStream()` / `new MediaStream(stream)` / `new MediaStream(tracks)` | **Out of scope** | We construct streams only via `getUserMedia()`. Calling the constructor throws `NotSupportedError`. |
-| `mediastream-id` | `id` | **Implemented** | UUIDv4 from native. |
-| `mediastream-active` | `active` | **Implemented** | True iff at least one track is `live`. |
+| `mediastream-constructor` | `new MediaStream()` / `new MediaStream(stream)` / `new MediaStream(tracks)` | **Implemented** | Pure JS-side construction; a JS-only MediaStream has no `_native` handle and therefore cannot be passed to `<Video srcObject>` until/unless its tracks come from `getUserMedia` (then we resolve the session via the first video track's source). See [LLP 0003#stream-construction](./0003-mediastream.spec.md#stream-construction). |
+| `mediastream-id` | `id` | **Implemented** | UUIDv4 (36 characters, allowed character set per the spec). Generated natively for `getUserMedia` streams and in JS for script-constructed streams. |
+| `mediastream-active` | `active` | **Implemented** | True iff at least one track is `live`. Computed JS-side over `#tracks`. |
 | `mediastream-gettracks` | `getTracks()` | **Implemented** | |
 | `mediastream-getvideotracks` | `getVideoTracks()` | **Implemented** | |
-| `mediastream-getaudiotracks` | `getAudioTracks()` | **Implemented** | Always returns `[]`. |
+| `mediastream-getaudiotracks` | `getAudioTracks()` | **Implemented** | Always returns `[]` in v1. |
 | `mediastream-gettrackbyid` | `getTrackById(id)` | **Implemented** | |
-| `mediastream-addtrack` | `addTrack(track)` | **Out of scope** | Throws. |
-| `mediastream-removetrack` | `removeTrack(track)` | **Out of scope** | Throws. |
-| `mediastream-clone` | `clone()` | **Stubbed** | Throws `NotSupportedError`. |
-| `mediastream-events` | `onaddtrack` / `onremovetrack` | **Out of scope** | We never fire them. |
+| `mediastream-addtrack` | `addTrack(track)` | **Implemented** | Add to the track set if not already present. Script-initiated; per spec no `addtrack` event fires. |
+| `mediastream-removetrack` | `removeTrack(track)` | **Implemented** | Remove from the track set if present. Script-initiated; per spec no `removetrack` event fires. |
+| `mediastream-clone` | `clone()` | **Implemented** | New `id`, plus a `MediaStreamTrack.clone()` for each track. |
+| `mediastream-events` | `onaddtrack` / `onremovetrack` | **Stubbed** | Handler attributes exist for IDL conformance and addEventListener works, but we never fire them — `addTrack`/`removeTrack` are always script-initiated in v1, and the spec says script-initiated adds/removes do **not** fire these events. |
 
 See [LLP 0003](./0003-mediastream.spec.md).
 
@@ -68,11 +68,11 @@ Section: [§ MediaStreamTrack](https://www.w3.org/TR/mediacapture-streams/#media
 | `mediastreamtrack-muted` | `muted` | **Implemented** | Mirrors AVCaptureSession interruption state (overheating, backgrounding, in-use-by-another-app). |
 | `mediastreamtrack-readystate` | `readyState` | **Implemented** | `"live"` until `stop()`. |
 | `mediastreamtrack-stop` | `stop()` | **Implemented** | Transitions to `"ended"`, fires `ended`. |
-| `mediastreamtrack-clone` | `clone()` | **Out of scope** | Throws. |
-| `mediastreamtrack-getcapabilities` | `getCapabilities()` | **Out of scope** | Returns `{}`. |
+| `mediastreamtrack-clone` | `clone()` | **Implemented** | New `id`, new JS object; shares the underlying capture source. Stopping the original does not stop the clone (per spec). See [LLP 0003#track-clone](./0003-mediastream.spec.md#track-clone). |
+| `mediastreamtrack-getcapabilities` | `getCapabilities()` | **Implemented** | Returns `{}` — spec allows an empty `MediaTrackCapabilities`. |
 | `mediastreamtrack-getconstraints` | `getConstraints()` | **Implemented** | Returns the constraints passed to `getUserMedia`. |
 | `mediastreamtrack-getsettings` | `getSettings()` | **Implemented** | `{ deviceId, groupId, facingMode, width, height, frameRate, aspectRatio }`. |
-| `mediastreamtrack-applyconstraints` | `applyConstraints()` | **Out of scope** | Rejects. |
+| `mediastreamtrack-applyconstraints` | `applyConstraints(constraints?)` | **Implemented (partial)** | Empty constraints `{}` resolves as a no-op; non-empty constraints reject with `OverconstrainedError` (we do not actually re-apply). Per spec, when `readyState == "ended"`, the promise resolves regardless of constraints. |
 | `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **Implemented** | `mute`/`unmute` fire on AVCaptureSession interruption notifications. `ended` fires on `stop()` or a session runtime error. |
 
 ## `HTMLMediaElement.srcObject` integration
@@ -114,3 +114,4 @@ See [LLP 0004](./0004-htmlmediaelement-srcobject.spec.md).
 
 1. Should `getCapabilities()` return non-empty even in v1? Probably yes once we have real frame-rate enumeration; deferred.
 2. Should `pause()` actually stop the AVCaptureSession or just the preview layer? Stopping the session releases the camera (and the indicator light), which is friendlier. We do that.
+3. Should `applyConstraints()` actually re-pick a session preset / reconfigure the device? The current implementation is a no-op on empty input and rejects on non-empty input. Doing real reconfiguration would require a non-disruptive `session.beginConfiguration()` block on the session queue, which is doable but defer until a real consumer asks for it.
