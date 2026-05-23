@@ -16,6 +16,10 @@ This document is the index of which clauses of [W3C Media Capture and Streams](h
 
 The scope is intentionally tiny: enough to let `navigator.mediaDevices.getUserMedia({ video: true })` resolve to a `MediaStream` whose video track displays in a `<Video srcObject={stream} />`.
 
+### Audio is deferred
+
+v1 is video-only. `getUserMedia({ audio: <anything truthy> })` rejects with `OverconstrainedError` carrying `constraint: 'audio'`. `MediaStream.getAudioTracks()` always returns `[]`. The audio constraint family (`sampleRate`, `sampleSize`, `echoCancellation`, `autoGainControl`, `noiseSuppression`, `voiceIsolation`, `latency`, `channelCount`) appears in `getSupportedConstraints()` for IDL conformance, but no audio settings or capabilities are reported because no audio track is ever returned. The in-app WPT runner uses its `ENV_SKIPPED_SOURCES` / `ENV_SKIPPED_TEST_NAMES` mechanism to mark audio-dependent tests as `skip` with the rationale "audio capture is deferred (LLP 0001 v1 is video-only)" so they are visible but distinguished from regressions. A follow-up LLP will define the audio scope (mic device pick, audio track type, capabilities) when an audio consumer asks for it.
+
 ## Status legend
 
 - **Implemented** — fully implemented and validated by a ported WPT test

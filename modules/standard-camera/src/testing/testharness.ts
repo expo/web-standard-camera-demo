@@ -458,40 +458,53 @@ function isEnvironmentSkip(e: unknown): boolean {
 // in React Native (cross-origin iframes, postMessage transfer of MediaStreamTrack,
 // secure-context boundaries, Permissions Policy). We pre-mark them as skipped
 // so they don't timeout-wait for events that never fire.
-const ENV_SKIPPED_SOURCES = new Set<string>([
-  // Cross-origin / iframe / postMessage transfer
-  'MediaDevices-enumerateDevices-per-origin-ids.sub.https.html',
-  'MediaDevices-enumerateDevices-persistent-permission.https.html',
-  'MediaDevices-after-discard.https.html',
-  'enumerateDevices-with-navigation.https.html',
-  'MediaStreamTrack-transfer.https.html',
-  'MediaStreamTrack-transfer-video.https.html',
-  'MediaStreamTrack-iframe-transfer.https.html',
-  'MediaStreamTrack-iframe-audio-transfer.https.html',
+// Sources where every test depends on a feature outside the v1 subset. Map
+// values are the rationale we surface to the runner so a reader can
+// distinguish "we chose not to support this" from "we have a regression".
+const ENV_SKIPPED_SOURCES = new Map<string, string>([
+  // Cross-origin / iframe / postMessage transfer — out of scope (no iframes in RN).
+  ['MediaDevices-enumerateDevices-per-origin-ids.sub.https.html', 'environment-skip: requires cross-origin iframes'],
+  ['MediaDevices-enumerateDevices-persistent-permission.https.html', 'environment-skip: requires cross-origin iframes / persistent-permission infrastructure'],
+  ['MediaDevices-after-discard.https.html', 'environment-skip: requires cross-origin iframes / discarded-browsing-context lifecycle'],
+  ['enumerateDevices-with-navigation.https.html', 'environment-skip: requires cross-origin iframes / navigation'],
+  ['MediaStreamTrack-transfer.https.html', 'environment-skip: requires postMessage MediaStreamTrack transfer'],
+  ['MediaStreamTrack-transfer-video.https.html', 'environment-skip: requires postMessage MediaStreamTrack transfer'],
+  ['MediaStreamTrack-iframe-transfer.https.html', 'environment-skip: requires cross-origin iframes / postMessage transfer'],
+  ['MediaStreamTrack-iframe-audio-transfer.https.html', 'environment-skip: requires cross-origin iframes / postMessage transfer'],
   // Permissions Policy / SecureContext
-  'MediaDevices-SecureContext.html',
-  'MediaStream-default-permissions-policy.https.html',
+  ['MediaDevices-SecureContext.html', 'environment-skip: requires SecureContext infrastructure'],
+  ['MediaStream-default-permissions-policy.https.html', 'environment-skip: requires Permissions Policy headers'],
   // BrowserCaptureMediaStreamTrack needs getDisplayMedia + CropTarget / RestrictionTarget
-  'BrowserCaptureMediaStreamTrack-cropTo.https.html',
-  'BrowserCaptureMediaStreamTrack-restrictTo.https.html',
+  ['BrowserCaptureMediaStreamTrack-cropTo.https.html', 'environment-skip: requires getDisplayMedia + CropTarget — out of scope'],
+  ['BrowserCaptureMediaStreamTrack-restrictTo.https.html', 'environment-skip: requires getDisplayMedia + RestrictionTarget — out of scope'],
   // Disabled-track-renders-{black,silence} needs canvas.drawImage(video) + audio analyser
   // — out of scope for v1; documented divergence in LLP 0003#track-enabled.
-  'MediaStreamTrack-MediaElement-disabled-video-is-black.https.html',
-  'MediaStreamTrack-MediaElement-disabled-audio-is-silence.https.html',
+  ['MediaStreamTrack-MediaElement-disabled-video-is-black.https.html', 'environment-skip: requires canvas.drawImage(video) frame inspection — out of scope'],
+  ['MediaStreamTrack-MediaElement-disabled-audio-is-silence.https.html', 'environment-skip: requires AudioContext analyser — audio is out of scope'],
   // Permission-denial and Permissions-Policy tests require infrastructure we
   // don't model (the system permission prompt always grants once
   // NSCameraUsageDescription is set).
-  'GUM-deny.https.html',
-  'MediaDevices-enumerateDevices-not-allowed-camera.https.html',
-  'MediaDevices-enumerateDevices-not-allowed-mic.https.html',
-  'MediaStream-supported-by-permissions-policy.html',
+  ['GUM-deny.https.html', 'environment-skip: requires synthetic permission denial — not modeled'],
+  ['MediaDevices-enumerateDevices-not-allowed-camera.https.html', 'environment-skip: requires Permissions Policy header'],
+  ['MediaDevices-enumerateDevices-not-allowed-mic.https.html', 'environment-skip: requires Permissions Policy header'],
+  ['MediaStream-supported-by-permissions-policy.html', 'environment-skip: requires Permissions Policy headers'],
   // getDisplayMedia is out of scope (LLP 0001) and these tests need a
   // user-gesture `button` global to satisfy the spec's transient activation
   // requirement before getDisplayMedia.
-  'parallel-capture-requests.https.html',
+  ['parallel-capture-requests.https.html', 'environment-skip: requires getDisplayMedia + transient-activation button — out of scope'],
+  // Audio capture is deferred to a future LLP (LLP 0001 v1 is video-only).
+  // These files only contain tests that require a real audio track returned
+  // by `getUserMedia({audio: …})`; they cannot pass against a video-only
+  // implementation no matter what we do at the spec level.
+  ['GUM-echoCancellation-all.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['GUM-echoCancellation-boolean.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['GUM-echoCancellation-remote-only.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['MediaStream-audio-only.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['MediaStream-add-audio-track.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['MediaStream-finished-add.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['MediaStreamTrack-end-manual.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['MediaStreamTrack-id.https.html', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
 ]);
-const ENV_SKIP_REASON =
-  'environment-skip: requires cross-origin iframes / postMessage transfer / Permissions Policy / getDisplayMedia — not available in React Native';
 
 // Individual tests we skip because they depend on a browser feature that's
 // out of scope per LLP 0001 (canvas.captureStream, multi-camera devices,
@@ -540,6 +553,93 @@ const ENV_SKIPPED_TEST_NAMES = new Map<string, string>([
     "The MediaStreamTrackEvent instance's track attribute is set.",
     'environment-skip: requires AudioContext — audio is out of scope',
   ],
+  // Tests that mix video + audio in a single source file: skip the audio
+  // variants only, leaving the video-side tests in place. Audio capture is
+  // deferred (LLP 0001 v1 is video-only); these tests cannot pass against a
+  // video-only implementation.
+  [
+    'microphone is granted after getUserMedia, according to permissions.query()',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'Test that setting video-only valid constraints inside of "audio" is simply ignored',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'Test that setting video-only invalid constraints inside of "audio" is simply ignored',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'mediaDevices.enumerateDevices() is working - after video then audio capture',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'groupId is correctly supported by getUserMedia() for audio devices',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'Tests that cloning MediaStream objects works as expected',
+    'environment-skip: requires audio + video in the same MediaStream; audio is deferred',
+  ],
+  [
+    'Tests that cloning MediaStreamTrack objects works as expected',
+    'environment-skip: requires audio + video in the same MediaStream; audio is deferred',
+  ],
+  [
+    'Tests that a MediaStream constructor follows the algorithm set in the spec',
+    'environment-skip: requires audio + video in the same MediaStream; audio is deferred',
+  ],
+  [
+    "Test that preload 'none' is ignored for MediaStream object URL used as srcObject for audio",
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'Tests that an audio element with an assigned MediaStream ends when the MediaStream becomes inaudible through audio tracks ending',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'Tests that an audio element with an assigned MediaStream ends when the MediaStream becomes inaudible through track removal',
+    'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)',
+  ],
+  [
+    'Tests that a removal from a MediaStream works as expected',
+    'environment-skip: requires audio + video in the same MediaStream; audio is deferred',
+  ],
+  [
+    'Test that removal from a MediaStream fires ended on media elements (video first)',
+    'environment-skip: requires audio + video media elements; audio is deferred',
+  ],
+  [
+    'Test that removal from a MediaStream fires ended on media elements (audio first)',
+    'environment-skip: requires audio + video media elements; audio is deferred',
+  ],
+  [
+    'Stopped tracks should expose deviceId/groupId',
+    'environment-skip: requires audio + video in the same MediaStream; audio is deferred',
+  ],
+  // The "Setup audio MediaStreamTrack getCapabilities() test for X" family
+  // (X ∈ {sampleRate, sampleSize, echoCancellation, autoGainControl,
+  // noiseSuppression, voiceIsolation, latency, channelCount, deviceId,
+  // groupId}) all gum({audio:true}) first.
+  ['Setup audio MediaStreamTrack getCapabilities() test for sampleRate', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for sampleSize', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for echoCancellation', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for autoGainControl', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for noiseSuppression', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for voiceIsolation', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for latency', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for channelCount', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for deviceId', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['Setup audio MediaStreamTrack getCapabilities() test for groupId', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  // The "X is reported by getSettings() for getUserMedia() audio tracks" family.
+  ['sampleRate is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['sampleSize is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['echoCancellation is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['autoGainControl is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['noiseSuppression is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['voiceIsolation is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['latency is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
+  ['channelCount is reported by getSettings() for getUserMedia() audio tracks', 'environment-skip: audio capture is deferred (LLP 0001 v1 is video-only)'],
 ]);
 
 /** A test as registered, before it has run. Used by the UI to pre-list the
@@ -677,11 +777,12 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     options.onStart?.({ name: entry.name, source: entry.source, group: entry.group }, i, total);
 
     // Pre-skip tests whose source needs unsupported browser features.
-    if (entry.source && ENV_SKIPPED_SOURCES.has(entry.source)) {
+    const sourceSkipReason = entry.source ? ENV_SKIPPED_SOURCES.get(entry.source) : undefined;
+    if (sourceSkipReason !== undefined) {
       const result: TestResult = {
         name: entry.name,
         status: 'skip',
-        message: ENV_SKIP_REASON,
+        message: sourceSkipReason,
         durationMs: 0,
         source: entry.source,
         group: entry.group,

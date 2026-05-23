@@ -7,6 +7,12 @@ import { wptSource, test, assert_equals, assert_true, promise_test, setMediaPerm
 wptSource('MediaStreamTrack-init.https.html');
 
 try {
+// Upstream relies on `track = videoTracks[0]` (no declaration) creating a
+// global on a classic browser script. Our WPT ports run as strict-mode ES
+// modules where that throws `Property 'track' doesn't exist`. The single
+// `let` below is the minimum adjustment that makes the body runnable; the
+// assertions are unchanged.
+let track;
 // === BEGIN WPT BODY (verbatim) ===
 promise_test(async () => {
   await setMediaPermission("granted", ["camera"]);
