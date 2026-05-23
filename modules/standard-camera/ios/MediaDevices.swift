@@ -189,9 +189,40 @@ private func buildSession(
       let session = AVCaptureSession()
       session.beginConfiguration()
 
-      let preset = pickPreset(width: constraints.width, height: constraints.height)
-      if session.canSetSessionPreset(preset) {
-        session.sessionPreset = preset
+      // If the caller requested a specific resolution and/or frame rate, walk
+      // `device.formats` and pick the closest match — `AVCaptureSession.Preset`
+      // alone caps most devices at 30 fps, so requesting `frameRate: 60` via a
+      // preset silently degrades. Setting `activeFormat` + the frame-duration
+      // pair lets us deliver the requested rate when the underlying format
+      // supports it.
+      if constraints.width != nil || constraints.height != nil || constraints.frameRate != nil {
+        if let chosen = pickActiveFormat(device: device, constraints: constraints) {
+          do {
+            try device.lockForConfiguration()
+            device.activeFormat = chosen.format
+            let timescale = CMTimeScale(chosen.frameRate.rounded())
+            device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: timescale)
+            device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: timescale)
+            device.unlockForConfiguration()
+          } catch {
+            // Fall back to preset path if format lock failed.
+            let preset = pickPreset(width: constraints.width, height: constraints.height)
+            if session.canSetSessionPreset(preset) {
+              session.sessionPreset = preset
+            }
+          }
+        } else {
+          // No format match — use the preset path instead so we still produce a stream.
+          let preset = pickPreset(width: constraints.width, height: constraints.height)
+          if session.canSetSessionPreset(preset) {
+            session.sessionPreset = preset
+          }
+        }
+      } else {
+        let preset = pickPreset(width: constraints.width, height: constraints.height)
+        if session.canSetSessionPreset(preset) {
+          session.sessionPreset = preset
+        }
       }
 
       let input: AVCaptureDeviceInput
@@ -224,7 +255,16 @@ private func buildSession(
       let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
       let width = Int(dims.width)
       let height = Int(dims.height)
-      let frameRate = device.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
+      // Report the actually-configured frame rate (via the device's
+      // `activeVideoMinFrameDuration`) rather than the format's max — the
+      // settings dict must reflect what the consumer is going to observe.
+      let configuredDuration = device.activeVideoMinFrameDuration
+      let frameRate: Double = {
+        if configuredDuration.isValid && configuredDuration.value > 0 {
+          return Double(configuredDuration.timescale) / Double(configuredDuration.value)
+        }
+        return device.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
+      }()
 
       let settings: [String: Any] = [
         "deviceId": device.uniqueID,
@@ -254,6 +294,50 @@ private func pickPreset(width: Int?, height: Int?) -> AVCaptureSession.Preset {
   if target >= 720 { return .hd1280x720 }
   if target >= 480 { return .vga640x480 }
   return .high
+}
+
+// @ref LLP 0002#gum-pick-device — Pick the device format whose dimensions and
+// frame-rate range satisfy the caller's constraints. Iterates `device.formats`
+// scoring (width, height, frameRate) against the request; the lowest score
+// wins. Returns nil if no format covers the requested frame rate (so the
+// caller falls back to the preset path).
+private func pickActiveFormat(
+  device: AVCaptureDevice,
+  constraints: FlatVideoConstraints
+) -> (format: AVCaptureDevice.Format, frameRate: Double)? {
+  let targetWidth = constraints.width ?? 1280
+  let targetHeight = constraints.height ?? 720
+  let targetFrameRate = constraints.frameRate ?? 30
+
+  var bestScore = Double.greatestFiniteMagnitude
+  var bestFormat: AVCaptureDevice.Format?
+  var bestRate: Double = targetFrameRate
+
+  for format in device.formats {
+    let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+    let width = Int(dims.width)
+    let height = Int(dims.height)
+    guard let range = format.videoSupportedFrameRateRanges.first(where: {
+      targetFrameRate >= $0.minFrameRate && targetFrameRate <= $0.maxFrameRate
+    }) ?? format.videoSupportedFrameRateRanges.max(by: { $0.maxFrameRate < $1.maxFrameRate }) else {
+      continue
+    }
+    // Skip formats whose max frame rate is too low to satisfy the request.
+    if range.maxFrameRate + 0.01 < targetFrameRate { continue }
+    let deliverable = min(max(targetFrameRate, range.minFrameRate), range.maxFrameRate)
+    let widthDiff = abs(Double(width - targetWidth))
+    let heightDiff = abs(Double(height - targetHeight))
+    let fpsDiff = abs(deliverable - targetFrameRate) * 100
+    let score = widthDiff + heightDiff + fpsDiff
+    if score < bestScore {
+      bestScore = score
+      bestFormat = format
+      bestRate = deliverable
+    }
+  }
+
+  guard let chosen = bestFormat else { return nil }
+  return (chosen, bestRate)
 }
 
 private func positionToFacingMode(_ position: AVCaptureDevice.Position) -> String {

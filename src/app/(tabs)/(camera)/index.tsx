@@ -11,12 +11,11 @@ import { Video, type HTMLVideoElement } from '../../../../modules/standard-camer
 // is the spec-shaped navigator.mediaDevices.getUserMedia + <Video srcObject>.
 //
 // The control rows below the preview each map 1:1 to a W3C constrainable
-// property on `MediaTrackConstraints` — camera picker → `deviceId`, facing
-// toggle → `facingMode`, resolution picker → `width` + `height`, frame-rate
-// picker → `frameRate`. Picking any value tears down the current stream and
-// starts a new one with the merged constraints, so the resulting
-// `track.getSettings()` shown at the bottom always reflects what gUM actually
-// resolved to.
+// property on `MediaTrackConstraints` — front/back facing → `facingMode`,
+// camera picker → `deviceId`, resolution picker → `width` + `height`,
+// frame-rate picker → `frameRate`. Picking any value re-runs `gUM` with the
+// merged constraints; the resulting `track.getSettings()` shown at the
+// bottom always reflects what the device actually resolved to.
 
 const initialUrlPromise = Linking.getInitialURL();
 
@@ -42,6 +41,23 @@ const RESOLUTION_PRESETS: ResolutionPreset[] = [
 ];
 
 const FRAME_RATE_PRESETS: number[] = [30, 60];
+
+// `label` shortener — `device.localizedName` returns strings like "Back Triple
+// Camera" or "Front TrueDepth Camera". Trim the redundant "Camera" suffix and
+// the leading position word (which we already convey via the group header).
+function shortDeviceLabel(label: string, facing: 'user' | 'environment'): string {
+  if (!label) return '(unlabeled)';
+  let s = label.replace(/\s*Camera$/i, '').trim();
+  const prefix = facing === 'user' ? /^Front\s+/i : /^Back\s+/i;
+  s = s.replace(prefix, '').trim();
+  return s || (facing === 'user' ? 'Front' : 'Back');
+}
+
+function facingOfDevice(label: string): 'user' | 'environment' | null {
+  if (/^Front\b/i.test(label)) return 'user';
+  if (/^Back\b/i.test(label)) return 'environment';
+  return null;
+}
 
 export default function HomeScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -97,14 +113,7 @@ export default function HomeScreen(): React.JSX.Element {
     async (next: Constraints): Promise<void> => {
       const requestId = startRequestRef.current + 1;
       startRequestRef.current = requestId;
-      // Tear down any prior stream so the AVCaptureSession can be reused.
-      if (streamRef.current) {
-        for (const track of streamRef.current.getTracks()) track.stop();
-        if (videoRef.current) videoRef.current.srcObject = null;
-        streamRef.current = null;
-      }
       setError(null);
-      setSettings(null);
       setStatus('requesting');
       const video: MediaTrackConstraints = {};
       if (next.deviceId) {
@@ -125,20 +134,16 @@ export default function HomeScreen(): React.JSX.Element {
           for (const track of s.getTracks()) track.stop();
           return;
         }
+        // Hot-swap the previous stream's tracks only AFTER the new one has
+        // resolved, so the preview never blanks and the on-screen settings
+        // never un-render. The brief overlap (~one frame) is invisible.
+        const previous = streamRef.current;
         streamRef.current = s;
         setStream(s);
         setSettings(s.getVideoTracks()[0]?.getSettings() ?? null);
         setStatus('starting');
-
-        // Refresh the device list — post-grant, enumerateDevices() exposes
-        // the full set with labels.
-        try {
-          const all = await navigator.mediaDevices.enumerateDevices();
-          if (mountedRef.current) {
-            setDevices(all.filter((d) => d.kind === 'videoinput'));
-          }
-        } catch {
-          // ignore — device list is best-effort.
+        if (previous) {
+          for (const track of previous.getTracks()) track.stop();
         }
 
         const v = videoRef.current;
@@ -152,6 +157,17 @@ export default function HomeScreen(): React.JSX.Element {
           };
           await v.play();
         }
+
+        // Refresh the device list off the hot-swap path so the pill rows
+        // don't reflow while the user is mid-tap.
+        try {
+          const all = await navigator.mediaDevices.enumerateDevices();
+          if (mountedRef.current) {
+            setDevices(all.filter((d) => d.kind === 'videoinput'));
+          }
+        } catch {
+          // ignore — device list is best-effort.
+        }
       } catch (e) {
         if (!mountedRef.current || requestId !== startRequestRef.current) return;
         const err = e as Error & { name?: string; constraint?: string };
@@ -163,18 +179,17 @@ export default function HomeScreen(): React.JSX.Element {
     []
   );
 
-  // Apply a partial change to the constraints state and restart the stream.
   const applyConstraints = React.useCallback(
     (patch: Partial<Constraints>): void => {
-      const next: Constraints = { ...constraints, ...patch };
-      // Picking a deviceId means we no longer want facingMode to override it.
-      if (patch.deviceId) delete next.facingMode;
-      // Picking a facingMode means we no longer want a sticky deviceId.
-      if (patch.facingMode) delete next.deviceId;
-      setConstraints(next);
-      void start(next);
+      setConstraints((prev) => {
+        const next: Constraints = { ...prev, ...patch };
+        if (patch.deviceId) delete next.facingMode;
+        if (patch.facingMode) delete next.deviceId;
+        void start(next);
+        return next;
+      });
     },
-    [constraints, start]
+    [start]
   );
 
   // Auto-start only for the initial Home launch. A run-tests deeplink mounts
@@ -196,7 +211,47 @@ export default function HomeScreen(): React.JSX.Element {
     };
   }, [isFocused, start, constraints]);
 
-  const isFront = settings?.facingMode === 'user' || constraints.facingMode === 'user';
+  // Resolve the user's current facing intent from explicit state or the
+  // resolved track settings. `deviceId` selection can imply either side.
+  const explicitFacing: 'user' | 'environment' | null =
+    constraints.facingMode ?? (settings?.facingMode as 'user' | 'environment' | undefined) ?? null;
+
+  // Group devices by position so the picker shows two short rows rather than
+  // one long mixed list. Devices we can't classify (rare) fall into the side
+  // matching the current facing intent.
+  const { frontDevices, backDevices } = React.useMemo(() => {
+    const front: MediaDeviceInfo[] = [];
+    const back: MediaDeviceInfo[] = [];
+    for (const d of devices) {
+      const f = facingOfDevice(d.label);
+      if (f === 'user') front.push(d);
+      else if (f === 'environment') back.push(d);
+      else (explicitFacing === 'user' ? front : back).push(d);
+    }
+    return { frontDevices: front, backDevices: back };
+  }, [devices, explicitFacing]);
+
+  // Stable callbacks per setting type, so memoized Pills don't re-render when
+  // an unrelated row's selection changes.
+  const onPickFacing = React.useCallback(
+    (m: 'user' | 'environment') => applyConstraints({ facingMode: m }),
+    [applyConstraints]
+  );
+  const onPickDevice = React.useCallback(
+    (id: string) => applyConstraints({ deviceId: id }),
+    [applyConstraints]
+  );
+  const onPickResolution = React.useCallback(
+    (w: number | undefined, h: number | undefined) => applyConstraints({ width: w, height: h }),
+    [applyConstraints]
+  );
+  const onPickFrameRate = React.useCallback(
+    (fr: number | undefined) => applyConstraints({ frameRate: fr }),
+    [applyConstraints]
+  );
+
+  const isFront = explicitFacing === 'user';
+  const selectedDeviceId = (settings?.deviceId as string | undefined) ?? constraints.deviceId;
 
   return (
     <ScrollView
@@ -220,66 +275,78 @@ export default function HomeScreen(): React.JSX.Element {
       </View>
 
       <ControlRow label="Facing" theme={theme}>
-        <Pill
-          label="Front"
-          selected={isFront}
-          theme={theme}
-          onPress={() => applyConstraints({ facingMode: 'user' })}
-        />
-        <Pill
-          label="Back"
-          selected={!isFront}
-          theme={theme}
-          onPress={() => applyConstraints({ facingMode: 'environment' })}
-        />
+        <FacingPill mode="user" selected={isFront} theme={theme} onPick={onPickFacing} label="Front" />
+        <FacingPill mode="environment" selected={!isFront} theme={theme} onPick={onPickFacing} label="Back" />
       </ControlRow>
 
-      {devices.length > 0 ? (
-        <ControlRow label="Camera" theme={theme}>
-          {devices.map((d) => (
-            <Pill
+      {frontDevices.length > 0 ? (
+        <ControlRow label="Front camera" theme={theme}>
+          {frontDevices.map((d) => (
+            <DevicePill
               key={d.deviceId}
-              label={d.label || '(unlabeled)'}
-              selected={settings?.deviceId === d.deviceId}
+              deviceId={d.deviceId}
+              label={shortDeviceLabel(d.label, 'user')}
+              selected={selectedDeviceId === d.deviceId}
               theme={theme}
-              onPress={() => applyConstraints({ deviceId: d.deviceId })}
+              onPick={onPickDevice}
+            />
+          ))}
+        </ControlRow>
+      ) : null}
+
+      {backDevices.length > 0 ? (
+        <ControlRow label="Back camera" theme={theme}>
+          {backDevices.map((d) => (
+            <DevicePill
+              key={d.deviceId}
+              deviceId={d.deviceId}
+              label={shortDeviceLabel(d.label, 'environment')}
+              selected={selectedDeviceId === d.deviceId}
+              theme={theme}
+              onPick={onPickDevice}
             />
           ))}
         </ControlRow>
       ) : null}
 
       <ControlRow label="Resolution" theme={theme}>
-        <Pill
+        <ResolutionPill
           label="Auto"
+          width={undefined}
+          height={undefined}
           selected={!constraints.width}
           theme={theme}
-          onPress={() => applyConstraints({ width: undefined, height: undefined })}
+          onPick={onPickResolution}
         />
         {RESOLUTION_PRESETS.map((p) => (
-          <Pill
+          <ResolutionPill
             key={p.label}
             label={p.label}
+            width={p.width}
+            height={p.height}
             selected={constraints.width === p.width && constraints.height === p.height}
             theme={theme}
-            onPress={() => applyConstraints({ width: p.width, height: p.height })}
+            onPick={onPickResolution}
           />
         ))}
       </ControlRow>
 
       <ControlRow label="Frame rate" theme={theme}>
-        <Pill
+        <FrameRatePill
           label="Auto"
+          rate={undefined}
           selected={!constraints.frameRate}
           theme={theme}
-          onPress={() => applyConstraints({ frameRate: undefined })}
+          onPick={onPickFrameRate}
         />
         {FRAME_RATE_PRESETS.map((fr) => (
-          <Pill
+          <FrameRatePill
             key={fr}
             label={`${fr} fps`}
+            rate={fr}
             selected={constraints.frameRate === fr}
             theme={theme}
-            onPress={() => applyConstraints({ frameRate: fr })}
+            onPick={onPickFrameRate}
           />
         ))}
       </ControlRow>
@@ -315,13 +382,15 @@ export default function HomeScreen(): React.JSX.Element {
   );
 }
 
-function ControlRow({
+type Theme = { text: string; textSecondary: string; backgroundElement: string };
+
+const ControlRow = React.memo(function ControlRow({
   label,
   theme,
   children,
 }: {
   label: string;
-  theme: { text: string; textSecondary: string; backgroundElement: string };
+  theme: Theme;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -335,9 +404,77 @@ function ControlRow({
       </ScrollView>
     </View>
   );
-}
+});
 
-function Pill({
+// Pill variants take callback + value rather than an inline onPress, so the
+// memoized children don't re-render when an unrelated row updates.
+const FacingPill = React.memo(function FacingPill({
+  mode,
+  label,
+  selected,
+  theme,
+  onPick,
+}: {
+  mode: 'user' | 'environment';
+  label: string;
+  selected: boolean;
+  theme: Theme;
+  onPick: (m: 'user' | 'environment') => void;
+}): React.JSX.Element {
+  return <PillBase label={label} selected={selected} theme={theme} onPress={() => onPick(mode)} />;
+});
+
+const DevicePill = React.memo(function DevicePill({
+  deviceId,
+  label,
+  selected,
+  theme,
+  onPick,
+}: {
+  deviceId: string;
+  label: string;
+  selected: boolean;
+  theme: Theme;
+  onPick: (id: string) => void;
+}): React.JSX.Element {
+  return <PillBase label={label} selected={selected} theme={theme} onPress={() => onPick(deviceId)} />;
+});
+
+const ResolutionPill = React.memo(function ResolutionPill({
+  label,
+  width,
+  height,
+  selected,
+  theme,
+  onPick,
+}: {
+  label: string;
+  width: number | undefined;
+  height: number | undefined;
+  selected: boolean;
+  theme: Theme;
+  onPick: (w: number | undefined, h: number | undefined) => void;
+}): React.JSX.Element {
+  return <PillBase label={label} selected={selected} theme={theme} onPress={() => onPick(width, height)} />;
+});
+
+const FrameRatePill = React.memo(function FrameRatePill({
+  label,
+  rate,
+  selected,
+  theme,
+  onPick,
+}: {
+  label: string;
+  rate: number | undefined;
+  selected: boolean;
+  theme: Theme;
+  onPick: (r: number | undefined) => void;
+}): React.JSX.Element {
+  return <PillBase label={label} selected={selected} theme={theme} onPress={() => onPick(rate)} />;
+});
+
+function PillBase({
   label,
   selected,
   theme,
@@ -345,7 +482,7 @@ function Pill({
 }: {
   label: string;
   selected: boolean;
-  theme: { text: string; textSecondary: string; backgroundElement: string };
+  theme: Theme;
   onPress: () => void;
 }): React.JSX.Element {
   return (
@@ -358,11 +495,7 @@ function Pill({
           opacity: pressed ? 0.7 : 1,
         },
       ]}>
-      <Text
-        style={[
-          styles.pillText,
-          { color: selected ? theme.backgroundElement : theme.text },
-        ]}>
+      <Text style={[styles.pillText, { color: selected ? theme.backgroundElement : theme.text }]}>
         {label}
       </Text>
     </Pressable>
