@@ -22,6 +22,8 @@ export interface NativeMediaStreamTrack {
   readonly readyState: MediaStreamTrackState;
 
   stop(): void;
+  // @ref LLP 0008#dom-mediastreamtrack-clone
+  clone(): NativeMediaStreamTrack;
   getSettings(): MediaTrackSettings;
   getConstraints(): Record<string, unknown>;
   getCapabilities(): MediaTrackCapabilities;
@@ -41,6 +43,12 @@ export interface NativeMediaStream {
   getVideoTracks(): NativeMediaStreamTrack[];
   getAudioTracks(): NativeMediaStreamTrack[];
   getTrackById(id: string): NativeMediaStreamTrack | null;
+  // @ref LLP 0008#dom-mediastream-addtrack
+  addTrack(track: NativeMediaStreamTrack): void;
+  // @ref LLP 0008#dom-mediastream-removetrack
+  removeTrack(track: NativeMediaStreamTrack): void;
+  // @ref LLP 0008#dom-mediastream-clone
+  clone(): NativeMediaStream;
 
   /** @internal Test-only hook. Posts a synthetic AVCaptureSession interruption. */
   __simulateInterruptionForTesting(reasonCode: number, ended: boolean): void;
@@ -54,6 +62,10 @@ interface NativeStandardCameraModule {
   getUserMediaAsync(constraints: FlatGetUserMediaConstraints): Promise<NativeMediaStream>;
   enumerateDevicesAsync(): Promise<MediaDeviceInfo[]>;
   getSupportedConstraints(): Record<string, boolean>;
+  // @ref LLP 0008#mediastream-constructor
+  createMediaStream(tracks: NativeMediaStreamTrack[]): NativeMediaStream;
+  /** @internal Test-only: forward a message to NSLog so it reaches `simctl log stream` regardless of build config. */
+  __systemLogForTesting(message: string): void;
 }
 
 export default requireNativeModule<NativeStandardCameraModule>('StandardCamera');

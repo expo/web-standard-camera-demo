@@ -60,14 +60,13 @@ internal final class VideoView: ExpoView {
     firstFrameObserver?.invalidate()
     firstFrameObserver = nil
 
-    guard let stream = srcObject else {
+    guard let stream = srcObject, let session = stream.captureSession else {
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       previewLayer.session = nil
       CATransaction.commit()
       return
     }
-    let session = stream.session
 
     // Attaching a session and rotating the connection mutate animatable
     // properties on the preview layer; wrap them so Core Animation doesn't
@@ -86,13 +85,15 @@ internal final class VideoView: ExpoView {
     CATransaction.commit()
 
     // @ref LLP 0005#first-frame-detection — Drive loadeddata off the FrameSink's
-    // first sample callback. Reliable across sim and device; works whether the
-    // layer is attached before or after this call.
-    stream.frameSink.resetFirstFrame()
-    stream.frameSink.onFirstFrame = { [weak self] in
-      guard let self else { return }
-      self.onDurationChange()
-      self.onLoadedData()
+    // first sample callback. The FrameSink lives on the first video track's
+    // CaptureSource (post-refactor — tracks own the source, not the stream).
+    if let frameSink = stream.tracks.first(where: { $0.kind == "video" })?.source?.frameSink {
+      frameSink.resetFirstFrame()
+      frameSink.onFirstFrame = { [weak self] in
+        guard let self else { return }
+        self.onDurationChange()
+        self.onLoadedData()
+      }
     }
 
     // @ref LLP 0004#srcobject-play-pause — Start the session if not running
@@ -114,7 +115,7 @@ internal final class VideoView: ExpoView {
   }
 
   func play() {
-    guard let session = srcObject?.session else { return }
+    guard let session = srcObject?.captureSession else { return }
     MediaStream.sessionQueue.async { [weak self] in
       if !session.isRunning {
         session.startRunning()
@@ -128,7 +129,7 @@ internal final class VideoView: ExpoView {
 
   // @ref LLP 0004#srcobject-play-pause — pause() stops the session
   func pause() {
-    guard let session = srcObject?.session else { return }
+    guard let session = srcObject?.captureSession else { return }
     MediaStream.sessionQueue.async { [weak self] in
       if session.isRunning {
         session.stopRunning()

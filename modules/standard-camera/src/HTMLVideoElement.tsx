@@ -84,17 +84,23 @@ export interface HTMLVideoElement extends EventTarget {
   ended: boolean;
   playbackRate: number;
   defaultPlaybackRate: number;
-  preload: 'none';
+  preload: 'none' | 'metadata' | 'auto';
 
   play(): Promise<void>;
   pause(): void;
 
   // event setters
+  onloadstart: ((ev: Event) => void) | null;
+  onresize: ((ev: Event) => void) | null;
+  onloadedmetadata: ((ev: Event) => void) | null;
   onloadeddata: ((ev: Event) => void) | null;
+  oncanplay: ((ev: Event) => void) | null;
+  oncanplaythrough: ((ev: Event) => void) | null;
   ondurationchange: ((ev: Event) => void) | null;
   onended: ((ev: Event) => void) | null;
   onplay: ((ev: Event) => void) | null;
   onpause: ((ev: Event) => void) | null;
+  ontimeupdate: ((ev: Event) => void) | null;
 }
 
 export interface VideoProps {
@@ -162,15 +168,50 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   readonly buffered = EMPTY_TIME_RANGES;
   readonly seeking = false as const;
 
+  // @ref LLP 0004#played — Per HTML, a media element's played TimeRanges grows
+  // as the element advances its currentTime. For a MediaStream source this is
+  // always a single range [0, currentTime] once play() has happened, and empty
+  // before. The end of the range tracks our current accumulated playback time.
+  get played(): { length: number; start(i: number): number; end(i: number): number } {
+    const ct = this.currentTime;
+    if (ct <= 0) return EMPTY_TIME_RANGES;
+    return {
+      length: 1,
+      start(i: number): number {
+        if (i !== 0) throw new DOMException('Index or size is negative or greater than the allowed amount', 'IndexSizeError');
+        return 0;
+      },
+      end: (_i: number): number => ct,
+    };
+  }
+
+  // `loop` is ignored for MediaStream srcObject; default to false.
+  loop = false;
+
   private __srcObject: Stream | null = null;
   private __readyState: 0 | 1 | 2 | 3 | 4 = HAVE_NOTHING;
   private __duration: number = NaN;
   private __ended: boolean = false;
   private __paused: boolean = true;
   private __trackEndedSubscriptions: Array<{ track: globalThis.MediaStreamTrack; listener: () => void }> = [];
+  private __trackSetSubscription: { stream: Stream; listener: () => void } | null = null;
   private __native: NativeVideoViewRef | null = null;
+  // Time bookkeeping. `__playStartMs` is the timestamp of the most recent
+  // play(); `__accumulatedSeconds` is total played time accrued across
+  // pause/resume cycles. `currentTime` returns __accumulatedSeconds while
+  // paused, and __accumulatedSeconds + (now - playStartMs) while playing.
   private __playStartMs: number = 0;
+  private __accumulatedSeconds: number = 0;
   private __notifyReact: (s: Stream | null) => void;
+  // Pre-stream user values for `preload` / `playbackRate` / `defaultPlaybackRate`.
+  // While `srcObject` is a MediaStream the getters MUST return the spec-fixed
+  // values ('none' / 1 / 1) and setters MUST be ignored — but once srcObject
+  // is cleared the values revert to whatever the caller had set, per HTML
+  // spec's "save and restore" semantics.
+  private __userPreload: 'none' | 'metadata' | 'auto' = 'none';
+  private __userPlaybackRate = 1;
+  private __userDefaultPlaybackRate = 1;
+  private __timeUpdateInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(notifyReact: (s: Stream | null) => void) {
     super();
@@ -181,12 +222,40 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   get srcObject(): Stream | null { return this.__srcObject; }
   set srcObject(value: Stream | null) {
     if (value === this.__srcObject) return;
+    const wasStream = this.__srcObject != null;
+    const becomingNull = value == null;
     this.__detachTrackListeners();
+    this.__detachTrackSetListener();
     this.__srcObject = value;
     this.__readyState = HAVE_NOTHING;
     this.__duration = NaN;
     this.__ended = false;
+    // Per HTML spec, assigning a MediaStream resets the timeline to 0.
+    this.__playStartMs = 0;
+    this.__accumulatedSeconds = 0;
+    // Treat srcObject assignment as a clean slate: pause and stop the
+    // timeupdate ticker so the next test isn't observed mid-tick.
+    this.__paused = true;
+    this.__stopTimeUpdates();
     this.__attachTrackListeners();
+    this.__attachTrackSetListener();
+    // Per HTML spec, when a MediaStream is being unset from srcObject the
+    // playbackRate attribute is set to the value of defaultPlaybackRate, and a
+    // `ratechange` event fires if the value changed.
+    if (wasStream && becomingNull) {
+      const prevRate = this.__userPlaybackRate;
+      this.__userPlaybackRate = this.__userDefaultPlaybackRate;
+      if (prevRate !== this.__userPlaybackRate) {
+        Promise.resolve().then(() => this.dispatchEvent(new Event('ratechange')));
+      }
+    }
+    // Fire `loadstart` after the synchronous srcObject assignment completes,
+    // so tests can install their handlers right after assignment and still
+    // observe the event. Per the HTML media element load algorithm this fires
+    // as soon as resource selection begins.
+    if (value != null) {
+      Promise.resolve().then(() => this.dispatchEvent(new Event('loadstart')));
+    }
     // Trigger a React re-render so the native view receives the new srcObject prop.
     this.__notifyReact(value);
   }
@@ -197,10 +266,11 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   // @ref LLP 0004#duration
   get duration(): number { return this.__duration; }
 
-  // @ref LLP 0004#currentTime
+  // @ref LLP 0004#currentTime — Reads elapsed-since-play wall clock while
+  // playing, freezes at the accumulated value while paused.
   get currentTime(): number {
-    if (this.__playStartMs === 0) return 0;
-    return (Date.now() - this.__playStartMs) / 1000;
+    if (this.__playStartMs === 0) return this.__accumulatedSeconds;
+    return this.__accumulatedSeconds + (Date.now() - this.__playStartMs) / 1000;
   }
   set currentTime(_value: number) {
     // @ref LLP 0004#srcobject-currentTime — UA MUST ignore attempts to set
@@ -212,30 +282,116 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   get ended(): boolean { return this.__ended; }
   set ended(_value: boolean) { /* read-only */ }
 
-  // @ref LLP 0004#playbackRate
-  get playbackRate(): number { return 1; }
-  set playbackRate(_value: number) { /* no-op */ }
+  // @ref LLP 0004#playbackRate — while srcObject is a MediaStream the spec
+  // forces this to 1 and ignores setters. Once srcObject is cleared, the
+  // value returns to whatever the caller assigned beforehand.
+  get playbackRate(): number {
+    return this.__srcObject ? 1 : this.__userPlaybackRate;
+  }
+  set playbackRate(value: number) {
+    if (this.__srcObject) return;
+    this.__userPlaybackRate = value;
+  }
 
-  // @ref LLP 0004#defaultPlaybackRate
-  get defaultPlaybackRate(): number { return 1; }
-  set defaultPlaybackRate(_value: number) { /* no-op */ }
+  // @ref LLP 0004#defaultPlaybackRate — same save/restore semantics.
+  get defaultPlaybackRate(): number {
+    return this.__srcObject ? 1 : this.__userDefaultPlaybackRate;
+  }
+  set defaultPlaybackRate(value: number) {
+    if (this.__srcObject) return;
+    this.__userDefaultPlaybackRate = value;
+  }
 
-  // @ref LLP 0004#preload
-  get preload(): 'none' { return 'none'; }
-  set preload(_value: string) { /* no-op */ }
+  // @ref LLP 0004#preload — same save/restore semantics.
+  get preload(): 'none' | 'metadata' | 'auto' {
+    return this.__srcObject ? 'none' : this.__userPreload;
+  }
+  set preload(value: string) {
+    if (this.__srcObject) return;
+    if (value === 'none' || value === 'metadata' || value === 'auto') {
+      this.__userPreload = value;
+    }
+  }
 
   async play(): Promise<void> {
     await this.__native?.playAsync();
     this.__paused = false;
-    this.__playStartMs = this.__playStartMs || Date.now();
+    this.__playStartMs = Date.now();
+    this.__startTimeUpdates();
   }
 
   pause(): void {
     void this.__native?.pauseAsync();
+    // Freeze currentTime: bank the just-played interval into the accumulator.
+    if (this.__playStartMs !== 0) {
+      this.__accumulatedSeconds += (Date.now() - this.__playStartMs) / 1000;
+      this.__playStartMs = 0;
+    }
     this.__paused = true;
+    this.__stopTimeUpdates();
   }
 
-  // Event-handler property accessors
+  // @ref LLP 0004 — `timeupdate` fires at ~4Hz (matching upstream browser
+  // cadence) while play() is active and pause()'s when it isn't. Several WPT
+  // tests await `vid.ontimeupdate` to checkpoint playback progress.
+  private __startTimeUpdates(): void {
+    if (this.__timeUpdateInterval) return;
+    this.__timeUpdateInterval = setInterval(() => {
+      if (!this.__paused) {
+        this.dispatchEvent(new Event('timeupdate'));
+      }
+    }, 250);
+  }
+  private __stopTimeUpdates(): void {
+    if (this.__timeUpdateInterval) {
+      clearInterval(this.__timeUpdateInterval);
+      this.__timeUpdateInterval = null;
+    }
+  }
+
+  // Event-handler property accessors. Each on* setter swaps the addEventListener
+  // subscription so dispatched events route through both addEventListener-
+  // attached listeners and the WPT-style `el.on<x> = handler` pattern.
+  private __onloadstart: ((ev: Event) => void) | null = null;
+  get onloadstart(): ((ev: Event) => void) | null { return this.__onloadstart; }
+  set onloadstart(handler: ((ev: Event) => void) | null) {
+    if (this.__onloadstart) this.removeEventListener('loadstart', this.__onloadstart);
+    this.__onloadstart = handler;
+    if (handler) this.addEventListener('loadstart', handler);
+  }
+
+  private __onresize: ((ev: Event) => void) | null = null;
+  get onresize(): ((ev: Event) => void) | null { return this.__onresize; }
+  set onresize(handler: ((ev: Event) => void) | null) {
+    if (this.__onresize) this.removeEventListener('resize', this.__onresize);
+    this.__onresize = handler;
+    if (handler) this.addEventListener('resize', handler);
+  }
+
+  private __oncanplay: ((ev: Event) => void) | null = null;
+  get oncanplay(): ((ev: Event) => void) | null { return this.__oncanplay; }
+  set oncanplay(handler: ((ev: Event) => void) | null) {
+    if (this.__oncanplay) this.removeEventListener('canplay', this.__oncanplay);
+    this.__oncanplay = handler;
+    if (handler) this.addEventListener('canplay', handler);
+  }
+
+  private __oncanplaythrough: ((ev: Event) => void) | null = null;
+  get oncanplaythrough(): ((ev: Event) => void) | null { return this.__oncanplaythrough; }
+  set oncanplaythrough(handler: ((ev: Event) => void) | null) {
+    if (this.__oncanplaythrough) this.removeEventListener('canplaythrough', this.__oncanplaythrough);
+    this.__oncanplaythrough = handler;
+    if (handler) this.addEventListener('canplaythrough', handler);
+  }
+
+  private __onloadedmetadata: ((ev: Event) => void) | null = null;
+  get onloadedmetadata(): ((ev: Event) => void) | null { return this.__onloadedmetadata; }
+  set onloadedmetadata(handler: ((ev: Event) => void) | null) {
+    if (this.__onloadedmetadata) this.removeEventListener('loadedmetadata', this.__onloadedmetadata);
+    this.__onloadedmetadata = handler;
+    if (handler) this.addEventListener('loadedmetadata', handler);
+  }
+
   private __onloadeddata: ((ev: Event) => void) | null = null;
   get onloadeddata(): ((ev: Event) => void) | null { return this.__onloadeddata; }
   set onloadeddata(handler: ((ev: Event) => void) | null) {
@@ -276,15 +432,53 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     if (handler) this.addEventListener('pause', handler);
   }
 
+  private __ontimeupdate: ((ev: Event) => void) | null = null;
+  get ontimeupdate(): ((ev: Event) => void) | null { return this.__ontimeupdate; }
+  set ontimeupdate(handler: ((ev: Event) => void) | null) {
+    if (this.__ontimeupdate) this.removeEventListener('timeupdate', this.__ontimeupdate);
+    this.__ontimeupdate = handler;
+    if (handler) this.addEventListener('timeupdate', handler);
+  }
+
+  private __onratechange: ((ev: Event) => void) | null = null;
+  get onratechange(): ((ev: Event) => void) | null { return this.__onratechange; }
+  set onratechange(handler: ((ev: Event) => void) | null) {
+    if (this.__onratechange) this.removeEventListener('ratechange', this.__onratechange);
+    this.__onratechange = handler;
+    if (handler) this.addEventListener('ratechange', handler);
+  }
+
   // @internal
   __bindNative(native: NativeVideoViewRef | null): void {
     this.__native = native;
   }
 
   __handleLoadedData(): void {
-    if (this.__readyState !== HAVE_ENOUGH_DATA) {
-      this.__readyState = HAVE_ENOUGH_DATA;
-      this.dispatchEvent(new Event('loadeddata'));
+    if (this.__readyState === HAVE_ENOUGH_DATA) return;
+    this.__readyState = HAVE_ENOUGH_DATA;
+    // Fire the canonical HTML media-element first-frame event sequence
+    // (resize → loadedmetadata → loadeddata → canplay → canplaythrough).
+    // `durationchange` is fired separately via __handleDurationChange.
+    // We dispatch each on its own macrotask so a test that does
+    //   await new Promise(r => vid.onloadedmetadata = r);
+    //   vid.onloadeddata = unexpected;
+    // can install its next handler between two consecutive events. If we
+    // dispatched all of them synchronously, the test's await continuation
+    // would not have run yet and stale handlers from earlier in the test
+    // would still be in place.
+    void this.__fireSequence([
+      'resize',
+      'loadedmetadata',
+      'loadeddata',
+      'canplay',
+      'canplaythrough',
+    ]);
+  }
+
+  private async __fireSequence(events: string[]): Promise<void> {
+    for (const evt of events) {
+      await new Promise<void>((r) => setTimeout(r, 0));
+      this.dispatchEvent(new Event(evt));
     }
   }
 
@@ -303,13 +497,16 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.dispatchEvent(new Event('pause'));
   }
 
-  // @ref LLP 0004#ended — fire when all tracks become "ended"
+  // @ref LLP 0004#ended — fire when the stream becomes inactive (no live tracks).
+  // The track's `ended` event is already dispatched by the native module as a
+  // task (it crosses the React Native bridge). Inside that task we re-evaluate
+  // the ended condition synchronously so a single `queueTask` round-trip is
+  // enough for an observer to see `vid.ended` flip to true.
   private __attachTrackListeners(): void {
     if (!this.__srcObject) return;
     for (const track of this.__srcObject.getTracks()) {
       const listener = () => {
-        // Async check (spec: ended fires as a separate task)
-        Promise.resolve().then(() => this.__maybeEnded());
+        this.__maybeEnded();
       };
       track.addEventListener('ended', listener);
       this.__trackEndedSubscriptions.push({ track, listener });
@@ -323,11 +520,57 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__trackEndedSubscriptions = [];
   }
 
+  // @ref LLP 0004#srcobject-ended — `removeTrack` is script-initiated and the
+  // spec's `removetrack` event does not fire; but the HTML spec still requires
+  // the media element to fire `ended` when its assigned MediaStream becomes
+  // inactive (no live tracks). Our JS `MediaStream` emits an internal
+  // `__standardcamera_tracksetchange` event whenever the track set changes;
+  // we re-attach track listeners and re-evaluate ended on each.
+  private __attachTrackSetListener(): void {
+    if (!this.__srcObject) return;
+    const stream = this.__srcObject;
+    const listener = (): void => {
+      // The set changed — rebuild per-track 'ended' subscriptions to cover
+      // any newly-added tracks, then re-check the ended condition (might be
+      // empty / all-ended now). Use a task break so observers see the same
+      // event-loop step boundary the HTML spec mandates for `ended`.
+      this.__detachTrackListeners();
+      this.__attachTrackListeners();
+      setTimeout(() => this.__maybeEnded(), 0);
+    };
+    stream.addEventListener('__standardcamera_tracksetchange', listener);
+    this.__trackSetSubscription = { stream, listener };
+  }
+
+  private __detachTrackSetListener(): void {
+    if (this.__trackSetSubscription) {
+      const { stream, listener } = this.__trackSetSubscription;
+      stream.removeEventListener('__standardcamera_tracksetchange', listener);
+      this.__trackSetSubscription = null;
+    }
+  }
+
   private __maybeEnded(): void {
     if (!this.__srcObject || this.__ended) return;
-    const allEnded = this.__srcObject.getTracks().every((t) => t.readyState === 'ended');
-    if (allEnded) {
+    // Stream is inactive when it has no live tracks (covers both
+    // "all tracks ended" and "all tracks removed via removeTrack").
+    const tracks = this.__srcObject.getTracks();
+    const hasLive = tracks.some((t) => t.readyState === 'live');
+    if (!hasLive) {
       this.__ended = true;
+      // @ref LLP 0004#srcobject-ended — Per the HTML spec, when a media element's
+      // MediaStream provider becomes inactive the element's duration is set to
+      // the official playback position (currentTime) and a `durationchange`
+      // event fires before the `ended` event.
+      const finalTime = this.currentTime;
+      // Freeze the timeline so subsequent currentTime reads return finalTime.
+      this.__playStartMs = 0;
+      this.__accumulatedSeconds = finalTime;
+      this.__stopTimeUpdates();
+      if (this.__duration !== finalTime) {
+        this.__duration = finalTime;
+        this.dispatchEvent(new Event('durationchange'));
+      }
       this.dispatchEvent(new Event('ended'));
     }
   }

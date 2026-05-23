@@ -4,11 +4,11 @@ import ExpoModulesCore
 // @ref LLP 0008#dom-mediastreamtrack — Upstream spec text
 // @ref LLP 0003#track-* — MediaStreamTrack subset; native state container
 // @ref LLP 0005#architecture — SharedObject holds metadata; the AVCaptureSession
-//                                lives on the parent MediaStream.
+//                                lives on a CaptureSource (strong-referenced here).
 
 internal final class MediaStreamTrack: SharedObject {
   let id: String
-  let kind: String = "video"
+  let kind: String
   // @ref LLP 0008#dom-mediastreamtrack-label — set at construction, never changes.
   // The spec defines [[Label]] as initialized to the source's label and contains
   // no normative requirement that it changes when readyState transitions to "ended".
@@ -16,11 +16,10 @@ internal final class MediaStreamTrack: SharedObject {
   let settings: [String: Any]
   let constraints: [String: Any]
 
-  // Back-reference to the owning stream so stop() can ask the stream whether
-  // it should also stop the underlying AVCaptureSession.
-  weak var stream: MediaStream?
-
-  weak var connection: AVCaptureConnection?
+  // @ref LLP 0003#track-clone — Strong ref so cloning a track keeps the
+  // underlying camera session alive across stream lifetimes. Optional so
+  // tests / shared-object lifecycle can clear it after stop.
+  private(set) var source: CaptureSource?
 
   // @ref LLP 0008#dom-mediastreamtrack-enabled — spec attribute
   // @ref LLP 0003#track-enabled
@@ -30,14 +29,14 @@ internal final class MediaStreamTrack: SharedObject {
       // (and any future MediaRecorder-style consumers). The AVCaptureVideoPreviewLayer
       // has its own internal connection that we don't toggle here, so disabling
       // a track freezes downstream consumers but leaves the on-screen preview
-      // showing the most recent frame.
-      connection?.isEnabled = enabled
+      // showing the most recent frame. Clones share the connection with the
+      // original — documented divergence in LLP 0003#track-clone.
+      source?.connection?.isEnabled = enabled
     }
   }
 
   // @ref LLP 0008#dom-mediastreamtrack-muted — spec attribute
   // @ref LLP 0003#track-muted — Reflects AVCaptureSession interruption state.
-  // Toggled by MediaStream observers when the session is interrupted/resumed.
   private(set) var muted: Bool = false
 
   // @ref LLP 0008#dom-mediastreamtrack-readystate — spec attribute
@@ -46,34 +45,68 @@ internal final class MediaStreamTrack: SharedObject {
 
   init(
     id: String,
+    kind: String,
     label: String,
     settings: [String: Any],
-    constraints: [String: Any]
+    constraints: [String: Any],
+    source: CaptureSource?
   ) {
     self.id = id
+    self.kind = kind
     self.label = label
     self.settings = settings
     self.constraints = constraints
+    self.source = source
     super.init()
+    source?.registerTrack(self)
+  }
+
+  deinit {
+    // If JS GC'd this handle while still live, the refcount needs to be
+    // released so the camera shuts down promptly.
+    if readyState == "live" {
+      readyState = "ended"
+      source?.unregisterTrack(self)
+    }
   }
 
   // @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
   // @ref LLP 0003#track-stop — Synchronous readyState change; async "ended" event.
-  // Per LLP step 4, if no other live tracks remain on the stream, stop the session.
+  // Per spec step 3, "notify track's source that track is ended"; CaptureSource
+  // owns the refcount and stops the AVCaptureSession when this is the last live
+  // track. Per step 4 / spec ordering, we set readyState before firing `ended`.
   func stop() {
     if readyState == "ended" {
       return
     }
     readyState = "ended"
-    connection?.isEnabled = false
-
-    if let stream {
-      stream.trackDidEnd(self)
-    }
+    source?.unregisterTrack(self)
     emit(event: "ended")
   }
 
-  // Called by MediaStream when the AVCaptureSession is interrupted (or resumed).
+  // @ref LLP 0008#dom-mediastreamtrack-clone — spec algorithm
+  // @ref LLP 0003#track-clone — new id, shares source, fresh enabled/muted/readyState.
+  // Named `cloneTrack` (not `clone`) so we don't shadow Swift's NSObject.clone
+  // when bridging via Expo Modules. The module exposes this as `clone` on the JS side.
+  func cloneTrack() -> MediaStreamTrack {
+    let clone = MediaStreamTrack(
+      id: UUID().uuidString,
+      kind: kind,
+      label: label,
+      settings: settings,
+      constraints: constraints,
+      source: source
+    )
+    if readyState == "ended" {
+      // A clone of an ended track is born ended: the spec leaves this
+      // ambiguous, but observed browser behavior is that the clone inherits
+      // the source-stopped state when there is no live consumer.
+      clone.readyState = "ended"
+      clone.source?.unregisterTrack(clone)
+    }
+    return clone
+  }
+
   // @ref LLP 0008#dom-mediastreamtrack-mute-algorithm — spec algorithm
   // @ref LLP 0003#track-events — mute/unmute fire as a separate task.
   func setMuted(_ value: Bool) {
@@ -84,17 +117,65 @@ internal final class MediaStreamTrack: SharedObject {
     emit(event: value ? "mute" : "unmute")
   }
 
-  // Called by MediaStream when an AVCaptureSession runtime error fires.
-  // Marks the track ended without re-entering stop()'s stream-cleanup path
-  // (the session is already broken; nothing to stop).
-  // @ref LLP 0008#event-mediastreamtrack-ended — spec algorithm for the
-  //   non-stop() termination path: queue a task that sets ReadyState to
-  //   "ended" and fires `ended` at the track.
+  // @ref LLP 0008#dom-mediastreamtrack-getcapabilities — Reports the
+  // capabilities of the underlying AVCaptureDevice. For video tracks we
+  // expose the spec-required fields, ranges derived from the device's
+  // supported formats / frame-rate ranges where applicable.
+  func capabilities() -> [String: Any] {
+    guard let device = source?.device else {
+      // Capabilities for a track without a backing device are minimal.
+      return ["deviceId": "", "groupId": ""]
+    }
+
+    // width / height / aspectRatio ranges: derive from all supported formats.
+    var minWidth = Int.max, maxWidth = 0
+    var minHeight = Int.max, maxHeight = 0
+    var minFps = Float64.greatestFiniteMagnitude, maxFps: Float64 = 0
+    for format in device.formats {
+      let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+      let w = Int(dims.width), h = Int(dims.height)
+      if w > 0 { minWidth = min(minWidth, w); maxWidth = max(maxWidth, w) }
+      if h > 0 { minHeight = min(minHeight, h); maxHeight = max(maxHeight, h) }
+      for range in format.videoSupportedFrameRateRanges {
+        minFps = min(minFps, range.minFrameRate)
+        maxFps = max(maxFps, range.maxFrameRate)
+      }
+    }
+    if maxWidth == 0 { minWidth = 0 }
+    if maxHeight == 0 { minHeight = 0 }
+    if maxFps == 0 { minFps = 0 }
+
+    let minAspect = maxHeight > 0 ? Double(minWidth) / Double(maxHeight) : 0
+    let maxAspect = minHeight > 0 ? Double(maxWidth) / Double(minHeight) : 0
+
+    let facing: String
+    switch device.position {
+    case .front: facing = "user"
+    case .back: facing = "environment"
+    default: facing = "environment"
+    }
+
+    return [
+      "width": ["min": minWidth, "max": maxWidth],
+      "height": ["min": minHeight, "max": maxHeight],
+      "aspectRatio": ["min": minAspect, "max": maxAspect],
+      "frameRate": ["min": minFps, "max": maxFps],
+      "facingMode": [facing],
+      // We don't support cropping; report 'none' only.
+      "resizeMode": ["none"],
+      "deviceId": device.uniqueID,
+      "groupId": device.uniqueID,
+    ]
+  }
+
+  // Called by CaptureSource when an AVCaptureSession runtime error fires.
+  // @ref LLP 0008#event-mediastreamtrack-ended — non-stop() termination path.
   func endByRuntimeError() {
     if readyState == "ended" {
       return
     }
     readyState = "ended"
+    source?.unregisterTrack(self)
     emit(event: "ended")
   }
 }

@@ -34,17 +34,49 @@ public final class StandardCameraModule: Module {
       ]]
     }
 
-    // @ref LLP 0001#mediadevices-getsupportedconstraints
+    // @ref LLP 0007#harness-surface — Native passthrough so WPT_RESULT / WPT_DONE
+    // lines reach the simulator's unified-log stream even in Release builds,
+    // where React Native's `console.log` is not bridged to NSLog.
+    Function("__systemLogForTesting") { (message: String) in
+      NSLog("%@", message)
+    }
+
+    // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this
+    // returns a `MediaTrackSupportedConstraints` dictionary listing every
+    // constraint name the UA recognizes — regardless of whether the current
+    // device actually supports it. WPT tests assert every standard field is
+    // reported. We honor video fields and additionally report audio fields
+    // as supported (audio capture itself is out of scope, but reporting them
+    // as recognized constraints is lossless).
     Function("getSupportedConstraints") { () -> [String: Bool] in
       return [
+        // Video
         "width": true,
         "height": true,
         "facingMode": true,
         "frameRate": true,
         "aspectRatio": true,
+        "resizeMode": true,
+        // Identifiers (shared)
         "deviceId": true,
-        "groupId": true
+        "groupId": true,
+        // Audio — recognized but unsupported by our v1 capture pipeline.
+        "sampleRate": true,
+        "sampleSize": true,
+        "echoCancellation": true,
+        "autoGainControl": true,
+        "noiseSuppression": true,
+        "voiceIsolation": true,
+        "latency": true,
+        "channelCount": true,
       ]
+    }
+
+    // @ref LLP 0008#mediastream-constructor — script-constructed MediaStream
+    // @ref LLP 0003#stream-construction — Native handle for a JS-constructed
+    // stream so it still has a SharedObject id for instanceof / native-prop forwarding.
+    Function("createMediaStream") { (tracks: [MediaStreamTrack]) -> MediaStream in
+      return MediaStream(id: UUID().uuidString, tracks: tracks)
     }
 
     // MARK: - MediaStream class
@@ -63,18 +95,32 @@ public final class StandardCameraModule: Module {
         stream.getVideoTracks()
       }
 
-      Function("getAudioTracks") { (_: MediaStream) -> [MediaStreamTrack] in
-        []
+      Function("getAudioTracks") { (stream: MediaStream) -> [MediaStreamTrack] in
+        stream.getAudioTracks()
       }
 
       Function("getTrackById") { (stream: MediaStream, trackId: String) -> MediaStreamTrack? in
         stream.getTrackById(trackId)
       }
 
+      // @ref LLP 0008#dom-mediastream-addtrack — script-initiated; no event fires
+      Function("addTrack") { (stream: MediaStream, track: MediaStreamTrack) in
+        stream.addTrack(track)
+      }
+
+      // @ref LLP 0008#dom-mediastream-removetrack — script-initiated; no event fires
+      Function("removeTrack") { (stream: MediaStream, track: MediaStreamTrack) in
+        stream.removeTrack(track)
+      }
+
+      // @ref LLP 0008#dom-mediastream-clone
+      Function("clone") { (stream: MediaStream) -> MediaStream in
+        stream.clone()
+      }
+
       // Test hook — posts a synthetic AVCaptureSession interruption notification
       // so WPT tests can verify the mute/unmute path without needing real
-      // thermal pressure. reasonCode follows AVCaptureSession.InterruptionReason
-      // (4 == videoDeviceNotAvailableDueToSystemPressure, i.e. overheating).
+      // thermal pressure.
       Function("__simulateInterruptionForTesting") {
         (stream: MediaStream, reasonCode: Int, ended: Bool) in
         stream.simulateInterruption(reasonCode: reasonCode, ended: ended)
@@ -112,8 +158,18 @@ public final class StandardCameraModule: Module {
         track.constraints
       }
 
-      Function("getCapabilities") { (_: MediaStreamTrack) -> [String: Any] in
-        [:]
+      // @ref LLP 0008#dom-mediastreamtrack-getcapabilities — report the
+      // capabilities of the AVCaptureDevice. We surface fixed ranges based on
+      // the current device's active format. Spec-required fields for video
+      // tracks: width, height, aspectRatio, frameRate, facingMode, resizeMode,
+      // deviceId, groupId.
+      Function("getCapabilities") { (track: MediaStreamTrack) -> [String: Any] in
+        track.capabilities()
+      }
+
+      // @ref LLP 0008#dom-mediastreamtrack-clone
+      Function("clone") { (track: MediaStreamTrack) -> MediaStreamTrack in
+        track.cloneTrack()
       }
     }
 

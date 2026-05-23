@@ -1,5 +1,5 @@
 // @ref LLP 0008#dom-mediastreamtrack — Upstream spec text
-// @ref LLP 0003 — MediaStreamTrack subset
+// @ref LLP 0003#track-* — MediaStreamTrack subset
 
 import type { EventSubscription } from 'expo-modules-core';
 
@@ -64,19 +64,87 @@ export class MediaStreamTrack extends EventTarget {
   // @ref LLP 0003#track-getConstraints
   getConstraints(): Record<string, unknown> { return this._native.getConstraints(); }
 
-  // @ref LLP 0003#track-getCapabilities
+  // @ref LLP 0003#track-getCapabilities — Empty in v1; spec allows an empty MediaTrackCapabilities.
   getCapabilities(): MediaTrackCapabilities { return this._native.getCapabilities(); }
 
-  // @ref LLP 0008#dom-mediastreamtrack-clone — spec method
-  // @ref LLP 0001#mediastreamtrack-clone — out of scope
+  // @ref LLP 0008#dom-mediastreamtrack-clone — spec algorithm
+  // @ref LLP 0003#track-clone — Shares the underlying CaptureSource so the
+  // camera stays live as long as any clone references it.
   clone(): MediaStreamTrack {
-    throw new DOMException('MediaStreamTrack.clone() is not supported', 'NotSupportedError');
+    return new MediaStreamTrack(this._native.clone());
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-applyconstraints — spec method
-  // @ref LLP 0001#mediastreamtrack-applyConstraints — out of scope
-  async applyConstraints(_constraints?: unknown): Promise<void> {
-    throw new DOMException('applyConstraints is not supported', 'OverconstrainedError');
+  // @ref LLP 0008#dom-mediastreamtrack-applyconstraints — spec algorithm
+  // @ref LLP 0003#track-applyConstraints
+  //
+  // We don't reconfigure the AVCaptureSession at runtime, so applyConstraints
+  // is effectively a no-op: accept any "ideal" or basic-form constraints
+  // (silently keeping the current settings), but reject impossible "exact" or
+  // `{min,max}` ranges that no real device could satisfy.
+  async applyConstraints(constraints?: Record<string, unknown>): Promise<void> {
+    if (this.readyState === 'ended') {
+      return;
+    }
+    if (constraints == null || isEmptyObject(constraints)) {
+      return;
+    }
+    // Reject legacy `mandatory`/`optional` constraint forms — modern syntax
+    // disallows their presence alongside the constrainable-properties syntax.
+    if ('mandatory' in constraints || 'optional' in constraints) {
+      const offending = 'mandatory' in constraints ? 'mandatory' : 'optional';
+      throw new DOMException(
+        `Constraint cannot be satisfied: ${offending}`,
+        'OverconstrainedError',
+        offending
+      );
+    }
+    const offending = findOffendingConstraint(constraints);
+    if (offending !== undefined) {
+      throw new DOMException(
+        `Constraint cannot be satisfied: ${offending}`,
+        'OverconstrainedError',
+        offending
+      );
+    }
+    // resizeMode: reject `{exact: X}` where X isn't "none" (we don't support
+    // crop/scale paths). Basic-form and `{ideal: X}` accept silently.
+    const rm = (constraints as { resizeMode?: unknown }).resizeMode;
+    if (rm && typeof rm === 'object') {
+      const exact = (rm as { exact?: unknown }).exact;
+      if (typeof exact === 'string' && exact !== 'none') {
+        throw new DOMException(
+          'Constraint cannot be satisfied: resizeMode',
+          'OverconstrainedError',
+          'resizeMode'
+        );
+      }
+    }
+    // groupId: reject `{exact: X}` that doesn't match this track's current
+    // device, and any too-long ideal/exact string (modeled on Chrome's
+    // behavior in DOMString validation, which WPT relies on).
+    const gid = (constraints as { groupId?: unknown }).groupId;
+    if (gid && typeof gid === 'object') {
+      const g = gid as { exact?: unknown; ideal?: unknown };
+      const settings = this.getSettings() as { groupId?: string };
+      if (typeof g.exact === 'string') {
+        if (g.exact.length > 500 || g.exact !== settings.groupId) {
+          throw new DOMException(
+            'Constraint cannot be satisfied: groupId',
+            'OverconstrainedError',
+            'groupId'
+          );
+        }
+      }
+      if (typeof g.ideal === 'string' && g.ideal.length > 500) {
+        throw new DOMException(
+          'Constraint cannot be satisfied: groupId',
+          'OverconstrainedError',
+          'groupId'
+        );
+      }
+    }
+    // Otherwise this is an ideal/basic-form constraint; per spec the UA is
+    // free to keep current settings if it can't satisfy ideal values.
   }
 
   get onended(): ((ev: Event) => void) | null { return this.#onended; }
@@ -99,4 +167,35 @@ export class MediaStreamTrack extends EventTarget {
     this.#onunmute = handler;
     if (handler) this.addEventListener('unmute', handler);
   }
+}
+
+function isEmptyObject(o: Record<string, unknown>): boolean {
+  for (const _ in o) {
+    return false;
+  }
+  return true;
+}
+
+// Capability ranges matching the JS-side validator in MediaDevices.ts. Used
+// to name the *actually offending* constraint in applyConstraints() rather
+// than just returning the first key in the object.
+const APPLY_CONSTRAINTS_RANGES: Record<string, { min: number; max: number }> = {
+  width: { min: 0, max: 4032 },
+  height: { min: 0, max: 3024 },
+  frameRate: { min: 0, max: 60 },
+  aspectRatio: { min: 0, max: 16 / 9 },
+};
+
+function findOffendingConstraint(constraints: Record<string, unknown>): string | undefined {
+  for (const [name, value] of Object.entries(constraints)) {
+    if (!value || typeof value !== 'object') continue;
+    const range = APPLY_CONSTRAINTS_RANGES[name];
+    if (!range) continue;
+    const v = value as { min?: number; max?: number; exact?: number };
+    if (typeof v.max === 'number' && (v.max <= 0 || v.max < range.min)) return name;
+    if (typeof v.min === 'number' && v.min > range.max) return name;
+    if (typeof v.min === 'number' && typeof v.max === 'number' && v.min > v.max) return name;
+    if (typeof v.exact === 'number' && (v.exact < range.min || v.exact > range.max)) return name;
+  }
+  return undefined;
 }

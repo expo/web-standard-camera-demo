@@ -28,25 +28,34 @@ internal struct FlatVideoConstraints: Record {
 // the OverconstrainedError constraint into the message as "...: <name>" so the
 // TS layer can parse it onto .constraint.
 
+// Expo Modules Core SDK 56 surfaces `Exception(name:description:)` to JS as a
+// plain `Error` with name "Error" — the spec name does not round-trip through
+// `error.name` or `error.code`. We encode the spec name as a "[<Name>] "
+// prefix on the description so the TS-side `rewrapNativeError` can recover
+// it. Same trick already in use for OverconstrainedError's constraint name.
+private func spec(_ name: String, _ description: String) -> Exception {
+  Exception(name: name, description: "[\(name)] \(description)")
+}
+
 // @ref LLP 0008#error-notallowederror — user denied permission
 private func notAllowed() -> Exception {
-  Exception(name: "NotAllowedError", description: "Permission denied")
+  spec("NotAllowedError", "Permission denied")
 }
 
 // @ref LLP 0008#error-notfounderror — no suitable device matching constraints
 private func notFound() -> Exception {
-  Exception(name: "NotFoundError", description: "Requested device not found")
+  spec("NotFoundError", "Requested device not found")
 }
 
 // @ref LLP 0008#error-overconstrainederror — required constraint unsatisfiable;
 //   carries the offending constraint name in the message for TS to parse onto .constraint.
 private func overconstrained(_ constraint: String) -> Exception {
-  Exception(name: "OverconstrainedError", description: "Constraint cannot be satisfied: \(constraint)")
+  spec("OverconstrainedError", "Constraint cannot be satisfied: \(constraint)")
 }
 
 // @ref LLP 0008#error-notreadableerror — hardware/system level capture failure
 private func notReadable(_ underlying: Error) -> Exception {
-  Exception(name: "NotReadableError", description: "Camera could not be opened: \(underlying.localizedDescription)")
+  spec("NotReadableError", "Camera could not be opened: \(underlying.localizedDescription)")
 }
 
 // MARK: - Implementation
@@ -59,7 +68,7 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
     if constraints.audioRequested {
       throw overconstrained("audio")
     }
-    throw Exception(name: "TypeError", description: "At least one of audio and video must be requested")
+    throw spec("TypeError", "At least one of audio and video must be requested")
   }
 
   // @ref LLP 0002#gum-request-permission
@@ -88,15 +97,23 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
     frameSink: frameSink
   )
 
+  let source = CaptureSource(
+    session: session,
+    device: device,
+    frameSink: frameSink,
+    connection: trackConnection
+  )
+
   let track = MediaStreamTrack(
     id: UUID().uuidString,
+    kind: "video",
     label: device.localizedName,
     settings: settings,
-    constraints: constraintsAsDictionary(videoConstraints)
+    constraints: constraintsAsDictionary(videoConstraints),
+    source: source
   )
-  track.connection = trackConnection
 
-  return MediaStream(id: UUID().uuidString, session: session, tracks: [track], frameSink: frameSink)
+  return MediaStream(id: UUID().uuidString, tracks: [track])
 }
 
 private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDevice {
@@ -110,12 +127,16 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   // @ref LLP 0002#gum-pick-device — default to back camera when no facingMode is
   // specified. AVCaptureDevice.DiscoverySession with .unspecified returns devices
   // in undefined order; back is the better default for a "camera demo" surface.
+  // If facingMode was explicitly requested and isn't one of the spec's "user" /
+  // "environment" values, reject with OverconstrainedError — the JS normalizer
+  // collapses `{exact: X}` into a flat scalar, so any explicit value is exact.
   let facingModeRequested = constraints.facingMode != nil
   let position: AVCaptureDevice.Position
   switch constraints.facingMode {
+  case nil: position = .back
   case "user": position = .front
   case "environment": position = .back
-  default: position = .back
+  default: throw overconstrained("facingMode")
   }
 
   let discovery = AVCaptureDevice.DiscoverySession(
@@ -198,7 +219,11 @@ private func buildSession(
         "width": width,
         "height": height,
         "frameRate": frameRate,
-        "aspectRatio": Double(width) / Double(max(height, 1))
+        "aspectRatio": Double(width) / Double(max(height, 1)),
+        // We don't crop or scale; we always serve the camera's active-format
+        // dimensions. WPT tests assert this string is present on
+        // `track.getSettings()`.
+        "resizeMode": "none",
       ]
 
       // Hand back the AVCaptureConnection from the input to the data output so
