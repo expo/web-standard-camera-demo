@@ -12,6 +12,7 @@ export default function CameraStackLayout(): React.JSX.Element {
         headerShadowVisible: false,
       }}>
       <Stack.Screen name="index" options={{ title: 'Web Standard Camera' }} />
+      <Stack.Screen name="webgpu-spike" options={{ title: 'WebGPU spike' }} />
     </Stack>
   );
 }

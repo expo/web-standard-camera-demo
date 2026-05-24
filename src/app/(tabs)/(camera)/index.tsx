@@ -1,8 +1,7 @@
-import { useIsFocused } from 'expo-router';
-import * as Linking from 'expo-linking';
 import * as React from 'react';
 import { Button, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useCamera, type CameraConstraints } from '@/contexts/CameraContext';
 import { useTheme } from '@/hooks/use-theme';
 import { addTestRunStartListener } from '@/lib/camera-run-events';
 import { Video, type HTMLVideoElement } from '../../../../modules/standard-camera';
@@ -13,19 +12,9 @@ import { Video, type HTMLVideoElement } from '../../../../modules/standard-camer
 // The control rows below the preview each map 1:1 to a W3C constrainable
 // property on `MediaTrackConstraints` — front/back facing → `facingMode`,
 // camera picker → `deviceId`, resolution picker → `width` + `height`,
-// frame-rate picker → `frameRate`. Picking any value re-runs `gUM` with the
-// merged constraints; the resulting `track.getSettings()` shown at the
-// bottom always reflects what the device actually resolved to.
-
-const initialUrlPromise = Linking.getInitialURL();
-
-interface Constraints {
-  deviceId?: string;
-  facingMode?: 'user' | 'environment';
-  width?: number;
-  height?: number;
-  frameRate?: number;
-}
+// frame-rate picker → `frameRate`. The picker state lives in CameraContext
+// so the Demo tab's WebGPU cube reflects the same constraints; picking any
+// value on either tab updates both surfaces.
 
 interface ResolutionPreset {
   label: string;
@@ -61,164 +50,41 @@ function facingOfDevice(label: string): 'user' | 'environment' | null {
 
 export default function HomeScreen(): React.JSX.Element {
   const theme = useTheme();
-  const isFocused = useIsFocused();
+  const { stream, status, error, constraints, settings, devices, userStopped, start, stop, applyConstraints } = useCamera();
   const videoRef = React.useRef<HTMLVideoElement>(null);
-  const streamRef = React.useRef<MediaStream | null>(null);
-  const mountedRef = React.useRef(false);
-  const startRequestRef = React.useRef(0);
-  const launchAutoStartCheckedRef = React.useRef(false);
-  const [stream, setStream] = React.useState<MediaStream | null>(null);
-  const [status, setStatus] = React.useState<string>('idle');
-  const [error, setError] = React.useState<string | null>(null);
-  const [constraints, setConstraints] = React.useState<Constraints>({ facingMode: 'environment' });
-  const [devices, setDevices] = React.useState<MediaDeviceInfo[]>([]);
-  const [settings, setSettings] = React.useState<MediaTrackSettings | null>(null);
 
-  const stop = React.useCallback((nextStatus = 'stopped'): void => {
-    const activeStream = streamRef.current;
-    if (!activeStream) return;
-    for (const track of activeStream.getTracks()) {
-      track.stop();
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    streamRef.current = null;
-    if (mountedRef.current) {
-      setStream(null);
-      setSettings(null);
-      setStatus(nextStatus);
-    }
-  }, []);
-
-  const stopForTestRun = React.useCallback((): void => {
-    startRequestRef.current += 1;
-    if (!streamRef.current && mountedRef.current) {
-      setStatus('stopped');
-    }
-    stop();
-  }, [stop]);
-
+  // Mirror the context stream onto the local Video element. The element only
+  // exists on this screen, so keeping the wiring here (rather than in the
+  // provider) avoids the provider needing to know about a DOM-like element.
   React.useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      stop();
-    };
-  }, [stop]);
+    const v = videoRef.current;
+    if (!v) return;
+    v.srcObject = stream;
+    if (stream) {
+      void v.play();
+    }
+  }, [stream]);
 
-  React.useEffect(() => addTestRunStartListener(stopForTestRun), [stopForTestRun]);
+  // Run-tests deeplink stops the camera so the WPT runner gets a clean slate.
+  React.useEffect(() => addTestRunStartListener(stop), [stop]);
 
-  const start = React.useCallback(
-    async (next: Constraints): Promise<void> => {
-      const requestId = startRequestRef.current + 1;
-      startRequestRef.current = requestId;
-      setError(null);
-      setStatus('requesting');
-      const video: MediaTrackConstraints = {};
-      if (next.deviceId) {
-        video.deviceId = { exact: next.deviceId };
-      } else if (next.facingMode) {
-        video.facingMode = next.facingMode;
-      }
-      if (next.width && next.height) {
-        video.width = { exact: next.width };
-        video.height = { exact: next.height };
-      }
-      if (next.frameRate) {
-        video.frameRate = { ideal: next.frameRate };
-      }
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video });
-        if (!mountedRef.current || requestId !== startRequestRef.current) {
-          for (const track of s.getTracks()) track.stop();
-          return;
-        }
-        // Hot-swap the previous stream's tracks only AFTER the new one has
-        // resolved, so the preview never blanks and the on-screen settings
-        // never un-render. The brief overlap (~one frame) is invisible.
-        const previous = streamRef.current;
-        streamRef.current = s;
-        setStream(s);
-        setSettings(s.getVideoTracks()[0]?.getSettings() ?? null);
-        setStatus('starting');
-        if (previous) {
-          for (const track of previous.getTracks()) track.stop();
-        }
-
-        const v = videoRef.current;
-        if (v) {
-          v.srcObject = s;
-          v.onloadeddata = () => {
-            if (mountedRef.current && streamRef.current === s) setStatus('playing');
-          };
-          v.onended = () => {
-            if (mountedRef.current && streamRef.current === s) setStatus('ended');
-          };
-          await v.play();
-        }
-
-        // Refresh the device list off the hot-swap path so the pill rows
-        // don't reflow while the user is mid-tap.
-        try {
-          const all = await navigator.mediaDevices.enumerateDevices();
-          if (mountedRef.current) {
-            setDevices(all.filter((d) => d.kind === 'videoinput'));
-          }
-        } catch {
-          // ignore — device list is best-effort.
-        }
-      } catch (e) {
-        if (!mountedRef.current || requestId !== startRequestRef.current) return;
-        const err = e as Error & { name?: string; constraint?: string };
-        const constraintHint = err.constraint ? ` (${err.constraint})` : '';
-        setError(`${err.name ?? 'Error'}${constraintHint}: ${err.message}`);
-        setStatus('idle');
-      }
-    },
-    []
-  );
-
-  const applyConstraints = React.useCallback(
-    (patch: Partial<Constraints>): void => {
-      setConstraints((prev) => {
-        const next: Constraints = { ...prev, ...patch };
-        if (patch.deviceId) delete next.facingMode;
-        if (patch.facingMode) delete next.deviceId;
-        void start(next);
-        return next;
-      });
-    },
-    [start]
-  );
-
-  // Auto-start only for the initial Home launch. A run-tests deeplink mounts
-  // native tabs eagerly, so checking the original launch URL prevents the Home
-  // screen from opening the camera behind the Tests tab.
+  // Defense-in-depth start-on-mount. The provider also auto-starts at app
+  // launch, but Fast Refresh can strand that effect mid-session; consuming
+  // screens that want the camera ask explicitly. Honor an explicit user Stop
+  // so this effect doesn't fight the Stop button.
   React.useEffect(() => {
-    if (!isFocused || launchAutoStartCheckedRef.current) return;
-    launchAutoStartCheckedRef.current = true;
-
-    let cancelled = false;
-    void (async () => {
-      const initialUrl = await initialUrlPromise;
-      if (cancelled || isTestsLaunchUrl(initialUrl)) return;
-      await start(constraints);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isFocused, start, constraints]);
+    if (userStopped) return;
+    if (!stream && status !== 'requesting' && status !== 'error') {
+      void start();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stream, status, userStopped]);
 
   // Resolve the user's current facing intent from explicit state or the
   // resolved track settings. `deviceId` selection can imply either side.
   const explicitFacing: 'user' | 'environment' | null =
     constraints.facingMode ?? (settings?.facingMode as 'user' | 'environment' | undefined) ?? null;
 
-  // Group devices by position so the picker shows two short rows rather than
-  // one long mixed list. Devices we can't classify (rare) fall into the side
-  // matching the current facing intent.
   const { frontDevices, backDevices } = React.useMemo(() => {
     const front: MediaDeviceInfo[] = [];
     const back: MediaDeviceInfo[] = [];
@@ -231,8 +97,6 @@ export default function HomeScreen(): React.JSX.Element {
     return { frontDevices: front, backDevices: back };
   }, [devices, explicitFacing]);
 
-  // Stable callbacks per setting type, so memoized Pills don't re-render when
-  // an unrelated row's selection changes.
   const onPickFacing = React.useCallback(
     (m: 'user' | 'environment') => applyConstraints({ facingMode: m }),
     [applyConstraints]
@@ -268,9 +132,9 @@ export default function HomeScreen(): React.JSX.Element {
 
       <View style={styles.controls}>
         {!stream ? (
-          <Button title="Start camera" onPress={() => start(constraints)} />
+          <Button title="Start camera" onPress={() => void start()} />
         ) : (
-          <Button title="Stop camera" onPress={() => stop()} />
+          <Button title="Stop camera" onPress={stop} />
         )}
       </View>
 
@@ -406,8 +270,6 @@ const ControlRow = React.memo(function ControlRow({
   );
 });
 
-// Pill variants take callback + value rather than an inline onPress, so the
-// memoized children don't re-render when an unrelated row updates.
 const FacingPill = React.memo(function FacingPill({
   mode,
   label,
@@ -502,9 +364,9 @@ function PillBase({
   );
 }
 
-function isTestsLaunchUrl(url: string | null): boolean {
-  return url != null && /(?:^|[/?:#])run-tests(?:$|[/?#&])/.test(url);
-}
+// Re-export the constraints type so consumers (e.g. test harness) can keep
+// referring to the same shape without reaching into contexts directly.
+export type { CameraConstraints };
 
 const styles = StyleSheet.create({
   scrollView: {

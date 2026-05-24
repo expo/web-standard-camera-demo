@@ -32,6 +32,11 @@ export default function AppTabs() {
         <NativeTabs.Trigger.Label>Demo</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="cube.fill" />
       </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="(diagnostics)">
+        <NativeTabs.Trigger.Label>Diagnostics</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="stethoscope" />
+      </NativeTabs.Trigger>
     </NativeTabs>
   );
 }

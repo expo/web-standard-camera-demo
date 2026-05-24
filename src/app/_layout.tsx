@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { useColorScheme } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { CameraProvider } from '@/contexts/CameraContext';
 
 // @ref LLP 0006 — Install navigator.mediaDevices polyfill before any screen renders.
 import { installNavigatorMediaDevices } from '../../modules/standard-camera';
@@ -12,9 +13,11 @@ export default function RootLayout(): React.JSX.Element {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <AnimatedSplashOverlay />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
-      </Stack>
+      <CameraProvider>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(tabs)" />
+        </Stack>
+      </CameraProvider>
     </ThemeProvider>
   );
 }

@@ -1,5 +1,26 @@
 import AVFoundation
 import ExpoModulesCore
+import UIKit
+
+// Map `AVAuthorizationStatus` to a stable string the JS layer can render. Lives
+// at file scope so the module definition stays focused on bindings.
+private func authorizationStatusString(_ status: AVAuthorizationStatus) -> String {
+  switch status {
+  case .authorized: return "authorized"
+  case .denied: return "denied"
+  case .notDetermined: return "not-determined"
+  case .restricted: return "restricted"
+  @unknown default: return "unknown"
+  }
+}
+
+private func isSimulator() -> Bool {
+  #if targetEnvironment(simulator)
+  return true
+  #else
+  return false
+  #endif
+}
 
 // @ref LLP 0000 — standard-camera module entry point
 // @ref LLP 0001 — Spec subset index; every Function/Property below maps to a clause
@@ -86,6 +107,42 @@ public final class StandardCameraModule: Module {
     // where React Native's `console.log` is not bridged to NSLog.
     Function("__systemLogForTesting") { (message: String) in
       NSLog("%@", message)
+    }
+
+    // Read-only diagnostics for the Diagnostics tab. We surface enough state
+    // to answer "what code is the device actually running, and can the camera
+    // be opened without prompting?" — both questions came up when a phone
+    // build silently ran a stale embedded bundle. The permission lookups use
+    // AVCaptureDevice.authorizationStatus(for:), which does NOT trigger the
+    // iOS permission dialog.
+    Function("getDiagnostics") { () -> [String: Any] in
+      let executableMtime: Double? = {
+        guard let path = Bundle.main.executableURL?.path,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let date = attrs[.modificationDate] as? Date else {
+          return nil
+        }
+        return date.timeIntervalSince1970
+      }()
+      let bundle = Bundle.main
+      let device = UIDevice.current
+      return [
+        "bundleVersion": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+        "bundleShortVersion": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+        "bundleIdentifier": bundle.bundleIdentifier ?? "",
+        "executableMtime": executableMtime as Any,
+        "systemName": device.systemName,
+        "systemVersion": device.systemVersion,
+        "model": device.model,
+        "deviceName": device.name,
+        "isSimulator": isSimulator(),
+        "cameraAuthorization": authorizationStatusString(
+          AVCaptureDevice.authorizationStatus(for: .video)
+        ),
+        "microphoneAuthorization": authorizationStatusString(
+          AVCaptureDevice.authorizationStatus(for: .audio)
+        ),
+      ]
     }
 
     // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this
@@ -217,6 +274,19 @@ public final class StandardCameraModule: Module {
       // @ref LLP 0008#dom-mediastreamtrack-clone
       Function("clone") { (track: MediaStreamTrack) -> MediaStreamTrack in
         track.cloneTrack()
+      }
+
+      // Internal accessor used by the JS-side `ImageCapture` implementation —
+      // not exposed on MediaStreamTrack's public surface because grabFrame is
+      // spelled at the ImageCapture layer in the W3C Image Capture spec, not
+      // on MediaStreamTrack. Returns the most recent frame as a tight-packed
+      // BGRA byte buffer plus dimensions, or nil if no frame is available
+      // (cold start, simulator with no AVCaptureDevice, ended track). The
+      // demo uploads this into a `bgra8unorm` texture via
+      // `device.queue.writeTexture`. See LLP 0011 for the zero-copy
+      // SharedTextureMemory follow-up once react-native-wgpu exposes it.
+      Function("__getLatestFrame") { (track: MediaStreamTrack) -> [String: Any]? in
+        track.getLatestFrame()
       }
     }
 

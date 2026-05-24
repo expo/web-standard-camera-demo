@@ -201,10 +201,26 @@ internal final class CaptureSource {
 // attached to the session purely so frames are actively delivered and we get
 // a reliable "first sample" callback. The VideoView subscribes to its
 // `onFirstFrame` callback to fire the loadeddata event.
+//
+// The sink also retains the latest CVPixelBuffer so MediaStreamTrack.grabFrame()
+// can hand a frame to WebGPU consumers. Pixel format is forced to BGRA so the
+// returned bytes can be uploaded as `bgra8unorm` without a colorspace conversion.
+// The eventual zero-copy path will hand the CVPixelBuffer's IOSurface directly
+// to Dawn via SharedTextureMemory; see LLP 0011 once react-native-wgpu exposes it.
 internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
   let output = AVCaptureVideoDataOutput()
   private let queue = DispatchQueue(label: "dev.ide.standardcamera.frame-sink")
   private var hasFiredFirstFrame = false
+
+  // Retained latest pixel buffer for grabFrame() pulls. Updated on `queue` and
+  // read under `bufferLock` from arbitrary threads (typically the JS thread).
+  private let bufferLock = NSLock()
+  private var latestPixelBuffer: CVPixelBuffer?
+  // Monotonic counter of sample buffers delivered by AVCapture. Returned
+  // alongside grabFrame() output so JS can tell whether iOS is actively
+  // pushing new frames (rising) or stopped (flat) — distinct from whether
+  // grabFrame just keeps re-reading the same retained buffer.
+  private var frameCounter: UInt64 = 0
 
   /// Called on the main thread once after the first sample arrives.
   /// Reset to nil after firing (one-shot). Set again to listen for the next
@@ -214,6 +230,11 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   override init() {
     super.init()
     output.alwaysDiscardsLateVideoFrames = true
+    // Force BGRA so grabFrame() returns predictable bytes that a WebGPU
+    // `bgra8unorm` texture can consume verbatim.
+    output.videoSettings = [
+      kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_32BGRA)
+    ]
     output.setSampleBufferDelegate(self, queue: queue)
   }
 
@@ -221,11 +242,30 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     hasFiredFirstFrame = false
   }
 
+  /// Returns the most recently received pixel buffer, its dimensions, and a
+  /// monotonic frame counter (incremented on every iOS sample-buffer
+  /// delivery). nil when no frame has arrived yet. The buffer is retained;
+  /// the caller must lock it before reading bytes.
+  func copyLatestPixelBuffer() -> (pixelBuffer: CVPixelBuffer, width: Int, height: Int, frameNumber: UInt64)? {
+    bufferLock.lock()
+    let pb = latestPixelBuffer
+    let n = frameCounter
+    bufferLock.unlock()
+    guard let pb else { return nil }
+    return (pb, CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb), n)
+  }
+
   func captureOutput(
     _ output: AVCaptureOutput,
     didOutput sampleBuffer: CMSampleBuffer,
     from connection: AVCaptureConnection
   ) {
+    if let pb = CMSampleBufferGetImageBuffer(sampleBuffer) {
+      bufferLock.lock()
+      latestPixelBuffer = pb
+      frameCounter &+= 1
+      bufferLock.unlock()
+    }
     if hasFiredFirstFrame { return }
     hasFiredFirstFrame = true
     DispatchQueue.main.async { [weak self] in

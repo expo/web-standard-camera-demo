@@ -32,10 +32,38 @@ export interface NativeMediaStreamTrack {
   getConstraints(): Record<string, unknown>;
   getCapabilities(): MediaTrackCapabilities;
 
+  /**
+   * @internal Used by the JS-side `ImageCapture` polyfill. The W3C Image
+   * Capture spec puts grabFrame on `ImageCapture`, not on `MediaStreamTrack`,
+   * so this stays underscore-prefixed and out of the public surface. Returns
+   * the most recent camera frame as a tight-packed BGRA byte buffer plus
+   * dimensions, or null if no frame is available (cold start, simulator
+   * without AVCaptureDevice, ended track). LLP 0011 covers the zero-copy
+   * follow-up.
+   */
+  __getLatestFrame(): NativeMediaStreamFrame | null;
+
   addListener(
     eventName: 'ended' | 'mute' | 'unmute',
     listener: () => void
   ): EventSubscription;
+}
+
+/** Tight-packed BGRA frame returned by `__getLatestFrame()`. */
+export interface NativeMediaStreamFrame {
+  readonly width: number;
+  readonly height: number;
+  /** `width * height * 4` bytes, BGRA, no row padding. */
+  readonly data: Uint8Array;
+  /** Always `"bgra8unorm"` for now; reserved for future format negotiation. */
+  readonly format: 'bgra8unorm';
+  /**
+   * Monotonic counter of AVCapture sample-buffer deliveries since the source
+   * was opened. Lets callers tell whether the camera is actively pushing
+   * frames (rising) or stalled (flat) — distinct from whether grabFrame()
+   * keeps re-reading the same retained buffer.
+   */
+  readonly frameNumber: number;
 }
 
 // JS-side handle to native MediaStream SharedObject.
@@ -70,6 +98,25 @@ interface NativeStandardCameraModule {
   createMediaStream(tracks: NativeMediaStreamTrack[]): NativeMediaStream;
   /** @internal Test-only: forward a message to NSLog so it reaches `simctl log stream` regardless of build config. */
   __systemLogForTesting(message: string): void;
+  /** Read-only diagnostics. Permission lookups do NOT trigger iOS prompts. */
+  getDiagnostics(): NativeDiagnostics;
+}
+
+export type AuthorizationStatus = 'authorized' | 'denied' | 'not-determined' | 'restricted' | 'unknown';
+
+export interface NativeDiagnostics {
+  readonly bundleVersion: string;
+  readonly bundleShortVersion: string;
+  readonly bundleIdentifier: string;
+  /** Unix epoch seconds; null if the executable's mtime is unavailable. */
+  readonly executableMtime: number | null;
+  readonly systemName: string;
+  readonly systemVersion: string;
+  readonly model: string;
+  readonly deviceName: string;
+  readonly isSimulator: boolean;
+  readonly cameraAuthorization: AuthorizationStatus;
+  readonly microphoneAuthorization: AuthorizationStatus;
 }
 
 export default requireNativeModule<NativeStandardCameraModule>('StandardCamera');

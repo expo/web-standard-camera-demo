@@ -209,6 +209,54 @@ internal final class MediaStreamTrack: SharedObject {
     return device.uniqueID.isEmpty ? "default-audio-input" : device.uniqueID
   }
 
+  // Internal accessor consumed by the JS-side `ImageCapture` polyfill. The
+  // W3C Image Capture spec puts grabFrame on `ImageCapture`, not on
+  // `MediaStreamTrack`, so we don't add it to the public track surface. The
+  // returned `data` is a tight-packed `width * height * 4` BGRA buffer
+  // suitable for `device.queue.writeTexture` into a `bgra8unorm` texture.
+  // This is the pixel-copy v1 of the camera → WebGPU bridge; the zero-copy
+  // SharedTextureMemory path is reserved for [[LLP 0011]] once
+  // react-native-wgpu exposes `importSharedTextureMemory`.
+  func getLatestFrame() -> [String: Any]? {
+    if kind != "video" || readyState == "ended" {
+      return nil
+    }
+    guard let frameSink = source?.frameSink,
+          let latest = frameSink.copyLatestPixelBuffer() else {
+      return nil
+    }
+    let pb = latest.pixelBuffer
+    let width = latest.width
+    let height = latest.height
+
+    CVPixelBufferLockBaseAddress(pb, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+
+    guard let baseAddress = CVPixelBufferGetBaseAddress(pb) else {
+      return nil
+    }
+    let srcRowBytes = CVPixelBufferGetBytesPerRow(pb)
+    let dstRowBytes = width * 4
+    var data = Data(count: dstRowBytes * height)
+    data.withUnsafeMutableBytes { dst in
+      guard let dstPtr = dst.baseAddress else { return }
+      // Tight-pack: copy row by row so any IOSurface stride padding is dropped.
+      for y in 0..<height {
+        let srcRow = baseAddress.advanced(by: y * srcRowBytes)
+        let dstRow = dstPtr.advanced(by: y * dstRowBytes)
+        memcpy(dstRow, srcRow, dstRowBytes)
+      }
+    }
+
+    return [
+      "width": width,
+      "height": height,
+      "data": data,
+      "format": "bgra8unorm",
+      "frameNumber": latest.frameNumber,
+    ]
+  }
+
   // Called by CaptureSource when an AVCaptureSession runtime error fires.
   // @ref LLP 0008#event-mediastreamtrack-ended — non-stop() termination path.
   func endByRuntimeError() {

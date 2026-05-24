@@ -5,7 +5,12 @@
 // re-exports below.
 import 'event-target-polyfill';
 
+export { JS_LOAD_TIME } from './src/build-info';
+export { default as NativeStandardCamera } from './src/native';
+export type { AuthorizationStatus, NativeDiagnostics } from './src/native';
 export { DOMException } from './src/DOMException';
+export { ImageCapture } from './src/ImageCapture';
+export type { CameraImageBitmap } from './src/ImageCapture';
 export { MediaDevices, mediaDevices } from './src/MediaDevices';
 export { MediaStream } from './src/MediaStream';
 export { MediaStreamTrack } from './src/MediaStreamTrack';

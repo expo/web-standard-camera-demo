@@ -1,15 +1,27 @@
 import * as React from 'react';
-import { Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Button, Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
-// Rotating cube whose six faces all show a "live" texture. On simulator the
-// texture is a JS-generated procedural pattern uploaded each frame via
-// device.queue.writeTexture; on device this will swap to a CVPixelBuffer-backed
-// GPUTexture imported via SharedTextureMemory, with everything else unchanged.
+import { useCamera } from '@/contexts/CameraContext';
+import { ImageCapture } from '../../../../modules/standard-camera';
+
+// Rotating cube whose six faces all show the live camera. The demo reads the
+// active MediaStream from CameraContext (shared with the Home screen — both
+// surfaces see the same stream), wraps the first video track in a W3C
+// `ImageCapture`, and pulls a frame per animation tick via
+// `imageCapture.grabFrame()`. The frame is uploaded into a `bgra8unorm` GPU
+// texture and sampled by the cube's fragment shader — the same shape an
+// unmodified browser WebGPU demo would take. When no stream is active (camera
+// stopped or simulator with no AVCaptureDevice), the loop falls back to a
+// procedurally-generated test pattern uploaded the same way.
 //
-// Direct adaptation of the WebGPU samples' rotatingCube + videoUploading
-// demos. The WGSL is byte-identical in spirit to the browser version; only the
-// texture upload differs.
+// Spec surface used:
+//   - navigator.mediaDevices.getUserMedia (Media Capture and Streams)
+//   - ImageCapture(track) + grabFrame()    (W3C Image Capture)
+//   - navigator.gpu / WGSL                  (WebGPU)
+//
+// The only non-spec piece is the bridge ImageCapture pulls bytes through; see
+// LLP 0010 + 0011 for context.
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -88,13 +100,69 @@ const CUBE_VERTICES = new Float32Array([
   -1, -1, 1, 0, 0,
 ]);
 
-const TEX_SIZE = 256;
+const SYNTHETIC_SIZE = 256;
+
+interface Frame {
+  width: number;
+  height: number;
+  data: Uint8Array;
+}
 
 export default function CubeOfCamerasScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
+  const { stream, status: cameraStatus, error: cameraError, userStopped, start, stop } = useCamera();
+
+  // Defense-in-depth start-on-mount: the provider auto-starts at app launch,
+  // but Fast Refresh can strand that effect. Honor an explicit user Stop so
+  // this effect doesn't fight the Stop button.
+  React.useEffect(() => {
+    if (userStopped) return;
+    if (!stream && cameraStatus !== 'requesting' && cameraStatus !== 'error') {
+      void start();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stream, cameraStatus, userStopped]);
   const [status, setStatus] = React.useState('initializing');
+  const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
+  const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
+
+  // The render loop reads from a ref so swapping the stream doesn't restart
+  // the WebGPU pipeline. The effect below keeps the ref in sync with the
+  // context's active stream.
+  const imageCaptureRef = React.useRef<ImageCapture | null>(null);
+  React.useEffect(() => {
+    if (!stream) {
+      imageCaptureRef.current = null;
+      // eslint-disable-next-line no-console
+      console.log(`CUBE_TRACE stream-cleared`);
+      return;
+    }
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      imageCaptureRef.current = null;
+      return;
+    }
+    try {
+      imageCaptureRef.current = new ImageCapture(track);
+      const s = track.getSettings() as { width?: number; height?: number };
+      // eslint-disable-next-line no-console
+      console.log(
+        `CUBE_TRACE stream-ready ${JSON.stringify({ trackId: track.id, label: track.label, w: s.width, h: s.height })}`
+      );
+    } catch (e) {
+      imageCaptureRef.current = null;
+      const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      // eslint-disable-next-line no-console
+      console.log(`CUBE_TRACE ImageCapture-construct-fail ${JSON.stringify({ reason })}`);
+    }
+    return () => {
+      imageCaptureRef.current = null;
+    };
+  }, [stream]);
+
   const rafRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
@@ -102,15 +170,18 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     let cancelled = false;
     let cleanup: (() => void) | null = null;
 
-    const start = (): void => {
+    // eslint-disable-next-line no-console
+    console.log(`CUBE_TRACE mount @ ${new Date().toISOString()}`);
+
+    const startRender = (): void => {
       try {
         const context = ref.current?.getContext('webgpu');
         if (!context) {
           throw new Error('getContext("webgpu") returned null');
         }
 
-        const format = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format, alphaMode: 'opaque' });
+        const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
 
         const shaderModule = device.createShaderModule({ code: SHADER });
 
@@ -138,7 +209,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           fragment: {
             module: shaderModule,
             entryPoint: 'fs_main',
-            targets: [{ format }],
+            targets: [{ format: presentationFormat }],
           },
           primitive: { topology: 'triangle-list', cullMode: 'back' },
           depthStencil: {
@@ -158,12 +229,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           usage: GPUTextureUsage.RENDER_ATTACHMENT,
         });
 
-        const cameraTexture = device.createTexture({
-          size: { width: TEX_SIZE, height: TEX_SIZE },
-          format: 'rgba8unorm',
-          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-        });
-
         const sampler = device.createSampler({
           magFilter: 'linear',
           minFilter: 'linear',
@@ -176,39 +241,98 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        const bindGroup = device.createBindGroup({
-          layout: pipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: { buffer: uniformBuffer } },
-            { binding: 1, resource: cameraTexture.createView() },
-            { binding: 2, resource: sampler },
-          ],
-        });
+        // Lazy-created on the first frame so we size the texture to whatever
+        // dimensions the camera (or fallback) actually delivers.
+        let cameraTexture: GPUTexture | null = null;
+        let bindGroup: GPUBindGroup | null = null;
+        let texWidth = 0;
+        let texHeight = 0;
 
-        const pixelData = new Uint8Array(TEX_SIZE * TEX_SIZE * 4);
+        const ensureTexture = (width: number, height: number): GPUBindGroup => {
+          if (cameraTexture && texWidth === width && texHeight === height) {
+            return bindGroup!;
+          }
+          if (cameraTexture) cameraTexture.destroy();
+          cameraTexture = device.createTexture({
+            size: { width, height },
+            format: 'bgra8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+          });
+          bindGroup = device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: { buffer: uniformBuffer } },
+              { binding: 1, resource: cameraTexture.createView() },
+              { binding: 2, resource: sampler },
+            ],
+          });
+          texWidth = width;
+          texHeight = height;
+          return bindGroup;
+        };
+
+        const syntheticPixels = new Uint8Array(SYNTHETIC_SIZE * SYNTHETIC_SIZE * 4);
+        const startedAt = Date.now();
+        let frames = 0;
+        let lastReport = startedAt;
+        let lastReportedSource: 'camera' | 'synthetic' | null = null;
+        let lastSeenFrameNumber: number | null = null;
+        let newFramesThisSecond = 0;
+        let grabsThisSecond = 0;
 
         const aspect = canvasWidth / canvasHeight;
         const projection = mat4Perspective((60 * Math.PI) / 180, aspect, 0.1, 100);
         const view = mat4Translate(0, 0, -5);
         const viewProjection = mat4Multiply(projection, view);
 
-        const start = Date.now();
-        let frames = 0;
-        let lastReport = start;
-
-        const renderFrame = (): void => {
+        const renderFrame = async (): Promise<void> => {
           if (cancelled) return;
-          const elapsed = (Date.now() - start) / 1000;
+          const elapsed = (Date.now() - startedAt) / 1000;
 
-          // Procedural test pattern: time-varying color bars + diagonal sweep
-          // so the texture is obviously alive across frames and clearly maps
-          // onto each cube face without ambiguity. Stand-in for the camera.
-          fillTestPattern(pixelData, TEX_SIZE, elapsed);
+          // Pull from the active ImageCapture (set by the stream effect
+          // whenever the context's stream changes). Fall back to synthetic
+          // whenever there's no capture or the camera hasn't produced a
+          // frame yet.
+          const ic = imageCaptureRef.current;
+          let frame: Frame | null = null;
+          let frameSource: 'camera' | 'synthetic' = 'synthetic';
+          if (ic) {
+            try {
+              const bitmap = await ic.grabFrame();
+              frame = { width: bitmap.width, height: bitmap.height, data: bitmap._data };
+              frameSource = 'camera';
+              grabsThisSecond++;
+              if (bitmap._frameNumber !== lastSeenFrameNumber) {
+                newFramesThisSecond++;
+                lastSeenFrameNumber = bitmap._frameNumber;
+              }
+              bitmap.close();
+            } catch (e) {
+              const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+              setLastGrabError(reason);
+            }
+          }
+          if (!frame) {
+            fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
+            frame = { width: SYNTHETIC_SIZE, height: SYNTHETIC_SIZE, data: syntheticPixels };
+          }
+          if (cancelled) return;
+
+          if (frameSource !== lastReportedSource) {
+            lastReportedSource = frameSource;
+            setSource(frameSource);
+            // eslint-disable-next-line no-console
+            console.log(
+              `CUBE_TRACE source-change ${JSON.stringify({ source: frameSource, w: frame.width, h: frame.height })}`
+            );
+          }
+
+          const currentBindGroup = ensureTexture(frame.width, frame.height);
           device.queue.writeTexture(
-            { texture: cameraTexture },
-            pixelData,
-            { bytesPerRow: TEX_SIZE * 4, rowsPerImage: TEX_SIZE },
-            { width: TEX_SIZE, height: TEX_SIZE }
+            { texture: cameraTexture! },
+            frame.data,
+            { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+            { width: frame.width, height: frame.height }
           );
 
           const model = mat4Multiply(mat4RotateY(elapsed * 0.7), mat4RotateX(elapsed * 0.4));
@@ -233,7 +357,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             },
           });
           pass.setPipeline(pipeline);
-          pass.setBindGroup(0, bindGroup);
+          pass.setBindGroup(0, currentBindGroup);
           pass.setVertexBuffer(0, vertexBuffer);
           pass.draw(CUBE_VERTEX_COUNT);
           pass.end();
@@ -245,24 +369,35 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           if (now - lastReport >= 1000) {
             const fps = (frames / ((now - lastReport) / 1000)).toFixed(1);
             // eslint-disable-next-line no-console
-            console.log(`CUBE_FPS ${JSON.stringify({ fps: +fps, frames })}`);
+            console.log(
+              `CUBE_FPS ${JSON.stringify({ fps: +fps, frames, source: frameSource, w: frame.width, h: frame.height, newFrames: newFramesThisSecond, grabs: grabsThisSecond, lastN: lastSeenFrameNumber })}`
+            );
+            if (lastSeenFrameNumber !== null) {
+              setLastFrameNumber(lastSeenFrameNumber);
+            }
             frames = 0;
+            newFramesThisSecond = 0;
+            grabsThisSecond = 0;
             lastReport = now;
           }
 
-          rafRef.current = requestAnimationFrame(renderFrame);
+          rafRef.current = requestAnimationFrame(() => {
+            void renderFrame();
+          });
         };
 
         setStatus(`ok — ${adapter?.info?.vendor ?? 'unknown adapter'}`);
-        rafRef.current = requestAnimationFrame(renderFrame);
+        rafRef.current = requestAnimationFrame(() => {
+          void renderFrame();
+        });
 
         cleanup = (): void => {
           if (rafRef.current !== null) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
           }
+          if (cameraTexture) cameraTexture.destroy();
           depthTexture.destroy();
-          cameraTexture.destroy();
           vertexBuffer.destroy();
           uniformBuffer.destroy();
         };
@@ -276,7 +411,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     };
 
     // Give the surface a tick to attach before grabbing the context.
-    const timer = setTimeout(start, 50);
+    const timer = setTimeout(startRender, 50);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -284,15 +419,39 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     };
   }, [device, adapter, ref]);
 
+  const cameraOn = stream != null;
+  const subtitle = !cameraOn
+    ? 'Camera stopped — synthetic frames standing in. Tap Start camera to share the live feed with the Home tab too.'
+    : source === 'camera'
+      ? 'Live camera frames via getUserMedia → ImageCapture → WebGPU — shared with the Home tab.'
+      : source === 'synthetic'
+        ? 'Stream live but no frames yet (cold start or simulator without an AVCaptureDevice).'
+        : 'Opening the camera…';
+
   return (
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={styles.scrollContent}
       contentInsetAdjustmentBehavior="automatic">
       <Canvas ref={ref} style={styles.canvas} />
+      <View style={styles.controls}>
+        <Button
+          title={cameraOn ? 'Stop camera' : 'Start camera'}
+          onPress={() => (cameraOn ? stop() : void start())}
+          color="#60a5fa"
+        />
+      </View>
       <View style={styles.hud}>
         <Text style={styles.hudText}>Cube of cameras · {status}</Text>
-        <Text style={styles.hudSub}>Simulator: synthetic frames stand in for the camera feed.</Text>
+        <Text style={styles.hudSub}>{subtitle}</Text>
+        <Text style={styles.hudSub}>· camera context: {cameraStatus}</Text>
+        {lastFrameNumber !== null && cameraOn ? (
+          <Text style={styles.hudSub}>· iOS frames delivered: {lastFrameNumber}</Text>
+        ) : null}
+        {cameraError ? <Text style={styles.hudError}>· camera error: {cameraError}</Text> : null}
+        {lastGrabError && source !== 'camera' ? (
+          <Text style={styles.hudSub}>· grabFrame: {lastGrabError}</Text>
+        ) : null}
         {error ? <Text style={styles.hudError}>{error}</Text> : null}
       </View>
     </ScrollView>
@@ -306,7 +465,9 @@ const WINDOW = Dimensions.get('window');
 const CANVAS_SIDE = Math.min(WINDOW.width, WINDOW.height - 240);
 
 // Time-modulated test pattern: diagonal stripes whose hue shifts with t and
-// whose phase shifts so the texture is obviously alive frame to frame.
+// whose phase shifts so the texture is obviously alive frame to frame. The
+// channel order is B, G, R, A so the bytes go into a `bgra8unorm` texture
+// without a swap — matching what the camera path delivers.
 function fillTestPattern(buf: Uint8Array, size: number, t: number): void {
   const phase = (t * 60) | 0;
   for (let y = 0; y < size; y++) {
@@ -314,9 +475,9 @@ function fillTestPattern(buf: Uint8Array, size: number, t: number): void {
       const i = (y * size + x) * 4;
       const diag = (x + y + phase) & 0xff;
       const ring = ((x * x + y * y) >> 4) & 0xff;
-      buf[i + 0] = diag;
+      buf[i + 0] = (255 - diag + (phase >> 1)) & 0xff;
       buf[i + 1] = (ring + phase) & 0xff;
-      buf[i + 2] = (255 - diag + (phase >> 1)) & 0xff;
+      buf[i + 2] = diag;
       buf[i + 3] = 255;
     }
   }
@@ -399,6 +560,11 @@ const styles = StyleSheet.create({
   canvas: {
     width: CANVAS_SIDE,
     height: CANVAS_SIDE,
+  },
+  controls: {
+    alignSelf: 'stretch',
+    paddingHorizontal: 16,
+    paddingTop: 12,
   },
   hud: {
     paddingHorizontal: 16,
