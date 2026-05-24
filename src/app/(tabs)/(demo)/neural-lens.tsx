@@ -159,6 +159,8 @@ interface Prediction {
   probabilities: number[];
 }
 
+type CaptureProfile = 'demo' | 'relaxed';
+
 const INITIAL_PREDICTION: Prediction = {
   confidence: 0,
   features: { brightness: 0, contrast: 0, edge: 0 },
@@ -189,6 +191,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const [error, setError] = React.useState<string | null>(null);
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
   const [inferenceError, setInferenceError] = React.useState<string | null>(null);
+  const [captureProfile, setCaptureProfile] = React.useState<CaptureProfile>('demo');
 
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
   const rafRef = React.useRef<number | null>(null);
@@ -216,6 +219,26 @@ export default function NeuralLensScreen(): React.JSX.Element {
     setFrameSize(next);
   }, []);
 
+  const resetFrameState = React.useCallback((): void => {
+    sourceRef.current = 'pending';
+    frameSizeRef.current = 'pending';
+    setSource('pending');
+    setFrameSize('pending');
+    setLastFrameNumber(null);
+    setGrabError(null);
+  }, [setGrabError]);
+
+  const retryRelaxedCamera = React.useCallback((): void => {
+    if (didRetryRelaxedCameraRef.current) return;
+    didRetryRelaxedCameraRef.current = true;
+    setCaptureProfile('relaxed');
+    resetFrameState();
+    void start({
+      ...RELAXED_CAPTURE_CONSTRAINTS,
+      facingMode: constraints.facingMode ?? settingsFacing ?? 'environment',
+    });
+  }, [constraints.facingMode, resetFrameState, settingsFacing, start]);
+
   React.useEffect(() => {
     predictionRef.current = prediction;
   }, [prediction]);
@@ -228,6 +251,8 @@ export default function NeuralLensScreen(): React.JSX.Element {
     if (didAutoStartCameraRef.current) return;
     if (cameraStatus === 'requesting' || cameraStatus === 'starting') return;
     didAutoStartCameraRef.current = true;
+    setCaptureProfile('demo');
+    resetFrameState();
     void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraStatus]);
@@ -236,27 +261,19 @@ export default function NeuralLensScreen(): React.JSX.Element {
     if (didRetryRelaxedCameraRef.current || source === 'camera' || cameraStatus !== 'error' || stream) {
       return;
     }
-    didRetryRelaxedCameraRef.current = true;
-    void start({
-      ...RELAXED_CAPTURE_CONSTRAINTS,
-      facingMode: constraints.facingMode ?? settingsFacing ?? 'environment',
-    });
-  }, [cameraStatus, constraints.facingMode, settingsFacing, source, start, stream]);
+    retryRelaxedCamera();
+  }, [cameraStatus, retryRelaxedCamera, source, stream]);
 
   React.useEffect(() => {
     if (!stream || source === 'camera' || didRetryRelaxedCameraRef.current) return;
     const timer = setTimeout(() => {
       if (sourceRef.current === 'camera' || didRetryRelaxedCameraRef.current) return;
-      didRetryRelaxedCameraRef.current = true;
-      void start({
-        ...RELAXED_CAPTURE_CONSTRAINTS,
-        facingMode: constraints.facingMode ?? settingsFacing ?? 'environment',
-      });
+      retryRelaxedCamera();
     }, RELAXED_CAMERA_RETRY_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [constraints.facingMode, settingsFacing, source, start, stream]);
+  }, [retryRelaxedCamera, source, stream]);
 
   React.useEffect(() => {
     if (!stream) {
@@ -557,21 +574,34 @@ export default function NeuralLensScreen(): React.JSX.Element {
   }, [adapter, device, ref, setFrameInfo, setGrabError]);
 
   const cameraOn = stream != null;
-  const canvasSide = Math.max(260, Math.min(windowWidth - 32, windowHeight - 360));
+  const canvasSide = Math.max(260, Math.min(windowWidth - 32, windowHeight - 520));
   const activeLabel = LABELS[prediction.labelIndex] ?? LABELS[0];
   const cameraFacing = constraints.facingMode ?? settingsFacing ?? 'environment';
+  const captureProfileLabel = captureProfile === 'demo' ? 'demo 640x480@30' : 'relaxed @30';
+  const reportedFrameRate =
+    typeof settings?.frameRate === 'number' ? `${Math.round(settings.frameRate)} fps` : 'fps pending';
+  const cameraSettingsLine =
+    typeof settings?.width === 'number' && typeof settings?.height === 'number'
+      ? `${settings.width}x${settings.height} · ${reportedFrameRate} · ${settingsFacing ?? 'facing pending'}`
+      : 'settings pending';
+  const sourceLabel =
+    source === 'camera' ? 'Camera frames' : source === 'pending' ? 'Opening camera' : 'Synthetic fallback';
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
       didRetryRelaxedCameraRef.current = false;
+      setCaptureProfile('demo');
+      resetFrameState();
       applyConstraints({ ...DEMO_CAPTURE_CONSTRAINTS, facingMode });
     },
-    [applyConstraints]
+    [applyConstraints, resetFrameState]
   );
   const startDemoCamera = React.useCallback((): void => {
     didRetryRelaxedCameraRef.current = false;
+    setCaptureProfile('demo');
+    resetFrameState();
     void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
-  }, [constraints, start]);
+  }, [constraints, resetFrameState, start]);
 
   return (
     <ScrollView
@@ -579,29 +609,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
       contentContainerStyle={styles.content}
       contentInsetAdjustmentBehavior="automatic">
       <Canvas ref={ref} style={[styles.canvas, { height: canvasSide, width: canvasSide }]} />
-
-      <View style={styles.predictionPanel}>
-        <Text style={[styles.predictionLabel, { color: activeLabel.color }]}>{activeLabel.name}</Text>
-        <Text style={styles.predictionMeta}>{Math.round(prediction.confidence * 100)}% confidence</Text>
-        <View style={styles.bars}>
-          {LABELS.map((label, index) => (
-            <View key={label.name} style={styles.barRow}>
-              <Text style={styles.barLabel}>{label.name}</Text>
-              <View style={styles.barTrack}>
-                <View
-                  style={[
-                    styles.barFill,
-                    {
-                      backgroundColor: label.color,
-                      width: `${Math.round((prediction.probabilities[index] ?? 0) * 100)}%`,
-                    },
-                  ]}
-                />
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
 
       <View style={styles.controls}>
         <View style={styles.controlRow}>
@@ -626,6 +633,43 @@ export default function NeuralLensScreen(): React.JSX.Element {
           style={[styles.button, styles.fullButton]}>
           <Text style={styles.buttonText}>{cameraOn ? 'Stop camera' : 'Start camera'}</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.predictionPanel}>
+        <Text style={[styles.predictionLabel, { color: activeLabel.color }]}>{activeLabel.name}</Text>
+        <Text style={styles.predictionMeta}>{Math.round(prediction.confidence * 100)}% confidence</Text>
+        <View style={styles.captureStatus}>
+          <Text
+            style={[
+              styles.captureBadge,
+              source === 'camera' ? styles.captureBadgeLive : styles.captureBadgeFallback,
+            ]}>
+            {sourceLabel}
+          </Text>
+          <Text style={styles.captureText}>request: {captureProfileLabel}</Text>
+          <Text style={styles.captureText}>camera: {cameraStatus} · {cameraSettingsLine}</Text>
+          <Text style={styles.captureText}>
+            uploaded: {frameSize} · iOS frames: {lastFrameNumber ?? 'pending'}
+          </Text>
+        </View>
+        <View style={styles.bars}>
+          {LABELS.map((label, index) => (
+            <View key={label.name} style={styles.barRow}>
+              <Text style={styles.barLabel}>{label.name}</Text>
+              <View style={styles.barTrack}>
+                <View
+                  style={[
+                    styles.barFill,
+                    {
+                      backgroundColor: label.color,
+                      width: `${Math.round((prediction.probabilities[index] ?? 0) * 100)}%`,
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+          ))}
+        </View>
       </View>
 
       <View style={styles.hud}>
@@ -703,7 +747,7 @@ const styles = StyleSheet.create({
   content: {
     alignItems: 'center',
     gap: 12,
-    paddingBottom: 32,
+    paddingBottom: 136,
   },
   canvas: {
     backgroundColor: '#080b12',
@@ -724,6 +768,33 @@ const styles = StyleSheet.create({
   },
   bars: {
     gap: 6,
+  },
+  captureStatus: {
+    gap: 4,
+    paddingTop: 4,
+  },
+  captureBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 8,
+    fontFamily: 'Menlo',
+    fontSize: 11,
+    fontWeight: '700',
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  captureBadgeFallback: {
+    backgroundColor: 'rgba(251, 191, 36, 0.16)',
+    color: '#fcd34d',
+  },
+  captureBadgeLive: {
+    backgroundColor: 'rgba(74, 222, 128, 0.16)',
+    color: '#86efac',
+  },
+  captureText: {
+    color: '#cbd5e1',
+    fontFamily: 'Menlo',
+    fontSize: 10,
   },
   barRow: {
     alignItems: 'center',
