@@ -2,9 +2,16 @@ import { Stack, useFocusEffect } from 'expo-router';
 import { GlassContainer, GlassView } from 'expo-glass-effect';
 import * as Linking from 'expo-linking';
 import * as React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { Button as UIButton, Host } from '@expo/ui/swift-ui';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { labelStyle } from '@expo/ui/swift-ui/modifiers';
+import Animated, {
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme } from '@/hooks/use-theme';
 import { notifyTestRunStart } from '@/lib/camera-run-events';
@@ -146,6 +153,19 @@ function perfDump(label: string): void {
 
 const now = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
 
+// iOS HIG: a compact navigation bar is 44pt and the large-title extension
+// adds another 52pt. We use these to seed the initial scroll position
+// (avoiding a one-frame flash) and to clamp the pill at the compact bar's
+// bottom once the user has scrolled past the large-title collapse.
+const COMPACT_NAV_HEIGHT = 44;
+const LARGE_TITLE_HEIGHT = 52;
+
+// Vertical room reserved at the top of the ScrollView's contentContainer
+// so the absolutely-positioned pill never covers the first row of content.
+// Calibrated to the pill capsule's outer dimensions including its slot
+// padding (see styles.pillOverlay).
+const PILL_SLOT_HEIGHT = 64;
+
 export default function RunTestsScreen(): React.JSX.Element {
   perf.screenRenders++;
   const theme = useTheme();
@@ -201,8 +221,20 @@ export default function RunTestsScreen(): React.JSX.Element {
     flushTimerRef.current = setTimeout(flushPending, FLUSH_INTERVAL_MS);
   }, [flushPending]);
 
+  // AbortController for the currently-running suite. Stored in a ref so
+  // `cancel` can grab the controller without needing to be re-created when
+  // it changes. Replaced on every `run()`.
+  const runAbortRef = React.useRef<AbortController | null>(null);
+
+  const cancel = React.useCallback(() => {
+    runAbortRef.current?.abort();
+  }, []);
+
   const run = React.useCallback(async () => {
     if (!videoRef.current) return;
+    runAbortRef.current?.abort();
+    const ac = new AbortController();
+    runAbortRef.current = ac;
     perfReset();
     const t0 = now();
     notifyTestRunStart();
@@ -228,6 +260,7 @@ export default function RunTestsScreen(): React.JSX.Element {
 
     await testing.runAllTests(undefined, {
       environment: env,
+      signal: ac.signal,
       resetEnvironment: resetTestGlobals,
       resetFile: resetTestFile,
       onStart: (entry, i) => {
@@ -326,67 +359,74 @@ export default function RunTestsScreen(): React.JSX.Element {
   }));
 
 
+  // Rendered into the native nav bar's right slot. An SF Symbol keeps the
+  // action compact so it doesn't compete with the large-title text. While a
+  // run is in flight the button flips to `stop.fill` and a destructive role
+  // so the affordance honestly invites a cancel — tapping it aborts the
+  // loop (see `cancel`/`run`'s AbortController). We deliberately leave the
+  // rest of the header options alone — touching things like `headerStyle`,
+  // `headerBlurEffect`, or `headerTransparent` can change content insets or
+  // the large-title shrink animation, both of which we depend on.
+  const headerRight = React.useCallback(
+    () => (
+      <Host matchContents>
+        <UIButton
+          onPress={running ? cancel : run}
+          systemImage={running ? 'stop.fill' : 'play.fill'}
+          label={running ? 'Stop' : 'Run tests'}
+          role={running ? 'destructive' : 'default'}
+          modifiers={[labelStyle('iconOnly')]}
+        />
+      </Host>
+    ),
+    [running, run, cancel]
+  );
+
+  // Drive the pill's `top` from the scroll position. UIScrollView places
+  // its content at `-contentOffset.y` in screen coordinates, and with
+  // `contentInsetAdjustmentBehavior="automatic"` the adjusted top inset is
+  // the *current* nav-bar height — so `-scrollY` is exactly where the bar's
+  // bottom sits on screen at any moment, including mid-animation. Clamping
+  // to the compact bottom keeps the pill docked once the large title has
+  // fully collapsed and the user keeps scrolling.
+  //
+  // We seed `scrollY` to the expanded-large-title offset on first render so
+  // the pill doesn't flicker at compactBottom for a frame before the first
+  // scroll event arrives.
+  const insets = useSafeAreaInsets();
+  const compactBottom = insets.top + COMPACT_NAV_HEIGHT;
+  const largeTitleBottom = compactBottom + LARGE_TITLE_HEIGHT;
+  const scrollY = useSharedValue(-largeTitleBottom);
+  const scrollHandler = useAnimatedScrollHandler({
+    onScroll: (e) => {
+      scrollY.value = e.contentOffset.y;
+    },
+  });
+  const pillContainerStyle = useAnimatedStyle(() => ({
+    top: Math.max(compactBottom, -scrollY.value),
+  }));
+
   return (
     <React.Profiler id="screen" onRender={onProfilerRender}>
-      {/* Large "Tests" title that shrinks to compact on scroll — standard
-          iOS large-title behavior. The floating pill is positioned
-          absolutely below the (initial expanded) nav so it doesn't try
-          to track the nav transition; instead it stays put. */}
       <Stack.Screen
         options={{
           title: 'Tests',
           headerLargeTitle: true,
           headerShadowVisible: false,
+          headerRight,
         }}
       />
-      <ScrollView
+      {/* ScrollView is rendered as a direct child of the screen so that the
+          iOS `UINavigationController` finds it as the primary scroll view
+          and drives the large-title shrink animation from its
+          `contentOffset`. Wrapping it in another `<View>` breaks that
+          linkage — the title stops shrinking on scroll. */}
+      <Animated.ScrollView
         style={[styles.scrollView, { backgroundColor: theme.background }]}
         contentContainerStyle={styles.contentContainer}
-        contentInsetAdjustmentBehavior="automatic">
-        <View style={styles.pillSlot}>
-          <GlassContainer spacing={32} style={styles.glassContainer}>
-            <View style={styles.pillFrame}>
-              <GlassView
-                style={styles.pill}
-                glassEffectStyle="clear"
-                pointerEvents="box-none">
-                <View style={styles.runButtonHost}>
-                  <Host matchContents>
-                    <UIButton
-                      onPress={running ? undefined : run}
-                      label={running ? 'Running…' : 'Run tests'}
-                    />
-                  </Host>
-                </View>
-                <View style={styles.pillDivider} />
-                <View style={styles.pillProgressColumn}>
-                  <View style={styles.progressBarOuter}>
-                    <Animated.View
-                      style={[
-                        styles.progressBarInner,
-                        { backgroundColor: theme.text },
-                        progressBarStyle,
-                      ]}
-                    />
-                  </View>
-                  <Text
-                    style={[styles.pillCounter, { color: theme.text }]}
-                    numberOfLines={1}>
-                    {applicableCompleted} / {applicableTotal}
-                  </Text>
-                  <Text
-                    style={[styles.pillBreakdown, { color: theme.textSecondary }]}
-                    numberOfLines={2}
-                    ellipsizeMode="tail">
-                    {counts.pass} pass · {counts.fail} fail
-                    {counts.timeout > 0 ? ` · ${counts.timeout} timeout` : ''}
-                    {counts.skip > 0 ? ` · ${counts.skip} skip` : ''}
-                  </Text>
-                </View>
-              </GlassView>
-            </View>
-          </GlassContainer>
-        </View>
+        contentInsetAdjustmentBehavior="automatic"
+        onScroll={scrollHandler}
+        scrollEventThrottle={16}>
         <View style={styles.headerBlock}>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
             {applicability != null
@@ -421,7 +461,48 @@ export default function RunTestsScreen(): React.JSX.Element {
             ))}
           </View>
         </React.Profiler>
-      </ScrollView>
+      </Animated.ScrollView>
+
+      {/* Floating pill, sibling of the ScrollView so it lives above the
+          scroll content (and the iOS nav bar's translucent material, since
+          it's painted into the screen view at a higher subview index).
+          `pointerEvents="box-none"` lets touches pass through the outer
+          slot's gutters; only the pill itself actually captures input. */}
+      <Animated.View
+        style={[styles.pillOverlay, pillContainerStyle]}
+        pointerEvents="box-none">
+        <GlassContainer spacing={32} style={styles.glassContainer}>
+          <GlassView
+            style={styles.pill}
+            glassEffectStyle="clear"
+            pointerEvents="box-none">
+            <View style={styles.pillTopRow}>
+              <Text
+                style={[styles.pillCounter, { color: theme.text }]}
+                numberOfLines={1}>
+                {applicableCompleted} / {applicableTotal}
+              </Text>
+              <Text
+                style={[styles.pillBreakdown, { color: theme.textSecondary }]}
+                numberOfLines={1}
+                ellipsizeMode="tail">
+                {counts.pass} pass · {counts.fail} fail
+                {counts.timeout > 0 ? ` · ${counts.timeout} timeout` : ''}
+                {counts.skip > 0 ? ` · ${counts.skip} skip` : ''}
+              </Text>
+            </View>
+            <View style={styles.progressBarOuter}>
+              <Animated.View
+                style={[
+                  styles.progressBarInner,
+                  { backgroundColor: theme.text },
+                  progressBarStyle,
+                ]}
+              />
+            </View>
+          </GlassView>
+        </GlassContainer>
+      </Animated.View>
     </React.Profiler>
   );
 }
@@ -740,55 +821,48 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   contentContainer: {
-    // No outer padding — children manage their own horizontal padding so a
-    // sticky child can extend its background (the theme color) edge-to-edge
-    // without leaving a visible 16px gutter when scrolled.
+    // Reserve room at the top equal to the pill capsule's height plus its
+    // gutters so the first row of content never slides under the floating
+    // pill at scroll rest. `contentInsetAdjustmentBehavior="automatic"`
+    // pushes everything below the nav bar; this padding pushes everything
+    // below the pill on top of that.
+    paddingTop: PILL_SLOT_HEIGHT,
     paddingBottom: 32,
   },
   headerBlock: {
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 4,
     gap: 12,
   },
-  pillSlot: {
-    // In-flow slot at the top of the ScrollView's contentContainer. The
-    // pill scrolls with the page (so the iOS large-title transition is
-    // unaffected) but sits prominently below the nav at rest. Side
-    // margins so the pill floats rather than spanning edge-to-edge.
+  pillOverlay: {
+    // Floating capsule rendered above the ScrollView. `top` is animated
+    // from the scroll handler so it tracks the nav bar's bottom as the
+    // large title collapses (see `pillContainerStyle`).
+    position: 'absolute',
+    left: 0,
+    right: 0,
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
+    paddingTop: 6,
     alignItems: 'stretch',
   },
   glassContainer: {
-    // GlassContainer is a plain View; flex 1 ensures it stretches across
-    // pillSlot's width so the pill inside can size to a stable width.
-    alignSelf: 'stretch',
-  },
-  pillFrame: {
-    // Stretches to the GlassContainer's full width so the pill's geometry
-    // doesn't depend on its text content — `Run tests` ↔ `Running…` and
-    // counter swaps no longer cause the whole capsule to resize.
+    // GlassContainer is a plain View; stretching it lets the pill size to
+    // the full content width.
     alignSelf: 'stretch',
   },
   pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     // Capsule corners (any value >= half the height clamps to a full pill).
     borderRadius: 999,
     overflow: 'hidden',
   },
-  pillDivider: {
-    width: StyleSheet.hairlineWidth,
-    alignSelf: 'stretch',
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  pillProgressColumn: {
-    flex: 1,
-    gap: 4,
+  pillTopRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
   },
   subtitle: {
     fontSize: 12,
@@ -804,11 +878,6 @@ const styles = StyleSheet.create({
   video: {
     flex: 1,
   },
-  runButtonHost: {
-    // Stable width so swapping the label text between "Run tests" and
-    // "Running…" doesn't shift the rest of the pill's layout.
-    minWidth: 96,
-  },
   pillCounter: {
     fontFamily: 'Menlo',
     fontSize: 13,
@@ -816,27 +885,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   pillBreakdown: {
+    flexShrink: 1,
     fontFamily: 'Menlo',
     fontSize: 11,
     fontVariant: ['tabular-nums'],
-    // Reserve room for two lines so the pill's height is stable whether
-    // the breakdown is short ("0 pass · 0 fail") or grows past one line
-    // ("12 pass · 1 fail · 1 timeout · 1 skip").
-    minHeight: 28,
   },
   progressBarOuter: {
-    height: 4,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 2,
+    height: 3,
+    backgroundColor: 'rgba(127,127,127,0.25)',
+    borderRadius: 1.5,
     overflow: 'hidden',
   },
   progressBarInner: {
     height: '100%',
-  },
-  progressText: {
-    fontFamily: 'Menlo',
-    fontSize: 11,
-    fontVariant: ['tabular-nums'],
   },
   resultsList: {
     gap: 14,

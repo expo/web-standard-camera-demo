@@ -766,6 +766,11 @@ export interface RunOptions {
    *  the start of the suite. Passing it explicitly lets the UI use the same
    *  applicability counts it displays. */
   environment?: TestEnvironment;
+  /** Aborts the run. The loop drops the in-flight test (its promise keeps
+   *  resolving in the background — individual test bodies don't observe a
+   *  signal — but the runner ignores the result and bails out before the
+   *  next iteration. */
+  signal?: AbortSignal;
 }
 
 /** Snapshot of every test currently registered, for UI pre-rendering. */
@@ -981,6 +986,9 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   let previousSource: string | null | undefined = undefined;
 
   for (let i = 0; i < tests.length; i++) {
+    if (options.signal?.aborted) {
+      break;
+    }
     const entry = tests[i];
     // Per-file reset on the first test and whenever the source changes.
     // `undefined` is the sentinel for "haven't started yet"; once we run a
@@ -1033,6 +1041,15 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('timeout')), DEFAULT_TIMEOUT_MS)
         ),
+        // Settle as soon as the caller aborts — so tapping "stop" mid-test
+        // doesn't have to wait out the 15s timeout before the loop sees it.
+        new Promise<never>((_, reject) => {
+          if (options.signal?.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }),
       ]);
       result = {
         name: entry.name,
@@ -1043,6 +1060,11 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
       };
     } catch (e) {
       const err = e as Error;
+      if (err.message === 'aborted') {
+        // Bail out of the loop immediately; record nothing for the in-flight
+        // test (it didn't finish) and let the caller see the partial run.
+        break;
+      }
       if (err.message === 'timeout') {
         result = {
           name: entry.name,
