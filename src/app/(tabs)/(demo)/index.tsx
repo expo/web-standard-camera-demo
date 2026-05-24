@@ -33,10 +33,10 @@ export default function DemoCatalogScreen(): React.JSX.Element {
 
       <DemoChoiceCard
         accentColor="#f59e0b"
-        description="A real-time vision-language captioning candidate based on Liquid AI's browser WebGPU demo."
-        detail="getUserMedia -> srcObject -> frame capture -> Transformers.js WebGPU"
+        description="A research entry for Liquid AI's browser WebGPU captioning demo."
+        detail="source demo: getUserMedia -> canvas frame -> Transformers.js WebGPU"
         href="/lfm2-vl"
-        status="candidate"
+        status="research"
         title="LFM2-VL captioning"
       />
     </ScrollView>

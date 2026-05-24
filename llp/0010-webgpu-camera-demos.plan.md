@@ -189,7 +189,7 @@ RawImage(frame)
 same Transformers.js WebGPU model path
 ```
 
-**Status:** Candidate route. The app should expose this as a selectable demo option before bundling the model, so the team can evaluate the UX and remaining runtime risks without hiding the existing cube demo.
+**Status:** Research route. The app should expose this as a selectable demo option before bundling the model, but the route must not start the local camera or run a frame probe until the Transformers.js runtime path is validated. A candidate route that looks interactive but does not run inference is misleading and can destabilize the app without advancing the demo.
 
 **Risks to verify before calling it shipped.**
 
@@ -202,7 +202,7 @@ same Transformers.js WebGPU model path
 
 1. **Foundation** — `react-native-wgpu` installed, hello-triangle verified. ✅ done (LLP 0010 milestone 0).
 2. **Demo catalog route.** Keep the existing cube demo and expose candidate demos from a chooser. ✅ done.
-3. **LFM2-VL candidate route.** Expose the source demo, mirror its prompt/input shape, and verify camera frame capture through the existing `ImageCapture` bridge before model bundling.
+3. **LFM2-VL research route.** Expose the source demo and mirror its prompt/input shape without starting local capture. Verify Transformers.js on Hermes V1 before wiring camera frames through the existing `ImageCapture` bridge.
 4. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
 5. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, document the API in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md). One to two days. Task #17.
 6. **Demo 1: rotating cube of cameras.** One day. Task #18.
