@@ -129,8 +129,10 @@ fn classify() {
 const SYNTHETIC_SIZE = 256;
 const FRAME_UPLOAD_INTERVAL_MS = 100;
 const INFERENCE_INTERVAL_MS = 450;
+const RELAXED_CAMERA_RETRY_MS = 2500;
 const SCORE_FLOATS = 8;
 const DEMO_CAPTURE_CONSTRAINTS = { width: 640, height: 480, frameRate: 30 } as const;
+const RELAXED_CAPTURE_CONSTRAINTS = { frameRate: 30 } as const;
 
 const LABELS = [
   { color: '#60a5fa', name: 'Low light' },
@@ -193,7 +195,13 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const lastGrabErrorRef = React.useRef<string | null>(null);
   const frameSizeRef = React.useRef('pending');
   const predictionRef = React.useRef(prediction);
+  const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
+  const didRetryRelaxedCameraRef = React.useRef(false);
+  const settingsFacing =
+    settings?.facingMode === 'user' || settings?.facingMode === 'environment'
+      ? settings.facingMode
+      : undefined;
 
   const setGrabError = React.useCallback((message: string | null): void => {
     if (lastGrabErrorRef.current === message) return;
@@ -213,12 +221,42 @@ export default function NeuralLensScreen(): React.JSX.Element {
   }, [prediction]);
 
   React.useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
+
+  React.useEffect(() => {
     if (didAutoStartCameraRef.current) return;
     if (cameraStatus === 'requesting' || cameraStatus === 'starting') return;
     didAutoStartCameraRef.current = true;
     void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraStatus]);
+
+  React.useEffect(() => {
+    if (didRetryRelaxedCameraRef.current || source === 'camera' || cameraStatus !== 'error' || stream) {
+      return;
+    }
+    didRetryRelaxedCameraRef.current = true;
+    void start({
+      ...RELAXED_CAPTURE_CONSTRAINTS,
+      facingMode: constraints.facingMode ?? settingsFacing ?? 'environment',
+    });
+  }, [cameraStatus, constraints.facingMode, settingsFacing, source, start, stream]);
+
+  React.useEffect(() => {
+    if (!stream || source === 'camera' || didRetryRelaxedCameraRef.current) return;
+    const timer = setTimeout(() => {
+      if (sourceRef.current === 'camera' || didRetryRelaxedCameraRef.current) return;
+      didRetryRelaxedCameraRef.current = true;
+      void start({
+        ...RELAXED_CAPTURE_CONSTRAINTS,
+        facingMode: constraints.facingMode ?? settingsFacing ?? 'environment',
+      });
+    }, RELAXED_CAMERA_RETRY_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [constraints.facingMode, settingsFacing, source, start, stream]);
 
   React.useEffect(() => {
     if (!stream) {
@@ -405,6 +443,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
             if (frameSource !== lastReportedSource) {
               lastReportedSource = frameSource;
+              sourceRef.current = frameSource;
               setSource(frameSource);
               if (__DEV__) {
                 // eslint-disable-next-line no-console
@@ -520,19 +559,17 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const cameraOn = stream != null;
   const canvasSide = Math.max(260, Math.min(windowWidth - 32, windowHeight - 360));
   const activeLabel = LABELS[prediction.labelIndex] ?? LABELS[0];
-  const settingsFacing =
-    settings?.facingMode === 'user' || settings?.facingMode === 'environment'
-      ? settings.facingMode
-      : undefined;
   const cameraFacing = constraints.facingMode ?? settingsFacing ?? 'environment';
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
+      didRetryRelaxedCameraRef.current = false;
       applyConstraints({ ...DEMO_CAPTURE_CONSTRAINTS, facingMode });
     },
     [applyConstraints]
   );
   const startDemoCamera = React.useCallback((): void => {
+    didRetryRelaxedCameraRef.current = false;
     void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
   }, [constraints, start]);
 

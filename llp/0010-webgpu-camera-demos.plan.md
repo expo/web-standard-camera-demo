@@ -153,7 +153,7 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, applies fixed model weights, and writes class logits into a storage buffer. A `MAP_READ` buffer copies back only eight floats: five logits plus three feature readouts.
 
-**Status:** First version implemented as `neural-lens`. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
+**Status:** First version implemented as `neural-lens`. It prefers the demo-sized capture profile used by the shader lens, then retries once with a relaxed camera request if real frames do not arrive. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
 
 **Complexity:** Low. No model download, no tokenizer, no runtime dependency. The main risk is GPU buffer readback support in `react-native-wgpu`, which is validated by the route smoke test.
 
