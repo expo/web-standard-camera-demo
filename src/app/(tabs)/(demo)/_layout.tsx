@@ -4,10 +4,18 @@ export const unstable_settings = {
   initialRouteName: 'index',
 };
 
-// The cube screen is rendered on a dark WebGPU clear color, so it keeps a
-// light transparent header. Other demo routes use the current app theme.
+// The WebGPU demo screens render on dark clear colors, so they keep light
+// transparent headers. The catalog route uses the current app theme.
 const DARK_BG = '#0a0e1a';
 const LIGHT_TINT = '#f8fafc';
+const DARK_DEMO_HEADER_OPTIONS = {
+  headerTransparent: true,
+  headerTintColor: LIGHT_TINT,
+  headerLargeTitleStyle: { color: LIGHT_TINT },
+  headerStyle: { backgroundColor: 'transparent' },
+  headerTitleStyle: { color: LIGHT_TINT },
+  contentStyle: { backgroundColor: DARK_BG },
+};
 
 export default function DemoStackLayout(): React.JSX.Element {
   return (
@@ -21,15 +29,23 @@ export default function DemoStackLayout(): React.JSX.Element {
         name="cube"
         options={{
           title: 'WebGPU Demo',
-          headerTransparent: true,
-          headerTintColor: LIGHT_TINT,
-          headerLargeTitleStyle: { color: LIGHT_TINT },
-          headerStyle: { backgroundColor: 'transparent' },
-          headerTitleStyle: { color: LIGHT_TINT },
-          contentStyle: { backgroundColor: DARK_BG },
+          ...DARK_DEMO_HEADER_OPTIONS,
         }}
       />
-      <Stack.Screen name="shader-lens" options={{ title: 'Shader Lens' }} />
+      <Stack.Screen
+        name="shader-lens"
+        options={{
+          title: 'Shader Lens',
+          ...DARK_DEMO_HEADER_OPTIONS,
+        }}
+      />
+      <Stack.Screen
+        name="neural-lens"
+        options={{
+          title: 'Neural Lens',
+          ...DARK_DEMO_HEADER_OPTIONS,
+        }}
+      />
     </Stack>
   );
 }

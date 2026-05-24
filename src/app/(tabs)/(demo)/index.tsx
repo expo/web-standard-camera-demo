@@ -17,8 +17,8 @@ export default function DemoCatalogScreen(): React.JSX.Element {
       <View style={styles.header}>
         <Text style={[styles.eyebrow, { color: theme.textSecondary }]}>Web APIs on Expo</Text>
         <Text style={[styles.subtitle, { color: theme.text }]}>
-          Choose the proof point for the conversation: a WebGPU camera cube, or a live shader lens
-          that stays inside the WebGPU path.
+          Choose the proof point for the conversation: camera frames rendered, transformed, or
+          classified through WebGPU without a WASM runtime.
         </Text>
       </View>
 
@@ -38,6 +38,15 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         href="/shader-lens"
         status="ready"
         title="Shader lens"
+      />
+
+      <DemoChoiceCard
+        accentColor="#4ade80"
+        description="A tiny no-WASM classifier that runs WGSL compute over the live camera texture."
+        detail="getUserMedia -> GPUTexture -> WGSL compute -> class scores"
+        href="/neural-lens"
+        status="ready"
+        title="Neural lens"
       />
     </ScrollView>
   );

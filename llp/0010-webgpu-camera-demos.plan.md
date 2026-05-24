@@ -31,6 +31,7 @@ Each demo is small, ships on its own, and uses only one custom bridge: a way to 
 |---|---|
 | Rotating cube of cameras | A spinning cube, every face is the live camera, all in WGSL — a direct port of the [WebGPU samples' `videoUploading`](https://webgpu.github.io/webgpu-samples/?sample=videoUploading) demo. |
 | Shader playground | Live camera processed by a swappable fragment shader (kaleidoscope, edge-detect, posterize, sobel) — Snapchat-lens feel without a single line of native CV code. |
+| Tiny WebGPU classifier | A camera-fed classifier implemented directly in WGSL compute shaders — proves local AI inference without ONNX, Transformers.js, or WebAssembly. |
 | MNIST on the camera (stretch) | Point the phone at a hand-drawn digit, read the classification. ML inference in WGSL compute shaders, model weights downloaded as a `.safetensors`-class blob, all browser-shaped. |
 | LFM2-VL video captioning (research) | A live camera feed captioned by a Transformers.js vision-language model on WebGPU — compelling, but blocked in Expo until the WebGPU model runtime can run without WebAssembly. |
 
@@ -133,11 +134,30 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Architecture.** Same data path as Demo 1 from `getUserMedia` through `GPUTexture`. The difference is the render target: a full-screen triangle (or quad) rather than a cube, and the fragment shader varies per effect.
 
-**Status:** First version implemented. The route uploads camera frames through the same `ImageCapture.grabFrame()` byte path as the cube demo, then samples the texture from WGSL with selectable effects: original, posterize, edges, heat, and kaleidoscope. It has a synthetic fallback when no camera frame is available.
+**Status:** First version implemented. The route uses a demo-sized 640×480 @ 30 fps capture profile, uploads camera frames through the same `ImageCapture.grabFrame()` byte path as the cube demo at a capped cadence, then samples the texture from WGSL with selectable effects: original, posterize, edges, heat, and kaleidoscope. It has a synthetic fallback when no camera frame is available.
 
 **Complexity:** Low to medium. The first effect is the bulk of the work (sets up the full-screen pass, sample binding, parameter uniform buffer). Each additional effect is a small WGSL file plus a chip in the UI.
 
-### Demo 3: MNIST on the camera (stretch)
+### Demo 3: Tiny WebGPU classifier
+
+**Pitch:** A small camera-fed classifier runs entirely in WGSL compute. It samples the live camera texture, emits class scores, and overlays the top label on the preview without loading any WebAssembly-backed ML runtime.
+
+**Why this demo.** It answers the no-WASM AI question directly. ONNX Runtime WebGPU and Transformers.js are blocked by their WebAssembly layer in Hermes, but WebGPU compute itself works. This demo keeps the AI scope intentionally tiny so the runtime story is true: JavaScript orchestrates WebGPU, WGSL does inference, and JS reads back only final scores.
+
+**UX.**
+
+1. Open the demo. The camera preview appears with a subtle tint from the current class.
+2. A prediction panel shows the top scene label and confidence bars.
+3. Back/front controls reuse the same camera constraint path as the other demos.
+4. On simulators with no camera, an animated synthetic texture keeps the inference path visible.
+
+**Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, applies fixed model weights, and writes class logits into a storage buffer. A `MAP_READ` buffer copies back only eight floats: five logits plus three feature readouts.
+
+**Status:** First version implemented as `neural-lens`. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
+
+**Complexity:** Low. No model download, no tokenizer, no runtime dependency. The main risk is GPU buffer readback support in `react-native-wgpu`, which is validated by the route smoke test.
+
+### Demo 4: MNIST on the camera (stretch)
 
 **Pitch:** Point the phone at a hand-drawn digit. The classification appears in real time.
 
@@ -155,7 +175,7 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Complexity:** Medium-high. The inference pipeline itself is well-trodden territory (the react-native-wgpu sample exists), but it adds model-asset loading, a multi-pass compute pipeline, and a CPU readback. Worth the effort only if the simpler demos land cleanly.
 
-### Demo 4: LFM2-VL video captioning (candidate)
+### Demo 5: LFM2-VL video captioning (candidate)
 
 **Pitch:** The live camera is fed into a local vision-language model that answers prompts about the current frame. This is the most legible "web APIs on Expo" story because the original browser demo is already an app-shaped experience, not a graphics sample.
 
@@ -203,11 +223,12 @@ same Transformers.js WebGPU model path
 1. **Foundation** — `react-native-wgpu` installed, hello-triangle verified. ✅ done (LLP 0010 milestone 0).
 2. **Demo catalog route.** Keep the existing cube demo and expose candidate demos from a chooser. ✅ done.
 3. **Demo 2: shader playground.** ✅ First version implemented: selectable WGSL effects on the live camera stream without WASM.
-4. **LFM2-VL research.** Keep as research until a WebGPU VLM runtime runs under Hermes without WebAssembly.
-5. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
-6. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, document the API in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md). One to two days. Task #17.
-7. **Demo 1: rotating cube of cameras.** One day. Task #18.
-8. **Demo 3: MNIST.** Stretch — schedule only after Demos 1 and 2 land.
+4. **Demo 3: tiny WebGPU classifier.** ✅ First version implemented: no-WASM WGSL compute scores on the live camera texture.
+5. **LFM2-VL research.** Keep as research until a WebGPU VLM runtime runs under Hermes without WebAssembly.
+6. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
+7. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, document the API in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md). One to two days. Task #17.
+8. **Demo 1: rotating cube of cameras.** One day. Task #18.
+9. **Demo 4: MNIST.** Stretch — schedule only after simpler demos land.
 
 Total wall-clock to Demo 1 shipping: roughly four days from milestone 0, assuming no surprises.
 

@@ -121,6 +121,13 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       const effective = next ?? constraints;
       const requestId = startRequestRef.current + 1;
       startRequestRef.current = requestId;
+      const previous = streamRef.current;
+      if (previous) {
+        streamRef.current = null;
+        setStreamState(null);
+        setSettings(null);
+        for (const t of previous.getTracks()) t.stop();
+      }
       setError(null);
       setStatus('requesting');
       setUserStopped(false);
@@ -151,16 +158,10 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
           for (const t of s.getTracks()) t.stop();
           return;
         }
-        // Hot-swap: install the new stream before stopping the previous one
-        // so consumers see no interruption.
-        const previous = streamRef.current;
         streamRef.current = s;
         setStreamState(s);
         setSettings(s.getVideoTracks()[0]?.getSettings() ?? null);
         setStatus('starting');
-        if (previous) {
-          for (const t of previous.getTracks()) t.stop();
-        }
 
         // Refresh the device list off the hot-swap path so the picker rows
         // don't reflow mid-tap.

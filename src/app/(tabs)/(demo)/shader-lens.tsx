@@ -113,6 +113,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 
 const SYNTHETIC_SIZE = 256;
 const FRAME_UPLOAD_INTERVAL_MS = 100;
+const DEMO_CAPTURE_CONSTRAINTS = { width: 640, height: 480, frameRate: 30 } as const;
 
 const EFFECTS = [
   { label: 'Original', value: 0 },
@@ -137,7 +138,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
     error: cameraError,
     constraints,
     settings,
-    userStopped,
     start,
     stop,
     applyConstraints,
@@ -157,6 +157,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
   const rafRef = React.useRef<number | null>(null);
   const lastGrabErrorRef = React.useRef<string | null>(null);
+  const didAutoStartCameraRef = React.useRef(false);
 
   const setGrabError = React.useCallback((message: string | null): void => {
     if (lastGrabErrorRef.current === message) return;
@@ -173,12 +174,12 @@ export default function ShaderLensScreen(): React.JSX.Element {
   }, [intensity]);
 
   React.useEffect(() => {
-    if (userStopped) return;
-    if (!stream && cameraStatus !== 'requesting' && cameraStatus !== 'error') {
-      void start();
-    }
+    if (didAutoStartCameraRef.current) return;
+    if (cameraStatus === 'requesting' || cameraStatus === 'starting') return;
+    didAutoStartCameraRef.current = true;
+    void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream, cameraStatus, userStopped]);
+  }, [cameraStatus]);
 
   React.useEffect(() => {
     if (!stream) {
@@ -411,7 +412,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
-      applyConstraints({ facingMode });
+      applyConstraints({ ...DEMO_CAPTURE_CONSTRAINTS, facingMode });
     },
     [applyConstraints]
   );
