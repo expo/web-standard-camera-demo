@@ -474,7 +474,7 @@ export default function RunTestsScreen(): React.JSX.Element {
         <GlassContainer spacing={32} style={styles.glassContainer}>
           <GlassView
             style={styles.pill}
-            glassEffectStyle="clear"
+            glassEffectStyle="regular"
             pointerEvents="box-none">
             <View style={styles.pillTopRow}>
               <Text
