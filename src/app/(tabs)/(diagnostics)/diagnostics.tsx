@@ -10,6 +10,12 @@ import {
   type NativeDiagnostics,
 } from '../../../../modules/standard-camera';
 
+const BUILD_NOTE =
+  'Native "built" is the executable file\'s modification time — it changes on every native ' +
+  'rebuild. JS "built" is when app.config.ts was evaluated to produce this bundle — it ' +
+  'matches the Metro session start in dev, and the moment `expo export:embed` ran for ' +
+  'release builds.';
+
 // Read-only diagnostics. Answers two questions that came up while debugging
 // the demo on a physical device:
 //   1. What code is the device actually running? Native and JS revisions are
@@ -22,17 +28,13 @@ import {
 
 export default function DiagnosticsScreen(): React.JSX.Element {
   const theme = useTheme();
-  const [diag, setDiag] = React.useState<NativeDiagnostics | null>(null);
-  const [refreshedAt, setRefreshedAt] = React.useState<number>(() => Date.now());
+  const [diag, setDiag] = React.useState<NativeDiagnostics>(() =>
+    NativeStandardCamera.getDiagnostics()
+  );
 
   const refresh = React.useCallback((): void => {
     setDiag(NativeStandardCamera.getDiagnostics());
-    setRefreshedAt(Date.now());
   }, []);
-
-  React.useEffect(() => {
-    refresh();
-  }, [refresh]);
 
   // Re-poll on focus so permissions that the user toggled in Settings are
   // picked up without needing a manual reload.
@@ -50,7 +52,6 @@ export default function DiagnosticsScreen(): React.JSX.Element {
       <Section title="Build">
         <Row label="Native built" value={formatNativeBuild(diag)} />
         <Row label="JS built" value={formatTimestamp(JS_BUILD_TIME)} />
-        <Row label="Diagnostics read" value={formatTimestamp(refreshedAt)} />
       </Section>
 
       <Section title="App">
@@ -83,10 +84,7 @@ export default function DiagnosticsScreen(): React.JSX.Element {
 
       <View style={styles.note}>
         <Text style={[styles.noteText, { color: theme.textSecondary }]}>
-          Native "built" is the executable file's modification time — it changes on every native
-          rebuild. JS "built" is when app.config.ts was evaluated to produce this bundle — it
-          matches the Metro session start in dev, and the moment `expo export:embed` ran for
-          release builds.
+          {BUILD_NOTE}
         </Text>
       </View>
     </ScrollView>
@@ -116,24 +114,29 @@ function formatAppVersion(d: NativeDiagnostics | null): string | null {
     : `(build ${d.bundleVersion || '?'})`;
 }
 
-// Format an instant as e.g. "7:11:27 PM PDT · May 23" — local clock time with
-// the user's time-zone abbreviation. The date drops the year when it matches
-// the current year so the line stays short.
+// Format an instant as e.g. "May 23 · 07:11:27 PM PDT" — day first, local
+// clock time with the user's time-zone abbreviation. The date drops the year
+// when it matches the current year so the line stays short.
 function formatTimestamp(ms: number): string {
   const date = new Date(ms);
-  const time = date.toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZoneName: 'short',
-  });
+  const time = formatPaddedTime(date);
   const isThisYear = date.getFullYear() === new Date().getFullYear();
   const datePart = date.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
     ...(isThisYear ? {} : { year: 'numeric' }),
   });
-  return `${time} · ${datePart}`;
+  return `${datePart} · ${time}`;
+}
+
+function formatPaddedTime(date: Date): string {
+  const time = date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  });
+  return time.replace(/^(\D*)(\d)(?=:)/, (_match, prefix: string, hour: string) => `${prefix}0${hour}`);
 }
 
 function Section({
