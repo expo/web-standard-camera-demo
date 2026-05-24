@@ -1,13 +1,11 @@
 import { Stack } from 'expo-router';
 
 export const unstable_settings = {
-  initialRouteName: 'cube',
+  initialRouteName: 'index',
 };
 
-// The demo screen is always rendered on a dark background (the WebGPU clear
-// color matches), so the header tints are forced light regardless of the
-// system color scheme — a system-default dark title would be unreadable on
-// the dark canvas backdrop.
+// The cube screen is rendered on a dark WebGPU clear color, so it keeps a
+// light transparent header. Other demo routes use the current app theme.
 const DARK_BG = '#0a0e1a';
 const LIGHT_TINT = '#f8fafc';
 
@@ -17,13 +15,21 @@ export default function DemoStackLayout(): React.JSX.Element {
       screenOptions={{
         headerLargeTitle: true,
         headerShadowVisible: false,
-        headerTransparent: true,
-        headerTintColor: LIGHT_TINT,
-        headerLargeTitleStyle: { color: LIGHT_TINT },
-        headerTitleStyle: { color: LIGHT_TINT },
-        contentStyle: { backgroundColor: DARK_BG },
       }}>
-      <Stack.Screen name="cube" options={{ title: 'WebGPU Demo' }} />
+      <Stack.Screen name="index" options={{ title: 'Demos' }} />
+      <Stack.Screen
+        name="cube"
+        options={{
+          title: 'WebGPU Demo',
+          headerTransparent: true,
+          headerTintColor: LIGHT_TINT,
+          headerLargeTitleStyle: { color: LIGHT_TINT },
+          headerStyle: { backgroundColor: 'transparent' },
+          headerTitleStyle: { color: LIGHT_TINT },
+          contentStyle: { backgroundColor: DARK_BG },
+        }}
+      />
+      <Stack.Screen name="lfm2-vl" options={{ title: 'LFM2-VL' }} />
     </Stack>
   );
 }

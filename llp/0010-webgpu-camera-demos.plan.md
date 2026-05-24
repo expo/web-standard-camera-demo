@@ -32,6 +32,13 @@ Each demo is small, ships on its own, and uses only one custom bridge: a way to 
 | Rotating cube of cameras | A spinning cube, every face is the live camera, all in WGSL — a direct port of the [WebGPU samples' `videoUploading`](https://webgpu.github.io/webgpu-samples/?sample=videoUploading) demo. |
 | Shader playground | Live camera processed by a swappable fragment shader (kaleidoscope, edge-detect, posterize, sobel) — Snapchat-lens feel without a single line of native CV code. |
 | MNIST on the camera (stretch) | Point the phone at a hand-drawn digit, read the classification. ML inference in WGSL compute shaders, model weights downloaded as a `.safetensors`-class blob, all browser-shaped. |
+| LFM2-VL video captioning (candidate) | A live camera feed captioned by a Transformers.js vision-language model on WebGPU — the strongest "real web demo, nearly drop-in on Expo" story if the runtime dependencies hold. |
+
+## Demo catalog route
+
+The Demo tab should open to a catalog, not directly to one showcase. The point is to keep the existing cube demo available while making room for candidate demos as they are explored. A demo card may point to a shipped demo, a low-level foundation probe, or a candidate route that records what has been verified and what remains blocked.
+
+The catalog route is intentionally part of the demo app rather than README-only documentation: the person holding the phone should be able to choose the story they want to tell in the moment without rebuilding the app.
 
 ## Validated foundations
 
@@ -148,14 +155,59 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Complexity:** Medium-high. The inference pipeline itself is well-trodden territory (the react-native-wgpu sample exists), but it adds model-asset loading, a multi-pass compute pipeline, and a CPU readback. Worth the effort only if the simpler demos land cleanly.
 
+### Demo 4: LFM2-VL video captioning (candidate)
+
+**Pitch:** The live camera is fed into a local vision-language model that answers prompts about the current frame. This is the most legible "web APIs on Expo" story because the original browser demo is already an app-shaped experience, not a graphics sample.
+
+**Source demo.** The [LiquidAI/LFM2-VL-WebGPU](https://huggingface.co/spaces/LiquidAI/LFM2-VL-WebGPU) Space uses `navigator.mediaDevices.getUserMedia({ video: { facingMode, width, height } })`, assigns the resulting `MediaStream` to `video.srcObject`, captures frames through a canvas with `getImageData`, wraps the frame in `RawImage`, and runs `AutoModelForImageTextToText.from_pretrained("onnx-community/LFM2-VL-450M-ONNX", { device: "webgpu", ... })` through Transformers.js.
+
+**Why this demo.** The code shape is the product argument:
+
+```
+getUserMedia()
+   ↓
+video.srcObject = stream
+   ↓
+canvas.getImageData()
+   ↓
+RawImage(frame)
+   ↓
+Transformers.js model.generate({ device: "webgpu" })
+```
+
+On Expo, the camera and WebGPU pieces already exist. The known adaptation is the frame extraction step: use the standard-camera `ImageCapture(track).grabFrame()` path while React Native lacks a DOM canvas/video pair. The target shape is:
+
+```
+navigator.mediaDevices.getUserMedia()
+   ↓
+<Video srcObject>
+   ↓
+ImageCapture(track).grabFrame()
+   ↓
+RawImage(frame)
+   ↓
+same Transformers.js WebGPU model path
+```
+
+**Status:** Candidate route. The app should expose this as a selectable demo option before bundling the model, so the team can evaluate the UX and remaining runtime risks without hiding the existing cube demo.
+
+**Risks to verify before calling it shipped.**
+
+- Transformers.js v4 next and its WebGPU backend must run under Hermes V1 without falling back to WebAssembly.
+- Model file download, caching, and streaming generation must work in the Expo runtime without DOM storage assumptions.
+- The standard-camera BGRA frame bytes may need conversion before `RawImage` ingestion, depending on the Transformers.js image processor expectations.
+- Model startup time and memory footprint need physical-device validation; simulator results are not enough.
+
 ## Build order
 
 1. **Foundation** — `react-native-wgpu` installed, hello-triangle verified. ✅ done (LLP 0010 milestone 0).
-2. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
-3. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, document the API in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md). One to two days. Task #17.
-4. **Demo 1: rotating cube of cameras.** One day. Task #18.
-5. **Demo 2: shader playground.** Two days for the first three effects.
-6. **Demo 3: MNIST.** Stretch — schedule only after Demos 1 and 2 land.
+2. **Demo catalog route.** Keep the existing cube demo and expose candidate demos from a chooser. ✅ done.
+3. **LFM2-VL candidate route.** Expose the source demo, mirror its prompt/input shape, and verify camera frame capture through the existing `ImageCapture` bridge before model bundling.
+4. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
+5. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, document the API in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md). One to two days. Task #17.
+6. **Demo 1: rotating cube of cameras.** One day. Task #18.
+7. **Demo 2: shader playground.** Two days for the first three effects.
+8. **Demo 3: MNIST.** Stretch — schedule only after Demos 1 and 2 land.
 
 Total wall-clock to Demo 1 shipping: roughly four days from milestone 0, assuming no surprises.
 

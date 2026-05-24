@@ -5,6 +5,9 @@ import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 import { useCamera } from '@/contexts/CameraContext';
 import { ImageCapture } from '../../../../modules/standard-camera';
 
+// @ref LLP 0010#demo-1-rotating-cube-of-cameras — Existing WebGPU camera
+// demo remains a first-class selectable route in the demo catalog.
+//
 // Rotating cube whose six faces all show the live camera. The demo reads the
 // active MediaStream from CameraContext (shared with the Home screen — both
 // surfaces see the same stream), wraps the first video track in a W3C
