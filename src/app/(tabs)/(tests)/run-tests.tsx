@@ -1,7 +1,10 @@
-import { useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect } from 'expo-router';
+import { GlassContainer, GlassView } from 'expo-glass-effect';
 import * as Linking from 'expo-linking';
 import * as React from 'react';
-import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Button as UIButton, Host } from '@expo/ui/swift-ui';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { useTheme } from '@/hooks/use-theme';
 import { notifyTestRunStart } from '@/lib/camera-run-events';
@@ -12,8 +15,12 @@ import { notifyTestRunStart } from '@/lib/camera-run-events';
 // executes. Output: WPT_RESULT / WPT_DONE lines emitted to console for the CLI driver.
 
 import { Video, type HTMLVideoElement, testing } from '../../../../modules/standard-camera';
-import { installTestGlobals, resetTestGlobals } from '../../../../modules/standard-camera/src/testing/globals';
+import { installTestGlobals, resetTestFile, resetTestGlobals } from '../../../../modules/standard-camera/src/testing/globals';
 import NativeStandardCamera from '../../../../modules/standard-camera/src/native';
+import type {
+  TestEnvironment,
+  TestRequirement,
+} from '../../../../modules/standard-camera/src/testing/testharness';
 
 type Status = 'pending' | 'running' | 'pass' | 'fail' | 'timeout' | 'skip';
 
@@ -21,6 +28,7 @@ interface Row {
   name: string;
   source: string | null;
   group: string | null;
+  requirement: TestRequirement;
   status: Status;
   message?: string;
   durationMs?: number;
@@ -145,8 +153,17 @@ export default function RunTestsScreen(): React.JSX.Element {
   const [rows, setRows] = React.useState<Row[]>(() => initialRows());
   const [running, setRunning] = React.useState(false);
   const [completed, setCompleted] = React.useState(0);
+  // Detected once on focus (via `enumerateDevices`), then refreshed at the
+  // start of every run. Drives the "X applicable / Y total" header so users
+  // on the simulator don't see a high skip count and assume the suite is
+  // broken — it just isn't relevant to a device-less host.
+  const [environment, setEnvironment] = React.useState<TestEnvironment | null>(null);
 
   const total = rows.length;
+  const applicability = React.useMemo(
+    () => (environment ? computeApplicability(rows, environment) : null),
+    [rows, environment]
+  );
 
   // Buffered update path. `onStart` / `onResult` write the row patch into a
   // ref-backed Map (very cheap — no setState, no render). A timer drains the
@@ -190,6 +207,11 @@ export default function RunTestsScreen(): React.JSX.Element {
     const t0 = now();
     notifyTestRunStart();
     setRunning(true);
+    // Refresh the environment detection right before running so the in-app
+    // header matches what `runAllTests` will actually skip — and pass the
+    // same environment into the runner so the two views stay consistent.
+    const env = await testing.detectEnvironment();
+    setEnvironment(env);
     // Reset every row back to 'pending' so a re-run starts fresh.
     setRows((prev) => prev.map((r) => ({ ...r, status: 'pending', message: undefined, durationMs: undefined })));
     perf.setRowsCommits++;
@@ -205,7 +227,9 @@ export default function RunTestsScreen(): React.JSX.Element {
     const periodicId = setInterval(() => perfDump(`tick t=${Math.round(now() - t0)}ms`), 1000);
 
     await testing.runAllTests(undefined, {
+      environment: env,
       resetEnvironment: resetTestGlobals,
+      resetFile: resetTestFile,
       onStart: (entry, i) => {
         perf.onStartCalls++;
         const prev = pendingUpdatesRef.current.get(i);
@@ -258,6 +282,19 @@ export default function RunTestsScreen(): React.JSX.Element {
     }
   }, [isFocused, url, run]);
 
+  // One-shot environment detection so the header shows the right applicable
+  // count before the user taps "Run tests". A second probe runs inside `run`
+  // to refresh state right before the suite executes.
+  React.useEffect(() => {
+    let cancelled = false;
+    void testing.detectEnvironment().then((env) => {
+      if (!cancelled) setEnvironment(env);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const groups = React.useMemo(() => {
     const t0 = now();
     const out = groupRows(rows);
@@ -265,47 +302,110 @@ export default function RunTestsScreen(): React.JSX.Element {
     perf.groupRowsTotalMs += now() - t0;
     return out;
   }, [rows]);
+  // Counts derived only from applicable rows so the displayed pass/fail/skip
+  // numbers reflect the suite the user actually intended to run. Pre-skipped
+  // out-of-scope / device-missing tests are surfaced in the header instead.
   const counts = React.useMemo(() => {
     const t0 = now();
-    const out = countByStatus(rows);
+    const out = countApplicable(rows, environment);
     perf.countByStatusCalls++;
     perf.countByStatusTotalMs += now() - t0;
     return out;
-  }, [rows]);
-  const progressPct = total === 0 ? 0 : Math.round((completed / total) * 100);
+  }, [rows, environment]);
+  const applicableTotal = applicability?.applicable ?? total;
+  const applicableCompleted = counts.completed;
+  const progressPct = applicableTotal === 0 ? 0 : applicableCompleted / applicableTotal;
+  // Reanimated SharedValue for the progress bar fill. Eased on each
+  // progress update so the fill flows rather than jumps.
+  const progressShared = useSharedValue(0);
+  React.useEffect(() => {
+    progressShared.value = withTiming(progressPct, { duration: 250 });
+  }, [progressPct, progressShared]);
+  const progressBarStyle = useAnimatedStyle(() => ({
+    width: `${progressShared.value * 100}%`,
+  }));
+
 
   return (
     <React.Profiler id="screen" onRender={onProfilerRender}>
+      {/* Large "Tests" title that shrinks to compact on scroll — standard
+          iOS large-title behavior. The floating pill is positioned
+          absolutely below the (initial expanded) nav so it doesn't try
+          to track the nav transition; instead it stays put. */}
+      <Stack.Screen
+        options={{
+          title: 'Tests',
+          headerLargeTitle: true,
+          headerShadowVisible: false,
+        }}
+      />
       <ScrollView
         style={[styles.scrollView, { backgroundColor: theme.background }]}
         contentContainerStyle={styles.contentContainer}
         contentInsetAdjustmentBehavior="automatic">
-        <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-          {total} tests across {groups.length} {groups.length === 1 ? 'file' : 'files'}
-        </Text>
-
-        <View style={styles.videoSlot}>
-          <Video ref={videoRef} style={styles.video} />
+        <View style={styles.pillSlot}>
+          <GlassContainer spacing={32} style={styles.glassContainer}>
+            <View style={styles.pillFrame}>
+              <GlassView
+                style={styles.pill}
+                glassEffectStyle="clear"
+                pointerEvents="box-none">
+                <View style={styles.runButtonHost}>
+                  <Host matchContents>
+                    <UIButton
+                      onPress={running ? undefined : run}
+                      label={running ? 'Running…' : 'Run tests'}
+                    />
+                  </Host>
+                </View>
+                <View style={styles.pillDivider} />
+                <View style={styles.pillProgressColumn}>
+                  <View style={styles.progressBarOuter}>
+                    <Animated.View
+                      style={[
+                        styles.progressBarInner,
+                        { backgroundColor: theme.text },
+                        progressBarStyle,
+                      ]}
+                    />
+                  </View>
+                  <Text
+                    style={[styles.pillCounter, { color: theme.text }]}
+                    numberOfLines={1}>
+                    {applicableCompleted} / {applicableTotal}
+                  </Text>
+                  <Text
+                    style={[styles.pillBreakdown, { color: theme.textSecondary }]}
+                    numberOfLines={2}
+                    ellipsizeMode="tail">
+                    {counts.pass} pass · {counts.fail} fail
+                    {counts.timeout > 0 ? ` · ${counts.timeout} timeout` : ''}
+                    {counts.skip > 0 ? ` · ${counts.skip} skip` : ''}
+                  </Text>
+                </View>
+              </GlassView>
+            </View>
+          </GlassContainer>
         </View>
-
-        <View style={styles.controls}>
-          <Button title={running ? 'Running…' : 'Run tests'} onPress={run} disabled={running} />
-        </View>
-
-        <View style={styles.progressBlock}>
-          <View style={styles.progressBarOuter}>
-            <View
-              style={[
-                styles.progressBarInner,
-                { width: `${progressPct}%`, backgroundColor: theme.text },
-              ]}
-            />
-          </View>
-          <Text style={[styles.progressText, { color: theme.text }]}>
-            {completed} / {total} · {counts.pass} pass · {counts.fail} fail
-            {counts.timeout > 0 ? ` · ${counts.timeout} timeout` : ''}
-            {counts.skip > 0 ? ` · ${counts.skip} skip` : ''}
+        <View style={styles.headerBlock}>
+          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+            {applicability != null
+              ? `${applicability.applicable} applicable on ${describeEnvironment(environment!)} / ${total} total across ${groups.length} ${groups.length === 1 ? 'file' : 'files'}`
+              : `${total} tests across ${groups.length} ${groups.length === 1 ? 'file' : 'files'}`}
           </Text>
+          {applicability != null && (applicability.outOfScope > 0 || applicability.deviceMissing > 0) ? (
+            <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+              {applicability.outOfScope > 0 ? `${applicability.outOfScope} out of scope` : ''}
+              {applicability.outOfScope > 0 && applicability.deviceMissing > 0 ? ' · ' : ''}
+              {applicability.deviceMissing > 0
+                ? `${applicability.deviceMissing} need ${describeMissingDevices(environment!)}`
+                : ''}
+            </Text>
+          ) : null}
+
+          <View style={styles.videoSlot}>
+            <Video ref={videoRef} style={styles.video} />
+          </View>
         </View>
 
         <React.Profiler id="results" onRender={onProfilerRender}>
@@ -314,6 +414,7 @@ export default function RunTestsScreen(): React.JSX.Element {
               <GroupSection
                 key={group.key}
                 group={group}
+                env={environment}
                 textColor={theme.text}
                 mutedColor={theme.textSecondary}
               />
@@ -330,8 +431,77 @@ function initialRows(): Row[] {
     name: t.name,
     source: t.source,
     group: t.group,
+    requirement: t.requirement,
     status: 'pending' as Status,
   }));
+}
+
+// Per-row applicability: out-of-scope rows are never applicable; device-
+// requirement rows depend on the detected environment.
+function isRowApplicable(row: Row, env: TestEnvironment | null): boolean {
+  if (env == null) return row.requirement !== 'out-of-scope';
+  return testing.isApplicable(row.requirement, env);
+}
+
+interface ApplicabilityCounts {
+  applicable: number;
+  outOfScope: number;
+  deviceMissing: number;
+}
+
+function computeApplicability(rows: Row[], env: TestEnvironment): ApplicabilityCounts {
+  let applicable = 0;
+  let outOfScope = 0;
+  let deviceMissing = 0;
+  for (const r of rows) {
+    if (r.requirement === 'out-of-scope') {
+      outOfScope++;
+    } else if (testing.isApplicable(r.requirement, env)) {
+      applicable++;
+    } else {
+      deviceMissing++;
+    }
+  }
+  return { applicable, outOfScope, deviceMissing };
+}
+
+interface ApplicableCounts {
+  completed: number;
+  pass: number;
+  fail: number;
+  timeout: number;
+  skip: number;
+}
+
+// Counts pass/fail/timeout over applicable rows only. Pre-skipped (out-of-
+// scope, device-missing) rows are excluded so the visible totals match what
+// the user actually asked to run. `skip` here means a *runtime* skip — e.g.
+// a test we couldn't classify upfront that still hit `NotFoundError`.
+function countApplicable(rows: Row[], env: TestEnvironment | null): ApplicableCounts {
+  const out: ApplicableCounts = { completed: 0, pass: 0, fail: 0, timeout: 0, skip: 0 };
+  for (const r of rows) {
+    if (!isRowApplicable(r, env)) continue;
+    if (r.status === 'pending' || r.status === 'running') continue;
+    out.completed++;
+    if (r.status === 'pass') out.pass++;
+    else if (r.status === 'fail') out.fail++;
+    else if (r.status === 'timeout') out.timeout++;
+    else if (r.status === 'skip') out.skip++;
+  }
+  return out;
+}
+
+function describeEnvironment(env: TestEnvironment): string {
+  if (env.hasCamera && env.hasMicrophone) return 'this device';
+  if (env.hasCamera) return 'this device (no microphone)';
+  if (env.hasMicrophone) return 'simulator (microphone only)';
+  return 'simulator';
+}
+
+function describeMissingDevices(env: TestEnvironment): string {
+  if (!env.hasCamera && !env.hasMicrophone) return 'a camera or microphone';
+  if (!env.hasCamera) return 'a camera';
+  return 'a microphone';
 }
 
 interface RowGroup {
@@ -418,19 +588,56 @@ function countByStatus(rows: Row[]): Record<Status, number> {
 // section header. `group.rows` is a stable reference when none of the rows
 // in that group changed (the run-loop's setRows updater shallow-clones the
 // top-level array but reuses each unchanged group's row references), so
-// memo's shallow equality short-circuits cleanly.
+// memo's shallow equality short-circuits cleanly. `env` is referentially
+// stable post-detection (set once on focus, refreshed once per run), so
+// memo doesn't bust on it.
 const GroupSection = React.memo(function GroupSection({
   group,
+  env,
   textColor,
   mutedColor,
 }: {
   group: RowGroup;
+  env: TestEnvironment | null;
   textColor: string;
   mutedColor: string;
 }): React.JSX.Element {
   perf.groupSectionRenders++;
-  const counts = countByStatus(group.rows);
-  const done = group.rows.length - counts.pending - counts.running;
+  // Split rows into "applicable" (counts toward the run) and "pre-skipped"
+  // (out-of-scope or device-missing — known at registration time, not a
+  // result). The header surfaces pre-skips up front as "needs camera" or
+  // similar so the user doesn't see them tallied as "X skip" after the run.
+  let applicableTotal = 0;
+  let applicableDone = 0;
+  let applicablePass = 0;
+  let applicableFail = 0;
+  let applicableTimeout = 0;
+  let applicableRuntimeSkip = 0;
+  let preSkipOutOfScope = 0;
+  let preSkipDeviceMissing = 0;
+  for (const r of group.rows) {
+    if (r.requirement === 'out-of-scope') {
+      preSkipOutOfScope++;
+      continue;
+    }
+    if (env && !testing.isApplicable(r.requirement, env)) {
+      preSkipDeviceMissing++;
+      continue;
+    }
+    applicableTotal++;
+    if (r.status === 'pending' || r.status === 'running') continue;
+    applicableDone++;
+    if (r.status === 'pass') applicablePass++;
+    else if (r.status === 'fail') applicableFail++;
+    else if (r.status === 'timeout') applicableTimeout++;
+    else if (r.status === 'skip') applicableRuntimeSkip++;
+  }
+  const preSkipTag =
+    preSkipDeviceMissing > 0 && env
+      ? `needs ${describeMissingDevices(env)}`
+      : preSkipOutOfScope > 0
+        ? 'out of scope'
+        : null;
   return (
     <View style={styles.group}>
       <View style={styles.groupHeader}>
@@ -442,12 +649,17 @@ const GroupSection = React.memo(function GroupSection({
         <Text style={[styles.groupLabel, { color: textColor }]} numberOfLines={1}>
           {group.label}
         </Text>
-        <Text style={[styles.groupCounts, { color: mutedColor }]}>
-          {done}/{group.rows.length}
-          {counts.fail ? ` · ${counts.fail} fail` : ''}
-          {counts.timeout ? ` · ${counts.timeout} timeout` : ''}
-          {counts.skip ? ` · ${counts.skip} skip` : ''}
-        </Text>
+        {preSkipTag != null && applicableTotal === 0 ? (
+          <Text style={[styles.groupCounts, { color: mutedColor }]}>{preSkipTag}</Text>
+        ) : (
+          <Text style={[styles.groupCounts, { color: mutedColor }]}>
+            {applicableDone}/{applicableTotal}
+            {applicableFail ? ` · ${applicableFail} fail` : ''}
+            {applicableTimeout ? ` · ${applicableTimeout} timeout` : ''}
+            {applicableRuntimeSkip ? ` · ${applicableRuntimeSkip} skip` : ''}
+            {preSkipTag != null ? ` · ${preSkipDeviceMissing + preSkipOutOfScope} ${preSkipTag}` : ''}
+          </Text>
+        )}
       </View>
       {group.rows.map((r, i) => (
         <ResultRow key={`${group.key}::${i}`} row={r} textColor={textColor} mutedColor={mutedColor} />
@@ -521,13 +733,62 @@ const STATUS_GLYPH: Record<Status, string> = {
 };
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+  },
   scrollView: {
     flex: 1,
   },
   contentContainer: {
-    padding: 16,
-    gap: 12,
+    // No outer padding — children manage their own horizontal padding so a
+    // sticky child can extend its background (the theme color) edge-to-edge
+    // without leaving a visible 16px gutter when scrolled.
     paddingBottom: 32,
+  },
+  headerBlock: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    gap: 12,
+  },
+  pillSlot: {
+    // In-flow slot at the top of the ScrollView's contentContainer. The
+    // pill scrolls with the page (so the iOS large-title transition is
+    // unaffected) but sits prominently below the nav at rest. Side
+    // margins so the pill floats rather than spanning edge-to-edge.
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    alignItems: 'stretch',
+  },
+  glassContainer: {
+    // GlassContainer is a plain View; flex 1 ensures it stretches across
+    // pillSlot's width so the pill inside can size to a stable width.
+    alignSelf: 'stretch',
+  },
+  pillFrame: {
+    // Stretches to the GlassContainer's full width so the pill's geometry
+    // doesn't depend on its text content — `Run tests` ↔ `Running…` and
+    // counter swaps no longer cause the whole capsule to resize.
+    alignSelf: 'stretch',
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    // Capsule corners (any value >= half the height clamps to a full pill).
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  pillDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  pillProgressColumn: {
+    flex: 1,
+    gap: 4,
   },
   subtitle: {
     fontSize: 12,
@@ -543,11 +804,25 @@ const styles = StyleSheet.create({
   video: {
     flex: 1,
   },
-  controls: {
-    flexDirection: 'row',
+  runButtonHost: {
+    // Stable width so swapping the label text between "Run tests" and
+    // "Running…" doesn't shift the rest of the pill's layout.
+    minWidth: 96,
   },
-  progressBlock: {
-    gap: 4,
+  pillCounter: {
+    fontFamily: 'Menlo',
+    fontSize: 13,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '600',
+  },
+  pillBreakdown: {
+    fontFamily: 'Menlo',
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
+    // Reserve room for two lines so the pill's height is stable whether
+    // the breakdown is short ("0 pass · 0 fail") or grows past one line
+    // ("12 pass · 1 fail · 1 timeout · 1 skip").
+    minHeight: 28,
   },
   progressBarOuter: {
     height: 4,
@@ -565,6 +840,8 @@ const styles = StyleSheet.create({
   },
   resultsList: {
     gap: 14,
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
   group: {
     gap: 4,

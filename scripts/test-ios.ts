@@ -1,15 +1,23 @@
 #!/usr/bin/env bun
-// @ref LLP 0007 — CLI: boot iOS 26 sim, run WPT tests, shut down.
+// @ref LLP 0007 — CLI: run WPT tests on an iOS 26 simulator or a connected
+// physical iPhone, then clean up.
 //
-// Usage: bun run test:ios
+// Usage:
+//   bun run test:ios                    # iOS 26 simulator (default)
+//   bun run test:ios --device           # first connected iPhone via devicectl
+//   bun run test:ios --device <name|udid>
+//
+// `--device` requires the app to be pre-installed (e.g. via
+// `bunx expo run:ios --device <udid>` once). The script does not build.
 
 import { spawn } from 'bun';
+import { unlink } from 'node:fs/promises';
 
 const APP_BUNDLE_ID = 'dev.ide.standardcameraapp';
 const URL_SCHEME = 'standardcameraapp';
 const DEFAULT_DEVICE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro';
 const TEST_DEVICE_NAME = 'standard-camera-test';
-const LOG_TIMEOUT_MS = 120_000;
+const LOG_TIMEOUT_MS = 300_000;
 const VERBOSE = process.env.VERBOSE === '1';
 
 interface ParsedResult {
@@ -24,6 +32,13 @@ interface ParsedSummary {
   failed: number;
   timeout: number;
   skipped?: number;
+  // Added by testharness.ts: applicability breakdown. Older builds without
+  // these fields still parse and display the legacy summary line.
+  total?: number;
+  applicable?: number;
+  outOfScope?: number;
+  deviceMissing?: number;
+  environment?: { hasCamera: boolean; hasMicrophone: boolean };
 }
 
 main()
@@ -34,6 +49,27 @@ main()
   });
 
 async function main(): Promise<number> {
+  const target = parseTarget(process.argv.slice(2));
+  if (target.kind === 'device') {
+    return runOnDevice(target.identifier);
+  }
+  return runOnSimulator();
+}
+
+type RunTarget =
+  | { kind: 'simulator' }
+  | { kind: 'device'; identifier?: string };
+
+function parseTarget(args: string[]): RunTarget {
+  const idx = args.indexOf('--device');
+  if (idx < 0) return { kind: 'simulator' };
+  const next = args[idx + 1];
+  // `--device <id>` if the next arg isn't another flag, else "any connected".
+  const identifier = next && !next.startsWith('--') ? next : undefined;
+  return { kind: 'device', identifier };
+}
+
+async function runOnSimulator(): Promise<number> {
   const runtimeId = await pickIOS26Runtime();
   console.log(`Using runtime: ${runtimeId}`);
 
@@ -86,12 +122,7 @@ async function main(): Promise<number> {
       // ignore
     }
 
-    console.log('');
-    const skipped = summary.skipped ?? 0;
-    console.log(
-      `Summary: ${summary.passed} passed, ${summary.failed} failed, ${summary.timeout} timeout` +
-        (skipped > 0 ? `, ${skipped} skipped` : '')
-    );
+    printSummary(summary);
     // Skips are environment-blocked (e.g. simulator has no AVCaptureDevice), not regressions.
     exitCode = summary.failed === 0 && summary.timeout === 0 ? 0 : 1;
   } finally {
@@ -101,6 +132,175 @@ async function main(): Promise<number> {
     }
   }
   return exitCode;
+}
+
+// MARK: - Device runner (devicectl)
+
+async function runOnDevice(requested: string | undefined): Promise<number> {
+  const device = await pickConnectedDevice(requested);
+  console.log(`Using device: ${device.name} (${device.identifier})`);
+
+  await ensureAppInstalledOnDevice(device.identifier);
+
+  // @ref LLP 0007#cli-flow — Launch with --console to stream the app's
+  // stdout/stderr. The app's `emit()` writes WPT_RESULT/WPT_DONE lines via
+  // `console.log` (which RN bridges to stdout in dev builds) AND `NSLog`
+  // (visible in os_log). For physical devices we rely on console.log; the
+  // dev build hosts a Metro bundle whose console.log surfaces here.
+  // @ref LLP 0007#cli-flow — Hand the deep link via `--payload-url` so the
+  // app's `useLinkingURL()` sees `?autorun=1` at cold-start and the runner
+  // auto-fires.
+  const payloadUrl = `${URL_SCHEME}:///run-tests?autorun=1`;
+  if (VERBOSE) console.log('$', 'xcrun', 'devicectl', 'device', 'process', 'launch', '--device', device.identifier, '--terminate-existing', '--console', '--payload-url', payloadUrl, APP_BUNDLE_ID);
+  const proc = spawn({
+    cmd: [
+      'xcrun',
+      'devicectl',
+      'device',
+      'process',
+      'launch',
+      '--device',
+      device.identifier,
+      '--terminate-existing',
+      '--console',
+      '--payload-url',
+      payloadUrl,
+      APP_BUNDLE_ID,
+    ],
+    stdout: 'pipe',
+    stderr: 'inherit',
+  });
+  console.log('Launched test runner; waiting for results…');
+
+  let summary: ParsedSummary;
+  try {
+    summary = await parseWPTOutput(proc.stdout as ReadableStream<Uint8Array>);
+  } finally {
+    // --console blocks until the app exits; SIGTERM is forwarded to the app.
+    try {
+      proc.kill();
+    } catch {
+      // ignore
+    }
+  }
+
+  printSummary(summary);
+  return summary.failed === 0 && summary.timeout === 0 ? 0 : 1;
+}
+
+interface DeviceInfo {
+  identifier: string;
+  name: string;
+}
+
+async function pickConnectedDevice(requested: string | undefined): Promise<DeviceInfo> {
+  const jsonPath = `/tmp/test-ios-devicectl-${process.pid}.json`;
+  await sh(['xcrun', 'devicectl', 'list', 'devices', '--json-output', jsonPath]);
+  const raw = await Bun.file(jsonPath).text();
+  await unlink(jsonPath).catch(() => undefined);
+  const parsed = JSON.parse(raw) as {
+    result: {
+      devices: {
+        identifier: string;
+        deviceProperties?: { name?: string };
+        hardwareProperties?: { productType?: string };
+      }[];
+    };
+  };
+  // devicectl's JSON has connectionProperties.tunnelState that flips between
+  // "connected"/"disconnected"/"unavailable" depending on whether a personalized
+  // tunnel is open. The tunnel auto-(re)connects when we run the launch
+  // command, so we don't pre-filter on it — we just need an iPhone that
+  // devicectl can see. Unreachable devices fail loudly at launch time.
+  const iPhones = parsed.result.devices.filter((d) =>
+    (d.hardwareProperties?.productType ?? '').startsWith('iPhone')
+  );
+  if (iPhones.length === 0) {
+    throw new Error(
+      'No iPhone found in `xcrun devicectl list devices`. Plug the device in, ' +
+        'trust the host, and verify it shows up.'
+    );
+  }
+  if (requested) {
+    const match = iPhones.find(
+      (d) => d.identifier === requested || (d.deviceProperties?.name ?? '') === requested
+    );
+    if (!match) {
+      const names = iPhones.map((d) => `"${d.deviceProperties?.name}" (${d.identifier})`).join(', ');
+      throw new Error(`No iPhone matches "${requested}". Available: ${names}`);
+    }
+    return { identifier: match.identifier, name: match.deviceProperties?.name ?? match.identifier };
+  }
+  const first = iPhones[0];
+  return { identifier: first.identifier, name: first.deviceProperties?.name ?? first.identifier };
+}
+
+async function ensureAppInstalledOnDevice(deviceId: string): Promise<void> {
+  const jsonPath = `/tmp/test-ios-apps-${process.pid}.json`;
+  try {
+    await sh([
+      'xcrun',
+      'devicectl',
+      'device',
+      'info',
+      'apps',
+      '--device',
+      deviceId,
+      '--json-output',
+      jsonPath,
+    ]);
+  } catch {
+    throw new Error(
+      `Could not query installed apps on device ${deviceId}. ` +
+        `Verify the device is reachable: xcrun devicectl list devices.`
+    );
+  }
+  const raw = await Bun.file(jsonPath).text();
+  await unlink(jsonPath).catch(() => undefined);
+  const parsed = JSON.parse(raw) as { result?: { apps?: { bundleIdentifier: string }[] } };
+  // devicectl's `info apps` has no bundle-id filter — fetch the whole list
+  // and look for ours.
+  const found = parsed.result?.apps?.some((a) => a.bundleIdentifier === APP_BUNDLE_ID) ?? false;
+  if (!found) {
+    throw new Error(
+      `App ${APP_BUNDLE_ID} is not installed on device ${deviceId}.\n` +
+        `Run 'bunx expo run:ios --device ${deviceId}' to build and install.`
+    );
+  }
+  if (VERBOSE) console.log('App is installed on the device');
+}
+
+// MARK: - Shared summary printing
+
+function printSummary(summary: ParsedSummary): void {
+  console.log('');
+  // Subtract pre-skipped tests (out-of-scope + device-missing) from the
+  // headline skip count so the visible "X skipped" only reflects runtime
+  // skips — the in-flight NotFoundError fallback for tests we couldn't
+  // pre-classify. Pre-skipped tests are surfaced separately so they read
+  // as "not applicable" rather than "broken".
+  const totalSkipped = summary.skipped ?? 0;
+  const preSkipped = (summary.outOfScope ?? 0) + (summary.deviceMissing ?? 0);
+  const runtimeSkipped = Math.max(0, totalSkipped - preSkipped);
+  if (summary.total != null && summary.applicable != null) {
+    const where = summary.environment
+      ? describeEnvironment(summary.environment)
+      : 'this host';
+    console.log(
+      `Summary: ${summary.passed} passed, ${summary.failed} failed, ${summary.timeout} timeout` +
+        (runtimeSkipped > 0 ? `, ${runtimeSkipped} skipped` : '') +
+        ` — ${summary.applicable} applicable on ${where} / ${summary.total} total`
+    );
+    const parts: string[] = [];
+    if ((summary.outOfScope ?? 0) > 0) parts.push(`${summary.outOfScope} out of scope`);
+    if ((summary.deviceMissing ?? 0) > 0) parts.push(`${summary.deviceMissing} device-missing`);
+    if (parts.length > 0) console.log(`Not applicable: ${parts.join(' · ')}`);
+  } else {
+    console.log(
+      `Summary: ${summary.passed} passed, ${summary.failed} failed, ${summary.timeout} timeout` +
+        (totalSkipped > 0 ? `, ${totalSkipped} skipped` : '')
+    );
+  }
 }
 
 // MARK: - Simulator helpers
@@ -273,6 +473,13 @@ async function sh(cmd: string[]): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function describeEnvironment(env: { hasCamera: boolean; hasMicrophone: boolean }): string {
+  if (env.hasCamera && env.hasMicrophone) return 'this device';
+  if (env.hasCamera) return 'this device (no microphone)';
+  if (env.hasMicrophone) return 'simulator (microphone only)';
+  return 'simulator';
 }
 
 async function capture(cmd: string[]): Promise<string> {

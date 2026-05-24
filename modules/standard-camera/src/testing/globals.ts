@@ -15,15 +15,18 @@ import { __getDeniedKindsForTesting, __resetDeniedPermissionsForTesting } from '
 __installTestDeniedCheck(__getDeniedKindsForTesting);
 import type { HTMLVideoElement } from '../HTMLVideoElement';
 
-// @ref LLP 0004 — Stub HTMLAudioElement. Audio is out of scope (LLP 0001), so
-// this exists only to satisfy WPT tests that do `audio.srcObject = stream`
-// without observing playback behavior. Beyond storing srcObject, the stub
-// emits the small set of HTMLMediaElement events that WPT tests await on:
+// @ref LLP 0004 — Stub HTMLAudioElement. The stub exists to satisfy WPT
+// tests that do `audio.srcObject = stream` without observing playback
+// behavior. Beyond storing srcObject, the stub emits the small set of
+// HTMLMediaElement events that WPT tests await on:
 //   - `loadedmetadata` immediately when srcObject is set to a stream
 //   - `loadeddata` right after `loadedmetadata`
-//   - `ended` when the assigned stream becomes inactive (all tracks gone or
-//     ended), driven by the same `__standardcamera_tracksetchange` channel
-//     the real <Video> uses
+//   - `ended` when the assigned stream becomes *inaudible* — i.e. there
+//     are no live AUDIO tracks left, even if video tracks are still live.
+//     WPT's `MediaStream-MediaElement-srcObject` tests assert this exact
+//     audio-element-specific rule ("becomes inaudible through audio tracks
+//     ending"). A `<video>` element would instead end on stream inactivity
+//     (all tracks ended) — that case is handled by `HTMLVideoElement`.
 class StubAudioElement extends EventTarget {
   #srcObject: MediaStream | null = null;
   #ended = false;
@@ -83,27 +86,28 @@ class StubAudioElement extends EventTarget {
   set ended(_v: boolean) {}
 
   #attachStreamListeners(stream: MediaStream): void {
+    // For track 'ended', call #maybeEnded synchronously: the track's 'ended'
+    // event itself already arrives one task after `stop()` (it crosses the
+    // native bridge), which is enough to satisfy the spec's "asynchronously"
+    // requirement. An additional `setTimeout` would push the element's
+    // `ended` flip into a SECOND task, missing the WPT assertion at the
+    // first queueTask boundary. For tracksetchange (script-initiated
+    // removeTrack), we DO need a setTimeout so `aud.ended` stays false until
+    // the next task, matching the Video element's pattern.
     const onChange = (): void => {
-      // Re-bind per-track 'ended' listeners. Each `ended` re-check uses
-      // setTimeout so the HTML-spec event-loop step ordering is preserved
-      // (the media element is NOT ended in the microtask following the last
-      // live track ending — only in a subsequent task).
       this.#detachTrackEndedListeners();
-      for (const t of stream.getTracks()) {
-        const fn = (): void => {
-          setTimeout(() => this.#maybeEnded(), 0);
-        };
-        t.addEventListener('ended', fn);
-        this.#trackEndedListeners.push({ track: t, fn });
-      }
+      this.#wireAudioEndedListeners(stream);
       setTimeout(() => this.#maybeEnded(), 0);
     };
     stream.addEventListener('__standardcamera_tracksetchange', onChange);
     this.#trackSetListener = onChange;
-    // Initial wire-up of per-track 'ended' listeners.
-    for (const t of stream.getTracks()) {
+    this.#wireAudioEndedListeners(stream);
+  }
+
+  #wireAudioEndedListeners(stream: MediaStream): void {
+    for (const t of stream.getAudioTracks()) {
       const fn = (): void => {
-        setTimeout(() => this.#maybeEnded(), 0);
+        this.#maybeEnded();
       };
       t.addEventListener('ended', fn);
       this.#trackEndedListeners.push({ track: t, fn });
@@ -127,9 +131,12 @@ class StubAudioElement extends EventTarget {
 
   #maybeEnded(): void {
     if (!this.#srcObject || this.#ended) return;
-    const tracks = this.#srcObject.getTracks();
-    const hasLive = tracks.some((t) => t.readyState === 'live');
-    if (!hasLive) {
+    // Audio element ends when there are no live AUDIO tracks. A live video
+    // track does NOT keep an audio element going — the spec's "inaudibility"
+    // rule.
+    const audioTracks = this.#srcObject.getAudioTracks();
+    const hasLiveAudio = audioTracks.some((t) => t.readyState === 'live');
+    if (!hasLiveAudio) {
       this.#ended = true;
       this.dispatchEvent(new Event('ended'));
     }
@@ -184,7 +191,13 @@ function clearHandlers(target: object | undefined): void {
   }
 }
 
-/** Reset between tests: detach srcObject so the next test starts fresh. */
+/** Reset between tests: detach srcObject so the next test starts fresh.
+ *  Capture grants are NOT reset here — within a single WPT source file,
+ *  later tests are written assuming earlier `getUserMedia` calls' grants
+ *  persist (e.g. MediaDevices-enumerateDevices.https.html's "after video
+ *  then audio capture" test relies on the prior "after video capture"
+ *  test's videoinput exposure carrying over). Per-file isolation is
+ *  handled by `resetTestFile` below. */
 export function resetTestGlobals(): void {
   const g = globalThis as unknown as { video?: HTMLVideoElement; audio?: { srcObject: MediaStream | null } };
   if (g.video) {
@@ -206,10 +219,16 @@ export function resetTestGlobals(): void {
     }
     clearHandlers(g.audio);
   }
-  // Forget that the user has gotten any stream so the next test's
-  // enumerateDevices() returns gated, empty objects — matching a fresh page
-  // load per spec.
-  __resetCaptureGrantsForTesting();
   // Forget synthetic denials installed by `setMediaPermission('denied', …)`.
+  // Denials are explicit per-test setup; we don't want them to leak.
   __resetDeniedPermissionsForTesting();
+}
+
+/** Reset at WPT source-file boundaries to match the "each .html is a fresh
+ *  page" semantics WPT assumes. Clears capture grants so the first test in
+ *  a file that asserts "deviceId is empty before capture" sees the gated,
+ *  pre-grant device list — even if a previous file has already done a
+ *  successful `getUserMedia`. */
+export function resetTestFile(): void {
+  __resetCaptureGrantsForTesting();
 }

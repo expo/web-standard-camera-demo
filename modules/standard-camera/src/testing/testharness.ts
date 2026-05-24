@@ -23,6 +23,7 @@ import type { HTMLVideoElement } from '../HTMLVideoElement';
 
 let currentSourceFile: string | null = null;
 let currentGroup: string | null = null;
+let currentRequirement: TestRequirement | null = null;
 
 /** Annotate the source WPT file for all tests registered after this call. */
 export function wptSource(file: string | null): void {
@@ -32,6 +33,244 @@ export function wptSource(file: string | null): void {
 /** Annotate a semantic group for all tests registered after this call. */
 export function wptGroup(group: string | null): void {
   currentGroup = group;
+}
+
+/** Annotate the environment requirement for all tests registered after this
+ *  call. Pass `null` to clear and let the SOURCE_REQUIREMENTS map (or the
+ *  `'camera'` default) decide. Used by project-local test files whose tests
+ *  have no `source` to key off of. */
+export function wptRequires(requirement: TestRequirement | null): void {
+  currentRequirement = requirement;
+}
+
+// MARK: - Test environment + per-test requirements
+
+/** What a test needs to actually run:
+ *  - `'always'` runs anywhere — pure API surface, IDL, or static-rejection paths.
+ *  - `'camera'` needs a real `AVCaptureDevice` (video). Skipped pre-emptively
+ *    on the iOS simulator where no video device is present.
+ *  - `'microphone'` needs a real audio capture device.
+ *  - `'camera-or-microphone'` needs at least one of the two (e.g., a test that
+ *    inspects `enumerateDevices()` after gUM but doesn't care which kind).
+ *  - `'out-of-scope'` is permanently inapplicable in React Native (cross-origin
+ *    iframes, SecureContext, Permissions Policy, canvas/WebAudio frame
+ *    inspection, getDisplayMedia, …). Never counts toward the applicable
+ *    total — these are browser-only or features we don't ship. */
+export type TestRequirement =
+  | 'always'
+  | 'camera'
+  | 'microphone'
+  | 'camera-or-microphone'
+  | 'out-of-scope';
+
+/** Result of feature-detecting the capture devices available on this host.
+ *  `enumerateDevices()` is the cheap, permission-free probe; the test runner
+ *  also corroborates `hasCamera` with a `getUserMedia({video:true})` call at
+ *  run start so the late safety-net (`isEnvironmentSkip`) stays correct. */
+export interface TestEnvironment {
+  hasCamera: boolean;
+  hasMicrophone: boolean;
+}
+
+/** Does the current environment satisfy this requirement? `'out-of-scope'`
+ *  always returns false — those tests are permanently inapplicable. */
+export function isApplicable(req: TestRequirement, env: TestEnvironment): boolean {
+  switch (req) {
+    case 'always':
+      return true;
+    case 'camera':
+      return env.hasCamera;
+    case 'microphone':
+      return env.hasMicrophone;
+    case 'camera-or-microphone':
+      return env.hasCamera || env.hasMicrophone;
+    case 'out-of-scope':
+      return false;
+  }
+}
+
+// @ref LLP 0007#the-simulator-does-not-have-a-camera-device — Source-file
+// categorization. The default (when a source isn't listed here) is `'camera'`,
+// since most ported WPT tests open a video stream. Listing only the
+// non-default cases keeps the table small and reviewable.
+//
+// For `'out-of-scope'` entries the `reason` is surfaced as the skip message —
+// it tells a reader whether the source was skipped because of a browser-only
+// dependency or because the underlying feature is out of v1 scope.
+const SOURCE_REQUIREMENTS = new Map<
+  string,
+  { requirement: TestRequirement; reason?: string }
+>([
+  // === always (no AV device needed) ===
+  ['GUM-api.https.html', { requirement: 'always' }],
+  ['GUM-deny.https.html', { requirement: 'always' }],
+  // gUM with `{}` rejects with TypeError before reaching native.
+  ['GUM-empty-option-param.https.html', { requirement: 'always' }],
+  // gUM with an unrecognized key rejects with TypeError before reaching native.
+  ['GUM-unknownkey-option-param.https.html', { requirement: 'always' }],
+  ['historical.https.html', { requirement: 'always' }],
+  ['MediaDevices-getSupportedConstraints.https.html', { requirement: 'always' }],
+  // One sub-test ("The MediaStreamTrackEvent instance's track attribute is
+  // set.") requires AudioContext and is per-name out-of-scope; the rest are
+  // pure constructor checks that need no device.
+  ['MediaStreamTrackEvent-constructor.https.html', { requirement: 'always' }],
+
+  // === microphone-required ===
+  ['GUM-echoCancellation-all.https.html', { requirement: 'microphone' }],
+  ['GUM-echoCancellation-boolean.https.html', { requirement: 'microphone' }],
+  ['GUM-echoCancellation-remote-only.https.html', { requirement: 'microphone' }],
+  ['MediaStream-audio-only.https.html', { requirement: 'microphone' }],
+
+  // === camera-or-microphone (uses both video and audio gUM, or queries
+  //     permissions for both kinds) ===
+  ['GUM-permissions-query.https.html', { requirement: 'camera-or-microphone' }],
+  ['MediaStream-add-audio-track.https.html', { requirement: 'camera-or-microphone' }],
+  ['MediaStream-idl.https.html', { requirement: 'camera-or-microphone' }],
+
+  // === out-of-scope ===
+  // Cross-origin iframes, postMessage transfer, Permissions Policy. RN has no
+  // cross-origin or iframe infrastructure, so these never run.
+  ['MediaDevices-enumerateDevices-per-origin-ids.sub.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires cross-origin iframes',
+  }],
+  ['MediaDevices-enumerateDevices-persistent-permission.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires cross-origin iframes / persistent-permission infrastructure',
+  }],
+  ['MediaDevices-after-discard.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires cross-origin iframes / discarded-browsing-context lifecycle',
+  }],
+  ['enumerateDevices-with-navigation.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires cross-origin iframes / navigation',
+  }],
+  ['MediaStreamTrack-transfer.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires postMessage MediaStreamTrack transfer between contexts',
+  }],
+  ['MediaStreamTrack-transfer-video.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires postMessage MediaStreamTrack transfer between contexts',
+  }],
+  ['MediaStreamTrack-iframe-transfer.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires cross-origin iframes / postMessage transfer',
+  }],
+  ['MediaStreamTrack-iframe-audio-transfer.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: requires cross-origin iframes / postMessage transfer',
+  }],
+  ['MediaDevices-enumerateDevices-not-allowed-camera.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: drives camera-not-allowed via cross-origin Permissions-Policy headers',
+  }],
+  ['MediaDevices-enumerateDevices-not-allowed-mic.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: drives mic-not-allowed via cross-origin Permissions-Policy headers',
+  }],
+  ['MediaStream-default-permissions-policy.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'cross-origin-or-frame: drives cross-origin Permissions-Policy iframes via `run_all_fp_tests_allow_self`',
+  }],
+  ['MediaStream-supported-by-permissions-policy.html', {
+    requirement: 'out-of-scope',
+    reason: 'browser-only: requires document.permissionsPolicy.features()',
+  }],
+
+  // Features outside the project's scope (LLP 0000 / 0001).
+  ['MediaDevices-SecureContext.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: tests a non-secure context where mediaDevices is hidden; our polyfill always exposes it',
+  }],
+  ['BrowserCaptureMediaStreamTrack-cropTo.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: requires getDisplayMedia + CropTarget',
+  }],
+  ['BrowserCaptureMediaStreamTrack-restrictTo.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: requires getDisplayMedia + RestrictionTarget',
+  }],
+  ['parallel-capture-requests.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: requires getDisplayMedia + transient-activation button',
+  }],
+  ['MediaStreamTrack-MediaElement-disabled-video-is-black.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: requires canvas.drawImage(video) frame inspection',
+  }],
+  ['MediaStreamTrack-MediaElement-disabled-audio-is-silence.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: requires AudioContext analyser to read captured samples',
+  }],
+  // WPT manual test: revocation has to be driven by the UA (test_driver in
+  // a browser; iOS doesn't expose a programmatic mid-capture revoke). The
+  // test waits forever on the `ended` event and times out.
+  ['MediaStreamTrack-end-manual.https.html', {
+    requirement: 'out-of-scope',
+    reason: 'out-of-scope: requires the UA to revoke a granted camera/mic permission mid-capture; iOS has no such API',
+  }],
+]);
+
+// Individual sub-tests we override — for cases where one test within an
+// otherwise-runnable source file depends on a feature we never ship.
+const TEST_NAME_REQUIREMENTS = new Map<
+  string,
+  { requirement: TestRequirement; reason: string }
+>([
+  // Uses `canvas.captureStream()` — canvas + WebRTC capture is out of scope.
+  [
+    'Tests that a media element with an assigned MediaStream does not start advancing currentTime until potentially playing',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: requires HTMLCanvasElement.captureStream' },
+  ],
+  // crop-and-scale isn't supported by our AVFoundation pipeline (LLP 0001).
+  ['getUserMedia() supports setting crop-and-scale as resizeMode without downscaling.',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
+  ['getUserMedia() supports setting crop-and-scale as resizeMode with downscaling.',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
+  ['getUserMedia() supports setting crop-and-scale as resizeMode with decimation.',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
+  ['Video track getCapabilities() resizeMode properly supported. Value: crop-and-scale',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
+  ['Video device getCapabilities() resizeMode properly supported. Value: crop-and-scale',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
+  // iPhone cameras don't expose a 320-wide format; "ideal: 320" can only be
+  // satisfied with cropping (out of scope).
+  [
+    'Tests that setting a required constraint with an ideal value in getUserMedia works',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: iPhone cameras have no 320-wide format and we do not crop' },
+  ],
+  // Requires AudioContext.createMediaStreamDestination(); we ship audio
+  // capture but no WebAudio implementation.
+  [
+    "The MediaStreamTrackEvent instance's track attribute is set.",
+    { requirement: 'out-of-scope', reason: 'out-of-scope: requires AudioContext / createMediaStreamDestination — WebAudio is out of scope' },
+  ],
+  // `URL.createObjectURL` behavior is owned by Expo/RN; nothing about
+  // MediaStream or getUserMedia is exercised. The test only happens to live
+  // in mediacapture-streams/historical because it documents the historical
+  // removal of the MediaStream→URL path.
+  [
+    'Passing MediaStream to URL.createObjectURL() should throw',
+    { requirement: 'out-of-scope', reason: 'out-of-scope: URL.createObjectURL behavior is owned by Expo/RN, not this project' },
+  ],
+]);
+
+function classifyTest(
+  name: string,
+  source: string | null
+): { requirement: TestRequirement; reason?: string } {
+  const perTest = TEST_NAME_REQUIREMENTS.get(name);
+  if (perTest) return perTest;
+  if (source) {
+    const perSource = SOURCE_REQUIREMENTS.get(source);
+    if (perSource) return perSource;
+  }
+  // Local tests (source==null) or unmapped WPT sources fall back to
+  // currentRequirement (if a file wrapped its registrations in
+  // `wptRequires(...)`) or the conservative default 'camera'.
+  return { requirement: currentRequirement ?? 'camera' };
 }
 
 // MARK: - t object
@@ -145,6 +384,11 @@ type TestEntry = {
   type: 'sync' | 'async-promise' | 'async-callback';
   source: string | null;
   group: string | null;
+  requirement: TestRequirement;
+  /** If the requirement is `'out-of-scope'`, the rationale we surface as the
+   *  skip message; otherwise unset and a default message ("requires a real
+   *  camera device", etc.) is generated when we pre-skip. */
+  outOfScopeReason?: string;
 };
 
 const tests: TestEntry[] = [];
@@ -159,38 +403,37 @@ function defaultName(): string {
     : `Test ${tests.length + 1}`;
 }
 
-export function test(fn: (t: TestHandle) => void, name?: string): void {
+function registerTest(
+  name: string,
+  fn: TestFn,
+  type: TestEntry['type']
+): void {
+  const { requirement, reason } = classifyTest(name, currentSourceFile);
   tests.push({
-    name: name ?? defaultName(),
+    name,
     fn,
-    type: 'sync',
+    type,
     source: currentSourceFile,
     group: currentGroup,
+    requirement,
+    outOfScopeReason: requirement === 'out-of-scope' ? reason : undefined,
   });
+}
+
+export function test(fn: (t: TestHandle) => void, name?: string): void {
+  registerTest(name ?? defaultName(), fn, 'sync');
 }
 
 export function promise_test(
   fn: (t: TestHandle) => Promise<void>,
   name?: string
 ): void {
-  tests.push({
-    name: name ?? defaultName(),
-    fn,
-    type: 'async-promise',
-    source: currentSourceFile,
-    group: currentGroup,
-  });
+  registerTest(name ?? defaultName(), fn, 'async-promise');
 }
 
 /** WPT async_test — caller invokes `t.done()` to finish; otherwise times out. */
 export function async_test(fn: (t: TestHandle) => void, name?: string): void {
-  tests.push({
-    name: name ?? defaultName(),
-    fn,
-    type: 'async-callback',
-    source: currentSourceFile,
-    group: currentGroup,
-  });
+  registerTest(name ?? defaultName(), fn, 'async-callback');
 }
 
 /** WPT helper that asks the testing infrastructure to grant or deny a media
@@ -466,14 +709,13 @@ export type TestResult = {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-// @ref LLP 0007#the-simulator-does-not-have-a-camera-device — `getUserMedia`-
-// dependent tests can't run when there's no AVCaptureDevice. We report these
-// as `skip` rather than `fail` because the failure is an environment limit.
-//
-// Some WPT bodies catch the gUM rejection and re-throw `assert_unreached(...)`
-// with a sentinel message rather than letting the original `NotFoundError`
-// propagate; we recognize those sentinels too so they don't show up as
-// regressions on the camera-less simulator.
+// @ref LLP 0007#the-simulator-does-not-have-a-camera-device — Safety net for
+// the camera-less environment. Tests we couldn't pre-skip (because their
+// `requirement` was misclassified, or because the runner was invoked with no
+// `environment` and we couldn't tell up front) still reach this path: if
+// `getUserMedia` throws a `NotFoundError`, we mark the test `skip` rather
+// than `fail`. Some WPT bodies catch the gUM rejection and re-throw
+// `assert_unreached(...)` with a sentinel message; we recognize those too.
 function isEnvironmentSkip(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   const name = (e as { name?: string }).name;
@@ -492,105 +734,12 @@ function isEnvironmentSkip(e: unknown): boolean {
   return false;
 }
 
-// Set once at runAllTests start by a probe call to `getUserMedia({video:true})`.
+// Set at runAllTests start by a probe call to `getUserMedia({video:true})`.
 // When the probe rejects with NotFoundError we know we're running on the
 // camera-less simulator. The flag is consulted by `isEnvironmentSkip` to
 // recognize assert_unreached sentinels emitted by WPT bodies that themselves
 // swallow the original NotFoundError.
 let noCameraEnvironment = false;
-
-// Sources whose tests fundamentally require browser features that don't exist
-// in React Native (cross-origin iframes, postMessage transfer of MediaStreamTrack,
-// secure-context boundaries, Permissions Policy). We pre-mark them as skipped
-// so they don't timeout-wait for events that never fire.
-// Sources where every test depends on a feature outside the v1 subset. Map
-// values are the rationale we surface to the runner so a reader can
-// distinguish "we chose not to support this" from "we have a regression".
-const ENV_SKIPPED_SOURCES = new Map<string, string>([
-  // === Cross-origin contexts and frames ===
-  // Per the project goal, these are the only kinds of tests we accept as
-  // permanently skipped. RN has no cross-origin or iframe infrastructure,
-  // and `postMessage` transfer of MediaStreamTrack between contexts depends
-  // on cross-context messaging that doesn't exist here.
-  ['MediaDevices-enumerateDevices-per-origin-ids.sub.https.html', 'cross-origin-or-frame: requires cross-origin iframes'],
-  ['MediaDevices-enumerateDevices-persistent-permission.https.html', 'cross-origin-or-frame: requires cross-origin iframes / persistent-permission infrastructure'],
-  ['MediaDevices-after-discard.https.html', 'cross-origin-or-frame: requires cross-origin iframes / discarded-browsing-context lifecycle'],
-  ['enumerateDevices-with-navigation.https.html', 'cross-origin-or-frame: requires cross-origin iframes / navigation'],
-  ['MediaStreamTrack-transfer.https.html', 'cross-origin-or-frame: requires postMessage MediaStreamTrack transfer between contexts'],
-  ['MediaStreamTrack-transfer-video.https.html', 'cross-origin-or-frame: requires postMessage MediaStreamTrack transfer between contexts'],
-  ['MediaStreamTrack-iframe-transfer.https.html', 'cross-origin-or-frame: requires cross-origin iframes / postMessage transfer'],
-  ['MediaStreamTrack-iframe-audio-transfer.https.html', 'cross-origin-or-frame: requires cross-origin iframes / postMessage transfer'],
-  ['MediaDevices-enumerateDevices-not-allowed-camera.https.html', 'cross-origin-or-frame: drives camera-not-allowed via cross-origin Permissions-Policy headers'],
-  ['MediaDevices-enumerateDevices-not-allowed-mic.https.html', 'cross-origin-or-frame: drives mic-not-allowed via cross-origin Permissions-Policy headers'],
-  ['MediaStream-default-permissions-policy.https.html', 'cross-origin-or-frame: drives cross-origin Permissions-Policy iframes via `run_all_fp_tests_allow_self`'],
-
-  // === Tests that fundamentally clash with the project's scope ===
-  // (LLP 0000 lists `getDisplayMedia`, canvas/WebAudio access, and a
-  //  non-secure-context probe as out of scope.)
-  // SecureContext: a non-secure context that hides `mediaDevices`. Our entire
-  // project polyfills `mediaDevices`, so we can't honor the assert_false's.
-  ['MediaDevices-SecureContext.html', 'out-of-scope: tests a non-secure context where mediaDevices is hidden; our polyfill always exposes it'],
-  // getDisplayMedia + CropTarget / RestrictionTarget / transient activation
-  ['BrowserCaptureMediaStreamTrack-cropTo.https.html', 'out-of-scope: requires getDisplayMedia + CropTarget'],
-  ['BrowserCaptureMediaStreamTrack-restrictTo.https.html', 'out-of-scope: requires getDisplayMedia + RestrictionTarget'],
-  ['parallel-capture-requests.https.html', 'out-of-scope: requires getDisplayMedia + transient-activation button'],
-  // Disabled-track-renders-{black,silence}: need canvas.drawImage(video) /
-  // AudioContext analyser respectively. Reading raw samples back into JS is
-  // explicitly out of scope (LLP 0005#consequences).
-  ['MediaStreamTrack-MediaElement-disabled-video-is-black.https.html', 'out-of-scope: requires canvas.drawImage(video) frame inspection'],
-  ['MediaStreamTrack-MediaElement-disabled-audio-is-silence.https.html', 'out-of-scope: requires AudioContext analyser to read captured samples'],
-
-  // Audio capture is in scope as of 2026-05-22 (LLP 0001, LLP 0009).
-  // The previous source-level skips for audio-only test files are removed
-  // here so the audio tests actually run against the iOS implementation.
-]);
-
-// Individual tests we skip because they depend on a browser feature that's
-// out of scope per LLP 0001 (canvas.captureStream, multi-camera devices,
-// crop-and-scale, AudioContext, etc.) and that we have no path to ship.
-const ENV_SKIPPED_TEST_NAMES = new Map<string, string>([
-  // Uses `canvas.captureStream()` — canvas + WebRTC capture is out of scope.
-  [
-    'Tests that a media element with an assigned MediaStream does not start advancing currentTime until potentially playing',
-    'out-of-scope: requires HTMLCanvasElement.captureStream',
-  ],
-  // (Previously env-skipped: `deviceId and groupId are correctly reported by
-  // getSettings() for all input devices` — required >1 camera. Now runnable
-  // since enumerateDevices() returns every built-in camera.)
-  // crop-and-scale isn't supported by our AVFoundation pipeline (LLP 0001).
-  [
-    'getUserMedia() supports setting crop-and-scale as resizeMode without downscaling.',
-    'out-of-scope: crop-and-scale resizeMode is not implemented',
-  ],
-  [
-    'getUserMedia() supports setting crop-and-scale as resizeMode with downscaling.',
-    'out-of-scope: crop-and-scale resizeMode is not implemented',
-  ],
-  [
-    'getUserMedia() supports setting crop-and-scale as resizeMode with decimation.',
-    'out-of-scope: crop-and-scale resizeMode is not implemented',
-  ],
-  [
-    'Video track getCapabilities() resizeMode properly supported. Value: crop-and-scale',
-    'out-of-scope: crop-and-scale resizeMode is not implemented',
-  ],
-  [
-    'Video device getCapabilities() resizeMode properly supported. Value: crop-and-scale',
-    'out-of-scope: crop-and-scale resizeMode is not implemented',
-  ],
-  // iPhone cameras don't expose a 320-wide format; "ideal: 320" can only be
-  // satisfied with cropping (out of scope).
-  [
-    'Tests that setting a required constraint with an ideal value in getUserMedia works',
-    'out-of-scope: iPhone cameras have no 320-wide format and we do not crop',
-  ],
-  // Requires AudioContext.createMediaStreamDestination(); we ship audio
-  // capture but no WebAudio implementation.
-  [
-    "The MediaStreamTrackEvent instance's track attribute is set.",
-    'out-of-scope: requires AudioContext / createMediaStreamDestination — WebAudio is out of scope',
-  ],
-]);
 
 /** A test as registered, before it has run. Used by the UI to pre-list the
  *  whole suite so users can see progress through it. */
@@ -598,20 +747,102 @@ export interface PendingTest {
   name: string;
   source: string | null;
   group: string | null;
+  requirement: TestRequirement;
 }
 
 export interface RunOptions {
   /** Optional helper to reset shared DOM-like state between tests. */
   resetEnvironment?: () => void;
+  /** Optional helper invoked when the runner crosses a WPT source-file
+   *  boundary (and before the very first test). Used to clear state that
+   *  the spec assumes resets between .html files but accumulates within
+   *  one (capture grants, in particular). */
+  resetFile?: () => void;
   /** Called just before each test starts running. */
   onStart?: (entry: PendingTest, index: number, total: number) => void;
   /** Called after each test produces a result. */
   onResult?: (result: TestResult, index: number, total: number) => void;
+  /** Feature-detected environment. When omitted the runner probes via gUM at
+   *  the start of the suite. Passing it explicitly lets the UI use the same
+   *  applicability counts it displays. */
+  environment?: TestEnvironment;
 }
 
 /** Snapshot of every test currently registered, for UI pre-rendering. */
 export function getRegisteredTests(): PendingTest[] {
-  return tests.map((t) => ({ name: t.name, source: t.source, group: t.group }));
+  return tests.map((t) => ({
+    name: t.name,
+    source: t.source,
+    group: t.group,
+    requirement: t.requirement,
+  }));
+}
+
+/** Feature-detect the local capture devices via `enumerateDevices()`. The
+ *  call is permission-free, so we can run it as soon as the screen mounts.
+ *  Returns `{ hasCamera: false, hasMicrophone: false }` if the polyfill or
+ *  native module is unavailable for any reason — the caller can treat that
+ *  as "simulator-like" and pre-skip device-required tests. */
+export async function detectEnvironment(): Promise<TestEnvironment> {
+  try {
+    const md = (globalThis as unknown as {
+      navigator?: { mediaDevices?: { enumerateDevices?: () => Promise<{ kind: string }[]> } };
+    }).navigator?.mediaDevices;
+    if (!md?.enumerateDevices) {
+      return { hasCamera: false, hasMicrophone: false };
+    }
+    const devices = await md.enumerateDevices();
+    return {
+      hasCamera: devices.some((d) => d.kind === 'videoinput'),
+      hasMicrophone: devices.some((d) => d.kind === 'audioinput'),
+    };
+  } catch {
+    return { hasCamera: false, hasMicrophone: false };
+  }
+}
+
+/** Counts that drive the in-app header "X applicable / Y total". `outOfScope`
+ *  is permanently inapplicable (browser-only or unshipped features) — it's
+ *  excluded from `applicable` regardless of environment. `deviceMissing` is
+ *  the count of tests that *would* run on a real device but can't here. */
+export interface Applicability {
+  total: number;
+  applicable: number;
+  outOfScope: number;
+  deviceMissing: number;
+}
+
+export function summarizeApplicability(env: TestEnvironment): Applicability {
+  let outOfScope = 0;
+  let deviceMissing = 0;
+  let applicable = 0;
+  for (const t of tests) {
+    if (t.requirement === 'out-of-scope') {
+      outOfScope++;
+    } else if (isApplicable(t.requirement, env)) {
+      applicable++;
+    } else {
+      deviceMissing++;
+    }
+  }
+  return { total: tests.length, applicable, outOfScope, deviceMissing };
+}
+
+function preSkipMessage(req: TestRequirement, outOfScopeReason?: string): string {
+  switch (req) {
+    case 'out-of-scope':
+      return outOfScopeReason ?? 'out-of-scope';
+    case 'camera':
+      return 'skipped: requires a real camera device';
+    case 'microphone':
+      return 'skipped: requires a real microphone device';
+    case 'camera-or-microphone':
+      return 'skipped: requires a real camera or microphone device';
+    case 'always':
+      // Unreachable — `'always'` tests are always applicable. Fall back to a
+      // generic message rather than crashing if logic ever drifts.
+      return 'skipped';
+  }
 }
 
 // MARK: - Late-error capture
@@ -722,6 +953,7 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   // WPT bodies that swallow NotFoundError can still be recognized as
   // environment-skips. The probe is intentionally minimal — a single
   // gUM({video:true}) — and isolated from the test environment reset.
+  let env = options.environment;
   try {
     const probeStream = await (
       navigator as unknown as {
@@ -733,39 +965,47 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   } catch (e) {
     noCameraEnvironment = (e as { name?: string })?.name === 'NotFoundError';
   }
+  // If the caller didn't tell us the environment, derive it from the probe
+  // (which is authoritative for cameras) plus a permission-free enumerate
+  // probe for the microphone.
+  if (!env) {
+    const detected = await detectEnvironment();
+    env = {
+      hasCamera: !noCameraEnvironment,
+      hasMicrophone: detected.hasMicrophone,
+    };
+  }
 
   const results: TestResult[] = [];
   const total = tests.length;
+  let previousSource: string | null | undefined = undefined;
 
   for (let i = 0; i < tests.length; i++) {
     const entry = tests[i];
-    options.resetEnvironment?.();
-    options.onStart?.({ name: entry.name, source: entry.source, group: entry.group }, i, total);
-
-    // Pre-skip tests whose source needs unsupported browser features.
-    const sourceSkipReason = entry.source ? ENV_SKIPPED_SOURCES.get(entry.source) : undefined;
-    if (sourceSkipReason !== undefined) {
-      const result: TestResult = {
-        name: entry.name,
-        status: 'skip',
-        message: sourceSkipReason,
-        durationMs: 0,
-        source: entry.source,
-        group: entry.group,
-      };
-      results.push(result);
-      emit(`WPT_RESULT: ${JSON.stringify(result)}`);
-      options.onResult?.(result, i, total);
-      continue;
+    // Per-file reset on the first test and whenever the source changes.
+    // `undefined` is the sentinel for "haven't started yet"; once we run a
+    // test, previousSource holds the actual source (which can be `null` for
+    // project-local tests, treated as a distinct "file" for isolation).
+    if (entry.source !== previousSource) {
+      options.resetFile?.();
+      previousSource = entry.source;
     }
-    // Per-test name skip — for individual tests within a source file that
-    // depend on something we never ship.
-    const perTestSkipReason = ENV_SKIPPED_TEST_NAMES.get(entry.name);
-    if (perTestSkipReason !== undefined) {
+    options.resetEnvironment?.();
+    options.onStart?.(
+      { name: entry.name, source: entry.source, group: entry.group, requirement: entry.requirement },
+      i,
+      total
+    );
+
+    // Pre-skip tests whose requirement isn't met by the current environment
+    // (out-of-scope, or device-required without the matching device). The
+    // message distinguishes "never applicable" from "needs a camera/mic" so
+    // a reader can tell whether a real device would change the outcome.
+    if (!isApplicable(entry.requirement, env)) {
       const result: TestResult = {
         name: entry.name,
         status: 'skip',
-        message: perTestSkipReason,
+        message: preSkipMessage(entry.requirement, entry.outOfScopeReason),
         durationMs: 0,
         source: entry.source,
         group: entry.group,
@@ -860,11 +1100,21 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     currentTestHandle = null;
   }
 
+  // Split skipped into "out-of-scope" (permanently inapplicable) vs
+  // "deviceMissing" (would run on a real device) so the CLI / UI can show
+  // "applicable" counts that don't conflate the two. `applicable` is the
+  // number we actually attempted to run.
+  const applicability = summarizeApplicability(env);
   const summary = {
     passed: results.filter((r) => r.status === 'pass').length,
     failed: results.filter((r) => r.status === 'fail').length,
     timeout: results.filter((r) => r.status === 'timeout').length,
     skipped: results.filter((r) => r.status === 'skip').length,
+    total: applicability.total,
+    applicable: applicability.applicable,
+    outOfScope: applicability.outOfScope,
+    deviceMissing: applicability.deviceMissing,
+    environment: env,
   };
   emit(`WPT_DONE: ${JSON.stringify(summary)}`);
   return results;

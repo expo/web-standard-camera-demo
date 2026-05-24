@@ -269,15 +269,28 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
   const out: FlatVideoConstraints = {};
   if (c.deviceId !== undefined) {
     const v = pickString(c.deviceId);
+    // Empty `deviceId` is unmatchable — no `AVCaptureDevice.uniqueID` is the
+    // empty string. Without this guard, the native side treats `deviceId: ""`
+    // as "no constraint" and silently returns the default device. WPT's
+    // `MediaDevices-enumerateDevices` iterates over the pre-grant audio
+    // placeholder (groupId === "") and expects `OverconstrainedError`.
+    if (v === '') {
+      throw new DOMException('Constraint cannot be satisfied: deviceId', 'OverconstrainedError', 'deviceId');
+    }
     if (v !== undefined) out.deviceId = v;
   }
   // @ref LLP 0002#gum-pick-device — In v1 each `AVCaptureDevice.uniqueID` is
   // used as both `deviceId` and `groupId`, so a `groupId: {exact}` constraint
   // resolves to the same device as the corresponding `deviceId: {exact}`.
   // Map it across when the caller specified only `groupId`, so the native
-  // pickDevice path can honor it without a separate constraint field.
+  // pickDevice path can honor it without a separate constraint field. We
+  // surface unmatchable empty `groupId` here too so the rejected constraint
+  // name comes back as `"groupId"` rather than `"deviceId"`.
   if (out.deviceId === undefined && (c as { groupId?: ConstrainDOMString }).groupId !== undefined) {
     const v = pickString((c as { groupId: ConstrainDOMString }).groupId);
+    if (v === '') {
+      throw new DOMException('Constraint cannot be satisfied: groupId', 'OverconstrainedError', 'groupId');
+    }
     if (v !== undefined) out.deviceId = v;
   }
   if (c.facingMode !== undefined) {

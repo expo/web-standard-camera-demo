@@ -384,12 +384,12 @@ export function installDomShim(): void {
     }
     g.MediaStreamTrackEvent = MediaStreamTrackEvent;
   }
-  if (!g.URL || !(g.URL as { createObjectURL?: unknown }).createObjectURL) {
-    (g.URL ?? (g.URL = {} as Record<string, unknown>)) as Record<string, unknown>;
-    (g.URL as Record<string, unknown>).createObjectURL = (): never => {
-      throw new TypeError('URL.createObjectURL is not supported for MediaStream in this environment');
-    };
-  }
+  // `URL.createObjectURL` is provided by Expo/RN and its behavior isn't in
+  // this project's scope (LLP 0001 covers getUserMedia, MediaStream,
+  // MediaStreamTrack, and HTMLMediaElement.srcObject — not the URL / File
+  // API). The lone WPT test that probed it ("Passing MediaStream to
+  // URL.createObjectURL() should throw") is marked out-of-scope in
+  // testharness.ts so we don't need a shim here.
 
   // WPT testharness helpers used at file-evaluation scope. We stub them as
   // globals so 1:1 ports load; tests that actually call them at runtime will

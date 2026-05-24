@@ -55,6 +55,38 @@ message says the device is missing, the test is reported as `skip` rather
 than `fail`. Skipped tests do not cause the CLI to exit non-zero. A real
 device, where `getUserMedia` succeeds, yields zero skips.
 
+### Test categorization
+
+Every registered test carries a `requirement` describing what it needs to
+run, set at registration time from a `SOURCE_REQUIREMENTS` / `TEST_NAME_REQUIREMENTS`
+table in `testharness.ts`:
+
+- `'always'` — runs anywhere. Pure API-surface checks, IDL inspection, or
+  paths where `getUserMedia` rejects synchronously (`TypeError` for invalid
+  constraints, `NotAllowedError` for the synthetic-denial helper).
+- `'camera'` — needs a real `AVCaptureDevice` for video. Skipped pre-emptively
+  on the iOS simulator. Default for any unmapped WPT source.
+- `'microphone'` — needs a real audio capture device.
+- `'camera-or-microphone'` — needs at least one (e.g., tests that use both
+  `gUM({video})` and `gUM({audio})`).
+- `'out-of-scope'` — permanently inapplicable in React Native: cross-origin
+  iframes, postMessage transfer, Permissions Policy headers, SecureContext,
+  `getDisplayMedia`, canvas / WebAudio frame inspection. The runner skips
+  these with the rationale from the table as the message — readers can
+  distinguish "browser-only" from "feature outside our scope".
+
+The runner derives the environment via `detectEnvironment()` (calls
+`enumerateDevices()`, which is permission-free) plus the existing
+`gUM({video})` probe, then pre-skips any test whose requirement isn't met
+with a clear message ("skipped: requires a real camera device"). This
+classification is also surfaced in `WPT_DONE` so the CLI and in-app UI can
+display "X applicable on simulator / Y total" rather than "13 passed / 36
+skipped" — the latter reads as broken even though it's expected.
+
+The runtime `NotFoundError` safety net stays in place: if a test was
+misclassified as `'always'` but turns out to depend on a camera, it still
+gets `skip` instead of `fail` at runtime.
+
 Both use `console.log`, so they end up in the simulator log stream the CLI is parsing.
 
 ## Adapter to DOM idioms
