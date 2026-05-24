@@ -17,8 +17,8 @@ export default function DemoCatalogScreen(): React.JSX.Element {
       <View style={styles.header}>
         <Text style={[styles.eyebrow, { color: theme.textSecondary }]}>Web APIs on Expo</Text>
         <Text style={[styles.subtitle, { color: theme.text }]}>
-          Choose the proof point for the conversation: the current WebGPU camera cube, or the
-          LFM2-VL port candidate that mirrors a real browser demo.
+          Choose the proof point for the conversation: a WebGPU camera cube, or a live shader lens
+          that stays inside the WebGPU path.
         </Text>
       </View>
 
@@ -33,11 +33,11 @@ export default function DemoCatalogScreen(): React.JSX.Element {
 
       <DemoChoiceCard
         accentColor="#f59e0b"
-        description="A research entry for Liquid AI's browser WebGPU captioning demo."
-        detail="source demo: getUserMedia -> canvas frame -> Transformers.js WebGPU"
-        href="/lfm2-vl"
-        status="research"
-        title="LFM2-VL captioning"
+        description="A live camera shader playground that runs entirely through WebGPU."
+        detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL effects"
+        href="/shader-lens"
+        status="ready"
+        title="Shader lens"
       />
     </ScrollView>
   );

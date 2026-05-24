@@ -29,7 +29,7 @@ export default function DemoStackLayout(): React.JSX.Element {
           contentStyle: { backgroundColor: DARK_BG },
         }}
       />
-      <Stack.Screen name="lfm2-vl" options={{ title: 'LFM2-VL' }} />
+      <Stack.Screen name="shader-lens" options={{ title: 'Shader Lens' }} />
     </Stack>
   );
 }
