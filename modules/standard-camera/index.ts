@@ -5,7 +5,7 @@
 // re-exports below.
 import 'event-target-polyfill';
 
-export { JS_LOAD_TIME } from './src/build-info';
+export { JS_BUILD_TIME } from './src/build-info';
 export { default as NativeStandardCamera } from './src/native';
 export type { AuthorizationStatus, NativeDiagnostics } from './src/native';
 export { DOMException } from './src/DOMException';

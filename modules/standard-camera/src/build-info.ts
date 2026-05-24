@@ -1,8 +1,10 @@
-// Per-evaluation timestamp captured the first time this module is imported.
-// Used by the Diagnostics tab to answer "did the JS bundle just reload?" —
-// changes whenever a fresh bundle is evaluated, including a Metro hot reload
-// or a swap between the embedded bundle and a Metro-served one. Combined with
-// the native executable mtime, this tells us whether we're running fresh JS
-// against a fresh binary, fresh JS against a stale binary, or a stale
-// embedded bundle against either.
-export const JS_LOAD_TIME = Date.now();
+import Constants from 'expo-constants';
+
+// Time the JS bundle was produced, baked into the bundle at build time
+// by app.config.ts (extra.jsBuildTime = Date.now() evaluated when Metro
+// generates the manifest in dev, or when `expo export:embed` runs the
+// config in release). Used by the Diagnostics tab to answer "how old is
+// the JS code on this device?". Falls back to load time when the field
+// is missing — e.g. if app.config.ts was bypassed during a custom build.
+export const JS_BUILD_TIME: number =
+  (Constants.expoConfig?.extra?.jsBuildTime as number | undefined) ?? Date.now();

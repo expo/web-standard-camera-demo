@@ -4,7 +4,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useTheme } from '@/hooks/use-theme';
 import {
-  JS_LOAD_TIME,
+  JS_BUILD_TIME,
   NativeStandardCamera,
   type AuthorizationStatus,
   type NativeDiagnostics,
@@ -49,7 +49,7 @@ export default function DiagnosticsScreen(): React.JSX.Element {
       contentInsetAdjustmentBehavior="automatic">
       <Section title="Build">
         <Row label="Native built" value={formatNativeBuild(diag)} />
-        <Row label="JS loaded" value={formatTimestamp(JS_LOAD_TIME)} />
+        <Row label="JS built" value={formatTimestamp(JS_BUILD_TIME)} />
         <Row label="Diagnostics read" value={formatTimestamp(refreshedAt)} />
       </Section>
 
@@ -84,9 +84,9 @@ export default function DiagnosticsScreen(): React.JSX.Element {
       <View style={styles.note}>
         <Text style={[styles.noteText, { color: theme.textSecondary }]}>
           Native "built" is the executable file's modification time — it changes on every native
-          rebuild. JS "loaded" is the time the bundle was last evaluated — it changes on every
-          Metro reload (and matches the embedded bundle's baseline when there is no Metro
-          connection).
+          rebuild. JS "built" is when app.config.ts was evaluated to produce this bundle — it
+          matches the Metro session start in dev, and the moment `expo export:embed` ran for
+          release builds.
         </Text>
       </View>
     </ScrollView>
