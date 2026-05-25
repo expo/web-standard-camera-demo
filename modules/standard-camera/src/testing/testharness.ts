@@ -954,6 +954,14 @@ let currentTestHandle: TestHandleImpl | null = null;
 
 export async function runAllTests(_unused?: { video: HTMLVideoElement }, options: RunOptions = {}): Promise<TestResult[]> {
   // (Late-error hooks are installed at module load — see top of file.)
+  // Clear capture grants, synthetic denials, and per-test DOM state up front so
+  // a re-run in the same JS session starts where a cold launch would — the
+  // first-iteration `resetFile` below would otherwise be the only guarantee,
+  // and the probe gUM that runs before the loop already mutates state on a
+  // real device.
+  options.resetFile?.();
+  options.resetEnvironment?.();
+
   // Probe whether any camera is present so the AssertionError sentinels in
   // WPT bodies that swallow NotFoundError can still be recognized as
   // environment-skips. The probe is intentionally minimal — a single
@@ -1036,20 +1044,16 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     let result: TestResult;
 
     try {
+      // Abort is checked at iteration boundaries (top of the loop), not
+      // raced against the in-flight test. Letting the current test finish
+      // before exiting on abort keeps a half-run test from leaking shared
+      // state (capture grants, denied-set, the stub `<video>`'s srcObject)
+      // into the next runAllTests call in the same JS session.
       await Promise.race([
         runOne(entry, t),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('timeout')), DEFAULT_TIMEOUT_MS)
         ),
-        // Settle as soon as the caller aborts — so tapping "stop" mid-test
-        // doesn't have to wait out the 15s timeout before the loop sees it.
-        new Promise<never>((_, reject) => {
-          if (options.signal?.aborted) {
-            reject(new Error('aborted'));
-            return;
-          }
-          options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-        }),
       ]);
       result = {
         name: entry.name,
@@ -1060,11 +1064,6 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
       };
     } catch (e) {
       const err = e as Error;
-      if (err.message === 'aborted') {
-        // Bail out of the loop immediately; record nothing for the in-flight
-        // test (it didn't finish) and let the caller see the partial run.
-        break;
-      }
       if (err.message === 'timeout') {
         result = {
           name: entry.name,

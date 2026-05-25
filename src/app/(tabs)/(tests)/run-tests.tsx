@@ -4,7 +4,7 @@ import * as Linking from 'expo-linking';
 import * as React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Button as UIButton, Host } from '@expo/ui/swift-ui';
-import { labelStyle } from '@expo/ui/swift-ui/modifiers';
+import { disabled, labelStyle } from '@expo/ui/swift-ui/modifiers';
 import Animated, {
   useAnimatedScrollHandler,
   useAnimatedStyle,
@@ -172,6 +172,11 @@ export default function RunTestsScreen(): React.JSX.Element {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const [rows, setRows] = React.useState<Row[]>(() => initialRows());
   const [running, setRunning] = React.useState(false);
+  // True between the user tapping Stop and the in-flight test settling. Used
+  // to disable the header button so a second tap can't kick off a new run
+  // while a half-cancelled test is still mutating shared module state
+  // (capture grants, denied set, the stub video's srcObject).
+  const [cancelling, setCancelling] = React.useState(false);
   const [completed, setCompleted] = React.useState(0);
   // Detected once on focus (via `enumerateDevices`), then refreshed at the
   // start of every run. Drives the "X applicable / Y total" header so users
@@ -227,7 +232,10 @@ export default function RunTestsScreen(): React.JSX.Element {
   const runAbortRef = React.useRef<AbortController | null>(null);
 
   const cancel = React.useCallback(() => {
-    runAbortRef.current?.abort();
+    const ac = runAbortRef.current;
+    if (!ac || ac.signal.aborted) return;
+    setCancelling(true);
+    ac.abort();
   }, []);
 
   const run = React.useCallback(async () => {
@@ -294,6 +302,7 @@ export default function RunTestsScreen(): React.JSX.Element {
     }
     flushPending();
     setRunning(false);
+    setCancelling(false);
     perfDump(`done t=${Math.round(now() - t0)}ms`);
   }, [flushPending, scheduleFlush]);
 
@@ -371,15 +380,15 @@ export default function RunTestsScreen(): React.JSX.Element {
     () => (
       <Host matchContents>
         <UIButton
-          onPress={running ? cancel : run}
+          onPress={cancelling ? undefined : running ? cancel : run}
           systemImage={running ? 'stop.fill' : 'play.fill'}
-          label={running ? 'Stop' : 'Run tests'}
+          label={cancelling ? 'Stopping' : running ? 'Stop' : 'Run tests'}
           role={running ? 'destructive' : 'default'}
-          modifiers={[labelStyle('iconOnly')]}
+          modifiers={[labelStyle('iconOnly'), disabled(cancelling)]}
         />
       </Host>
     ),
-    [running, run, cancel]
+    [cancelling, running, run, cancel]
   );
 
   // Drive the pill's `top` from the scroll position. UIScrollView places
