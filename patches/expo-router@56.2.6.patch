@@ -1,0 +1,54 @@
+diff --git a/build/react-navigation/native-stack/types.d.ts b/build/react-navigation/native-stack/types.d.ts
+index 6de73e0c33cedbaaaffdcb092ba21fc9ff71862e..7c74ed03362edcdad8ee08669ed287668bb9e973 100644
+--- a/build/react-navigation/native-stack/types.d.ts
++++ b/build/react-navigation/native-stack/types.d.ts
+@@ -271,6 +271,15 @@ export type NativeStackNavigationOptions = {
+      * Tint color for the header. Changes the color of back button and title.
+      */
+     headerTintColor?: ColorValue;
++    /**
++     * User interface style to apply to the native iOS navigation bar.
++     *
++     * When omitted, Expo Router keeps its default behavior and derives the
++     * native header style from the current navigation theme.
++     *
++     * @platform ios
++     */
++    headerUserInterfaceStyle?: ScreenStackHeaderConfigProps['experimental_userInterfaceStyle'];
+     /**
+      * Function which returns a React Element to render as the background of the header.
+      * This is useful for using backgrounds such as an image, a gradient, blur effect etc.
+diff --git a/build/react-navigation/native-stack/views/useHeaderConfigProps.d.ts b/build/react-navigation/native-stack/views/useHeaderConfigProps.d.ts
+index 218c4291fdb57600a45d32fbcefe3707a520fe79..c95f7971a5a12a153007e504cd49476f47dae39d 100644
+--- a/build/react-navigation/native-stack/views/useHeaderConfigProps.d.ts
++++ b/build/react-navigation/native-stack/views/useHeaderConfigProps.d.ts
+@@ -10,6 +10,6 @@ type Props = NativeStackNavigationOptions & {
+     } | undefined;
+     route: Route<string>;
+ };
+-export declare function useHeaderConfigProps({ headerBackIcon, headerBackImageSource, headerBackButtonDisplayMode, headerBackButtonMenuEnabled, headerBackTitle, headerBackTitleStyle, headerBackVisible, headerShadowVisible, headerLargeStyle, headerLargeTitle: headerLargeTitleDeprecated, headerLargeTitleEnabled, headerLargeTitleShadowVisible, headerLargeTitleStyle, headerBackground, headerLeft, headerRight, headerShown, headerStyle, headerBlurEffect, headerTintColor, headerTitle, headerTitleAlign, headerTitleStyle, headerTransparent, headerSearchBarOptions, headerTopInsetEnabled, headerBack, route, title, unstable_headerLeftItems: headerLeftItems, unstable_headerRightItems: headerRightItems, }: Props): ScreenStackHeaderConfigProps;
++export declare function useHeaderConfigProps({ headerBackIcon, headerBackImageSource, headerBackButtonDisplayMode, headerBackButtonMenuEnabled, headerBackTitle, headerBackTitleStyle, headerBackVisible, headerShadowVisible, headerLargeStyle, headerLargeTitle: headerLargeTitleDeprecated, headerLargeTitleEnabled, headerLargeTitleShadowVisible, headerLargeTitleStyle, headerBackground, headerLeft, headerRight, headerShown, headerStyle, headerBlurEffect, headerTintColor, headerUserInterfaceStyle, headerTitle, headerTitleAlign, headerTitleStyle, headerTransparent, headerSearchBarOptions, headerTopInsetEnabled, headerBack, route, title, unstable_headerLeftItems: headerLeftItems, unstable_headerRightItems: headerRightItems, }: Props): ScreenStackHeaderConfigProps;
+ export {};
+ //# sourceMappingURL=useHeaderConfigProps.d.ts.map
+diff --git a/build/react-navigation/native-stack/views/useHeaderConfigProps.js b/build/react-navigation/native-stack/views/useHeaderConfigProps.js
+index 2de6d160cedffb4ffb124adf7cd10979ec6ee778..4a8c554197b7fc054af5a9c61503978d37bfbbaf 100644
+--- a/build/react-navigation/native-stack/views/useHeaderConfigProps.js
++++ b/build/react-navigation/native-stack/views/useHeaderConfigProps.js
+@@ -108,7 +108,7 @@ const getMenuItem = (item) => {
+         subtitle: description,
+     };
+ };
+-function useHeaderConfigProps({ headerBackIcon, headerBackImageSource, headerBackButtonDisplayMode, headerBackButtonMenuEnabled, headerBackTitle, headerBackTitleStyle, headerBackVisible, headerShadowVisible, headerLargeStyle, headerLargeTitle: headerLargeTitleDeprecated, headerLargeTitleEnabled = headerLargeTitleDeprecated, headerLargeTitleShadowVisible, headerLargeTitleStyle, headerBackground, headerLeft, headerRight, headerShown, headerStyle, headerBlurEffect, headerTintColor, headerTitle, headerTitleAlign, headerTitleStyle, headerTransparent, headerSearchBarOptions, headerTopInsetEnabled, headerBack, route, title, unstable_headerLeftItems: headerLeftItems, unstable_headerRightItems: headerRightItems, }) {
++function useHeaderConfigProps({ headerBackIcon, headerBackImageSource, headerBackButtonDisplayMode, headerBackButtonMenuEnabled, headerBackTitle, headerBackTitleStyle, headerBackVisible, headerShadowVisible, headerLargeStyle, headerLargeTitle: headerLargeTitleDeprecated, headerLargeTitleEnabled = headerLargeTitleDeprecated, headerLargeTitleShadowVisible, headerLargeTitleStyle, headerBackground, headerLeft, headerRight, headerShown, headerStyle, headerBlurEffect, headerTintColor, headerUserInterfaceStyle, headerTitle, headerTitleAlign, headerTitleStyle, headerTransparent, headerSearchBarOptions, headerTopInsetEnabled, headerBack, route, title, unstable_headerLeftItems: headerLeftItems, unstable_headerRightItems: headerRightItems, }) {
+     const { direction } = (0, native_1.useLocale)();
+     const { colors, fonts, dark } = (0, native_1.useTheme)();
+     const tintColor = headerTintColor ?? (react_native_1.Platform.OS === 'ios' ? colors.primary : colors.text);
+@@ -270,7 +270,7 @@ function useHeaderConfigProps({ headerBackIcon, headerBackImageSource, headerBac
+         children,
+         headerLeftBarButtonItems: processBarButtonItems(leftItems, colors, fonts),
+         headerRightBarButtonItems: processBarButtonItems(rightItems, colors, fonts),
+-        experimental_userInterfaceStyle: dark ? 'dark' : 'light',
++        experimental_userInterfaceStyle: headerUserInterfaceStyle ?? (dark ? 'dark' : 'light'),
+     };
+ }
+ //# sourceMappingURL=useHeaderConfigProps.js.map

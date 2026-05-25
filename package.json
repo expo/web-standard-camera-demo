@@ -45,5 +45,8 @@
     "lint": "expo lint",
     "test:ios": "bun run scripts/test-ios.ts"
   },
-  "private": true
+  "private": true,
+  "patchedDependencies": {
+    "expo-router@56.2.6": "patches/expo-router@56.2.6.patch"
+  }
 }

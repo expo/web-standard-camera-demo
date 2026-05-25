@@ -11,6 +11,7 @@ const LIGHT_TINT = '#f8fafc';
 const DARK_DEMO_HEADER_OPTIONS = {
   headerTransparent: true,
   headerTintColor: LIGHT_TINT,
+  headerUserInterfaceStyle: 'dark' as const,
   headerLargeTitleStyle: { color: LIGHT_TINT },
   headerStyle: { backgroundColor: 'transparent' },
   headerTitleStyle: { color: LIGHT_TINT },
