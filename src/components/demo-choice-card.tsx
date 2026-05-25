@@ -1,6 +1,8 @@
-import { Link, type Href } from 'expo-router';
+import { Button, Host, RNHostView } from '@expo/ui/swift-ui';
+import { buttonStyle } from '@expo/ui/swift-ui/modifiers';
+import { useRouter, type Href } from 'expo-router';
 import * as React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useTheme } from '@/hooks/use-theme';
 
@@ -13,6 +15,8 @@ export interface DemoChoiceCardProps {
   title: string;
 }
 
+const HORIZONTAL_PADDING = 16;
+
 export function DemoChoiceCard({
   accentColor,
   description,
@@ -22,30 +26,44 @@ export function DemoChoiceCard({
   title,
 }: DemoChoiceCardProps): React.JSX.Element {
   const theme = useTheme();
+  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const cardWidth = Math.max(0, width - HORIZONTAL_PADDING * 2);
 
   return (
-    <Link href={href} asChild>
-      <Pressable
-        style={({ pressed }) => [
-          styles.card,
-          {
-            backgroundColor: theme.backgroundElement,
-            opacity: pressed ? 0.72 : 1,
-          },
-        ]}>
-        <View style={[styles.accent, { backgroundColor: accentColor }]} />
-        <View style={styles.content}>
-          <View style={styles.headerRow}>
-            <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
-            <View style={[styles.statusPill, { borderColor: accentColor }]}>
-              <Text style={[styles.statusText, { color: theme.textSecondary }]}>{status}</Text>
+    <Host matchContents>
+      <Button
+        modifiers={[buttonStyle('plain')]}
+        onPress={() => {
+          // @ref LLP 0010#demo-catalog-route — Navigate imperatively so the
+          // entire card sits inside a SwiftUI Button label, giving the row a
+          // native press animation instead of the JS Pressable's opacity dip.
+          // Match Expo Router's default Link semantics: catalog entries are
+          // idempotent destinations, while push intentionally creates another
+          // stack entry for repeat navigation actions.
+          router.navigate(href);
+        }}>
+        <RNHostView matchContents>
+          <View
+            style={[
+              styles.card,
+              { backgroundColor: theme.backgroundElement, width: cardWidth },
+            ]}>
+            <View style={[styles.accent, { backgroundColor: accentColor }]} />
+            <View style={styles.content}>
+              <View style={styles.headerRow}>
+                <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
+                <View style={[styles.statusPill, { borderColor: accentColor }]}>
+                  <Text style={[styles.statusText, { color: theme.textSecondary }]}>{status}</Text>
+                </View>
+              </View>
+              <Text style={[styles.description, { color: theme.text }]}>{description}</Text>
+              <Text style={[styles.detail, { color: theme.textSecondary }]}>{detail}</Text>
             </View>
           </View>
-          <Text style={[styles.description, { color: theme.text }]}>{description}</Text>
-          <Text style={[styles.detail, { color: theme.textSecondary }]}>{detail}</Text>
-        </View>
-      </Pressable>
-    </Link>
+        </RNHostView>
+      </Button>
+    </Host>
   );
 }
 
