@@ -47,6 +47,10 @@ Implemented:
   `WebXRCPUCameraBinding` analog of Raw Camera Access, maps normalized view
   coordinates into the camera image with `normCameraImageFromNormView`, and
   falls back to depth palette colors when camera pixels are unavailable.
+- Camera-image alignment: native WebXR frames compose ARKit's normalized
+  view-to-captured-image transform with the preview crop/scale, so
+  `normCameraImageFromNormView` maps into the actual CPU-visible BGRA bytes
+  returned through `XRCamera`.
 - Basic voxel fusion: repeated world-space samples are merged into 4.5 cm
   voxel surfels with weighted position/radius averages, lower weights for
   distant samples, and camera-color-preferred color averaging.

@@ -62,6 +62,44 @@ private func webXRMatrixArray(_ transform: CGAffineTransform) -> [Double] {
   ]
 }
 
+private func concatenating(_ first: CGAffineTransform, then second: CGAffineTransform) -> CGAffineTransform {
+  CGAffineTransform(
+    a: second.a * first.a + second.c * first.b,
+    b: second.b * first.a + second.d * first.b,
+    c: second.a * first.c + second.c * first.d,
+    d: second.b * first.c + second.d * first.d,
+    tx: second.a * first.tx + second.c * first.ty + second.tx,
+    ty: second.b * first.tx + second.d * first.ty + second.ty
+  )
+}
+
+private func normalizedPreviewFromCapturedImageTransform(
+  sourceWidth: Int,
+  sourceHeight: Int,
+  destinationWidth: Int,
+  destinationHeight: Int
+) -> CGAffineTransform {
+  guard sourceWidth > 0, sourceHeight > 0, destinationWidth > 0, destinationHeight > 0 else {
+    return .identity
+  }
+  let scale = max(
+    CGFloat(destinationWidth) / CGFloat(sourceWidth),
+    CGFloat(destinationHeight) / CGFloat(sourceHeight)
+  )
+  let scaledWidth = CGFloat(sourceWidth) * scale
+  let scaledHeight = CGFloat(sourceHeight) * scale
+  let offsetX = (CGFloat(destinationWidth) - scaledWidth) / 2
+  let offsetY = (CGFloat(destinationHeight) - scaledHeight) / 2
+  return CGAffineTransform(
+    a: CGFloat(sourceWidth) * scale / CGFloat(destinationWidth),
+    b: 0,
+    c: 0,
+    d: CGFloat(sourceHeight) * scale / CGFloat(destinationHeight),
+    tx: offsetX / CGFloat(destinationWidth),
+    ty: offsetY / CGFloat(destinationHeight)
+  )
+}
+
 private func selectedDepthType(
   preferredDepthType: String?,
   sceneDepth: Bool,
@@ -95,7 +133,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   private var latestProjectionMatrix = webXRIdentityMatrix
   private var latestViewTransform = webXRIdentityMatrix
   private var latestNormDepthBufferFromNormView = webXRIdentityMatrix
-  private var latestNormCameraImageFromNormView = webXRIdentityMatrix
+  private var latestNormCapturedImageFromNormView = CGAffineTransform.identity
   private var state: LiDARDepthSessionState = .idle
   private var sessionId: UInt64 = 0
   private var activeDepthType: LiDARDepthType = .raw
@@ -309,7 +347,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestProjectionMatrix = webXRMatrixArray(projectionMatrix)
     latestViewTransform = webXRMatrixArray(frame.camera.transform)
     latestNormDepthBufferFromNormView = webXRMatrixArray(cameraImageFromView)
-    latestNormCameraImageFromNormView = webXRMatrixArray(cameraImageFromView)
+    latestNormCapturedImageFromNormView = cameraImageFromView
     let n = latestFrameNumber
     currentSessionId = sessionId
     if state == .starting || state == .interrupted {
@@ -372,7 +410,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let projectionMatrix = latestProjectionMatrix
     let viewTransform = latestViewTransform
     let normDepthBufferFromNormView = latestNormDepthBufferFromNormView
-    let normCameraImageFromNormView = latestNormCameraImageFromNormView
+    let capturedImageFromNormView = latestNormCapturedImageFromNormView
     lock.unlock()
 
     guard let depthMap else {
@@ -444,11 +482,23 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
          width: cameraPreviewWidth,
          height: cameraPreviewHeight
        ) {
+      // @ref LLP 0013#xr-camera-image
+      // @ref LLP 0017#native-camera-alignment — `normCameraImageFromNormView`
+      // must describe the returned `XRCamera` image. The CPU-visible camera
+      // frame is cover-scaled from `ARFrame.capturedImage`, so compose ARKit's
+      // view-to-captured-image transform with the preview crop/scale.
+      let previewFromCapturedImage = normalizedPreviewFromCapturedImageTransform(
+        sourceWidth: CVPixelBufferGetWidth(cameraImage),
+        sourceHeight: CVPixelBufferGetHeight(cameraImage),
+        destinationWidth: colorFrame.width,
+        destinationHeight: colorFrame.height
+      )
+      let previewFromNormView = concatenating(capturedImageFromNormView, then: previewFromCapturedImage)
       result["colorWidth"] = colorFrame.width
       result["colorHeight"] = colorFrame.height
       result["colorData"] = colorFrame.data
       result["colorFormat"] = "bgra8unorm"
-      result["normCameraImageFromNormView"] = normCameraImageFromNormView
+      result["normCameraImageFromNormView"] = webXRMatrixArray(previewFromNormView)
     }
     return result
   }
