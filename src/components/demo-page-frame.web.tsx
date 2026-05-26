@@ -153,7 +153,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     flexDirection: 'row',
     gap: 7,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     minHeight: 36,
     paddingHorizontal: 13,
     paddingVertical: 8,
@@ -178,9 +178,11 @@ const styles = StyleSheet.create({
     lineHeight: 13,
   },
   startStopText: {
+    flex: 1,
     flexShrink: 1,
     fontSize: 12,
     fontWeight: '700',
     lineHeight: 15,
+    textAlign: 'left',
   },
 });
