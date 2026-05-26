@@ -5,7 +5,18 @@ type SelectionValue = string | number | null;
 type TagModifier = { readonly kind: 'tag'; readonly value: SelectionValue };
 type PickerStyleModifier = { readonly kind: 'pickerStyle'; readonly value: string };
 type DisabledModifier = { readonly kind: 'disabled'; readonly value: boolean };
-type DemoModifier = DisabledModifier | TagModifier | PickerStyleModifier;
+type ButtonStyleValue = 'automatic' | 'bordered' | 'borderedProminent' | 'borderless' | 'glass' | 'glassProminent' | 'plain';
+type ControlSizeValue = 'mini' | 'small' | 'regular' | 'large' | 'extraLarge';
+type ButtonStyleModifier = { readonly kind: 'buttonStyle'; readonly value: ButtonStyleValue };
+type ControlSizeModifier = { readonly kind: 'controlSize'; readonly value: ControlSizeValue };
+type TintModifier = { readonly kind: 'tint'; readonly value: string };
+type DemoModifier =
+  | ButtonStyleModifier
+  | ControlSizeModifier
+  | DisabledModifier
+  | PickerStyleModifier
+  | TagModifier
+  | TintModifier;
 
 export function tag(value: SelectionValue): TagModifier {
   return { kind: 'tag', value };
@@ -13,6 +24,18 @@ export function tag(value: SelectionValue): TagModifier {
 
 export function pickerStyle(value: string): PickerStyleModifier {
   return { kind: 'pickerStyle', value };
+}
+
+export function buttonStyle(value: ButtonStyleValue): ButtonStyleModifier {
+  return { kind: 'buttonStyle', value };
+}
+
+export function controlSize(value: ControlSizeValue): ControlSizeModifier {
+  return { kind: 'controlSize', value };
+}
+
+export function tint(value: string): TintModifier {
+  return { kind: 'tint', value };
 }
 
 export function disabled(value = true): DisabledModifier {
@@ -36,6 +59,45 @@ export interface TextProps {
 
 export function Text({ children, style }: TextProps): React.JSX.Element {
   return <RNText style={style}>{children}</RNText>;
+}
+
+export interface ButtonProps {
+  label?: string;
+  modifiers?: readonly DemoModifier[];
+  onPress?: () => void;
+  role?: 'cancel' | 'default' | 'destructive';
+  systemImage?: string;
+}
+
+export function Button({ label, modifiers = [], onPress, role = 'default' }: ButtonProps): React.JSX.Element {
+  const disabled = modifiers.some((modifier): modifier is DisabledModifier => modifier.kind === 'disabled' && modifier.value);
+  const style = modifiers.find((modifier): modifier is ButtonStyleModifier => modifier.kind === 'buttonStyle')?.value;
+  const size = modifiers.find((modifier): modifier is ControlSizeModifier => modifier.kind === 'controlSize')?.value;
+  const tintColor =
+    modifiers.find((modifier): modifier is TintModifier => modifier.kind === 'tint')?.value ??
+    (role === 'destructive' ? '#ef4444' : '#38bdf8');
+  const prominent = style === 'borderedProminent' || style === 'glassProminent';
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.button,
+        size === 'large' || size === 'extraLarge' ? styles.buttonLarge : null,
+        prominent
+          ? { backgroundColor: tintColor, borderColor: tintColor }
+          : { borderColor: tintColor, backgroundColor: 'rgba(15, 23, 42, 0.72)' },
+        disabled ? styles.buttonDisabled : null,
+        pressed && !disabled ? styles.buttonPressed : null,
+      ]}>
+      <RNText style={[styles.buttonText, prominent ? styles.buttonTextProminent : { color: tintColor }]}>
+        {label}
+      </RNText>
+    </Pressable>
+  );
 }
 
 export interface PickerProps<T extends SelectionValue = SelectionValue> {
@@ -152,6 +214,30 @@ export function SymbolView({ size = 24, style, tintColor = '#94a3b8' }: SymbolVi
 }
 
 const styles = StyleSheet.create({
+  button: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 38,
+    paddingHorizontal: 12,
+  },
+  buttonDisabled: {
+    opacity: 0.4,
+  },
+  buttonLarge: {
+    minHeight: 42,
+  },
+  buttonPressed: {
+    opacity: 0.76,
+  },
+  buttonText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  buttonTextProminent: {
+    color: '#f8fafc',
+  },
   segmentedControl: {
     backgroundColor: '#0f172a',
     borderColor: '#334155',

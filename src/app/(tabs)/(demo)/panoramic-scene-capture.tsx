@@ -3,11 +3,12 @@ import { File, Paths } from 'expo-file-system';
 import { Stack, useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import * as React from 'react';
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { PanResponder, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import type { SFSymbol } from 'sf-symbols-typescript';
 
+import { Button as UIButton, Host, buttonStyle, controlSize, disabled as disabledModifier, tint } from '@/components/demo-platform-controls';
 import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
@@ -665,24 +666,28 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               <View style={[styles.commandRow, { width: stageWidth }]}>
                 <CommandButton
                   disabled={transitioning || (!running && !canStart) || unsupported}
+                  icon={running ? 'stop.fill' : 'play.fill'}
                   label={running ? 'Stop' : 'Start'}
                   onPress={running ? () => void stopSession() : () => void startSession()}
                   tone={running ? 'danger' : 'primary'}
                 />
                 <CommandButton
                   disabled={!canCapture}
+                  icon="camera.fill"
                   label="Capture"
                   onPress={() => void captureModel()}
                   tone="primary"
                 />
                 <CommandButton
                   disabled={!canSave}
+                  icon="square.and.arrow.down"
                   label={saving ? 'Saving' : 'Save'}
                   onPress={() => void saveModel()}
                   tone="primary"
                 />
                 <CommandButton
                   disabled={transitioning}
+                  icon="arrow.counterclockwise"
                   label="Reset"
                   onPress={resetCapture}
                   tone="secondary"
@@ -831,29 +836,34 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
 function CommandButton({
   disabled,
+  icon,
   label,
   onPress,
   tone,
 }: {
   disabled: boolean;
+  icon: SFSymbol;
   label: string;
   onPress: () => void;
   tone: 'danger' | 'primary' | 'secondary';
 }): React.JSX.Element {
+  const prominent = tone === 'primary' || tone === 'danger';
+  const tintColor = tone === 'danger' ? '#ff453a' : tone === 'primary' ? '#14b8a6' : '#94a3b8';
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.commandButton,
-        tone === 'primary' ? styles.commandPrimary : tone === 'danger' ? styles.commandDanger : styles.commandSecondary,
-        disabled && styles.commandDisabled,
-        pressed && !disabled && styles.commandPressed,
-      ]}>
-      <Text style={[styles.commandText, tone === 'secondary' && styles.commandTextSecondary]}>{label}</Text>
-    </Pressable>
+    <Host colorScheme="dark" style={styles.commandHost}>
+      <UIButton
+        label={label}
+        onPress={disabled ? undefined : onPress}
+        role={tone === 'danger' ? 'destructive' : 'default'}
+        systemImage={icon}
+        modifiers={[
+          buttonStyle(prominent ? 'borderedProminent' : 'bordered'),
+          controlSize('large'),
+          tint(tintColor),
+          disabledModifier(disabled),
+        ]}
+      />
+    </Host>
   );
 }
 
@@ -1050,40 +1060,13 @@ const styles = StyleSheet.create({
   },
   commandRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
-  commandButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    flex: 1,
-    justifyContent: 'center',
+  commandHost: {
+    flexBasis: '48%',
+    flexGrow: 1,
     minHeight: 42,
-    paddingHorizontal: 10,
-  },
-  commandPrimary: {
-    backgroundColor: '#14b8a6',
-  },
-  commandDanger: {
-    backgroundColor: '#ef4444',
-  },
-  commandSecondary: {
-    backgroundColor: 'rgba(148, 163, 184, 0.16)',
-    borderColor: 'rgba(148, 163, 184, 0.28)',
-    borderWidth: 1,
-  },
-  commandDisabled: {
-    opacity: 0.38,
-  },
-  commandPressed: {
-    opacity: 0.72,
-  },
-  commandText: {
-    color: '#f8fafc',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  commandTextSecondary: {
-    color: '#cbd5e1',
   },
   controls: {
     alignSelf: 'stretch',
