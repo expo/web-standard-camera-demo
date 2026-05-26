@@ -167,6 +167,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const [frameInfo, setFrameInfo] = React.useState('waiting for depth frames');
   const [modelInfo, setModelInfo] = React.useState('no capture yet');
   const [liveSurfelCount, setLiveSurfelCount] = React.useState(0);
+  const [coveragePercent, setCoveragePercent] = React.useState(0);
   const [saveInfo, setSaveInfo] = React.useState('save after capture');
   const [saving, setSaving] = React.useState(false);
   const [fps, setFps] = React.useState('0.0');
@@ -238,6 +239,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setFrameInfo('waiting for depth frames');
     setModelInfo('no capture yet');
     setLiveSurfelCount(0);
+    setCoveragePercent(0);
     setSaveInfo('save after capture');
     setError(null);
     if (!sessionRef.current) {
@@ -618,7 +620,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               <Canvas ref={ref} style={styles.canvas} />
               {showStoppedPlaceholder ? (
                 <View style={styles.emptyOverlay}>
-                  <Text style={styles.emptyTitle}>Start a depth scan</Text>
+                  <Text style={styles.emptyTitle}>Start a camera/depth scan</Text>
                   <Text style={styles.emptySub}>Pan slowly, then capture the surfel model.</Text>
                 </View>
               ) : null}
@@ -629,6 +631,15 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 <Text style={styles.stageReadoutLabel}>MODEL</Text>
                 <Text style={styles.stageReadoutValue}>{model ? `${model.surfelCount}` : liveSurfelCount}</Text>
                 <Text style={styles.stageReadoutSub}>surfels</Text>
+              </View>
+              <View style={styles.coveragePanel}>
+                <View style={styles.coverageHeader}>
+                  <Text style={styles.coverageLabel}>SCAN</Text>
+                  <Text style={styles.coverageValue}>{Math.round(coveragePercent)}%</Text>
+                </View>
+                <View style={styles.coverageTrack}>
+                  <View style={[styles.coverageFill, { width: `${coveragePercent}%` }]} />
+                </View>
               </View>
             </View>
           }
@@ -796,6 +807,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     surfelCountRef.current += added.surfelCount;
     cameraColoredSurfelCountRef.current += added.cameraColoredSurfels;
     keyframeRef.current = { forward, position, time };
+    setCoveragePercent(Math.min(100, Math.round(keyframeCountRef.current / MAX_KEYFRAMES * 100)));
     setFrameInfo(
       `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - surfels: ${surfelCountRef.current}/${MAX_SURFELS} - camera color: ${added.cameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
     );
@@ -1295,6 +1307,48 @@ const styles = StyleSheet.create({
     fontFamily: 'Menlo',
     fontSize: 9,
     fontWeight: '700',
+  },
+  coveragePanel: {
+    backgroundColor: 'rgba(5, 7, 18, 0.74)',
+    borderColor: 'rgba(125, 211, 252, 0.22)',
+    borderRadius: 8,
+    borderWidth: 1,
+    bottom: 10,
+    left: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    pointerEvents: 'none',
+    position: 'absolute',
+    right: 10,
+  },
+  coverageHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  coverageLabel: {
+    color: '#7dd3fc',
+    fontFamily: 'Menlo',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  coverageValue: {
+    color: '#f8fafc',
+    fontFamily: 'Menlo',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  coverageTrack: {
+    backgroundColor: 'rgba(148, 163, 184, 0.16)',
+    borderRadius: 999,
+    height: 5,
+    overflow: 'hidden',
+  },
+  coverageFill: {
+    backgroundColor: '#14b8a6',
+    borderRadius: 999,
+    height: 5,
   },
   commandRow: {
     flexDirection: 'row',

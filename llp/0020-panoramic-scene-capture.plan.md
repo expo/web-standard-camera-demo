@@ -37,7 +37,8 @@ Implemented:
 - `scan-live`: starts an explicit user-initiated `immersive-ar` session with
   required `"depth-sensing"` and `"camera-access"` features.
 - Keyframe accumulation: accepts sparse frames using time, rotation, and
-  translation thresholds, capped by keyframe and surfel counts.
+  translation thresholds, capped by keyframe and surfel counts, with a simple
+  stage-level scan coverage meter.
 - Colored surfel reconstruction: samples `XRView.camera` through the repo-local
   `WebXRCPUCameraBinding` analog of Raw Camera Access, maps normalized view
   coordinates into the camera image with `normCameraImageFromNormView`, and
