@@ -157,7 +157,6 @@ interface NativeStandardCameraModule {
   startLiDARDepthWithTypeAsync(depthType: NativeLiDARDepthType): Promise<NativeLiDARDepthCapabilities>;
   stopLiDARDepthAsync(): Promise<void>;
   stopLiDARDepth(): void;
-  getLatestLiDARDepthFrame(): NativeLiDARDepthFrame | null;
   getLatestWebXRLiDARDepthFrame(): NativeLiDARDepthFrame | null;
   addListener(
     eventName: 'onLiDARDepthSessionState',

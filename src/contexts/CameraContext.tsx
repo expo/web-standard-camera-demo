@@ -4,7 +4,6 @@ import * as React from 'react';
 import {
   NativeStandardCamera,
   setWebXRDepthCameraLockHandlers,
-  type NativeLiDARDepthCapabilities,
   type NativeLiDARDepthSessionEvent,
 } from '../../modules/standard-camera';
 
@@ -82,7 +81,6 @@ export interface CameraContextValue {
    */
   externalLocked: boolean;
   lidarStatus: LiDARCameraStatus;
-  lidarCapabilities: NativeLiDARDepthCapabilities | null;
   lidarError: string | null;
   /**
    * Open the camera with the merged constraints (or the current stored
@@ -98,8 +96,6 @@ export interface CameraContextValue {
    */
   lockExternal: () => Promise<void>;
   unlockExternal: () => void;
-  startLiDAR: () => Promise<NativeLiDARDepthCapabilities | null>;
-  stopLiDAR: () => Promise<void>;
   /**
    * Merge a partial constraints patch into the active constraints and
    * restart the stream so consumers immediately see the change. `deviceId`
@@ -157,14 +153,11 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   // tears down any live track so the lock-holder can acquire the device.
   const [externalLocked, setExternalLocked] = React.useState(false);
   const [lidarStatus, setLiDARStatus] = React.useState<LiDARCameraStatus>('idle');
-  const [lidarCapabilities, setLiDARCapabilities] =
-    React.useState<NativeLiDARDepthCapabilities | null>(null);
   const [lidarError, setLiDARError] = React.useState<string | null>(null);
   const [autoStartGate, setAutoStartGate] = React.useState<AutoStartGate>('pending');
 
   const streamRef = React.useRef<MediaStream | null>(null);
   const startRequestRef = React.useRef(0);
-  const lidarRequestRef = React.useRef(0);
   const activeLiDARSessionIdRef = React.useRef<number | null>(null);
   const standardStopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = React.useRef(true);
@@ -236,81 +229,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       setExternalLocked(false);
     }
   }, []);
-
-  // @ref LLP 0012#native-extension-shape — The LiDAR demo owns ARKit through
-  // a demo-only native extension, but its camera ownership still lives in the
-  // same global control plane as the getUserMedia demos so nav buttons render
-  // correctly before the screen body mounts.
-  const startLiDAR = React.useCallback(async (): Promise<NativeLiDARDepthCapabilities | null> => {
-    const requestId = lidarRequestRef.current + 1;
-    lidarRequestRef.current = requestId;
-    activeLiDARSessionIdRef.current = null;
-    setLiDARError(null);
-    setLiDARStatus('starting');
-
-    try {
-      const caps = NativeStandardCamera.getLiDARDepthCapabilities();
-      if (__DEV__) {
-        // eslint-disable-next-line no-console
-        console.log(`LIDAR_DEPTH_CAPS ${JSON.stringify(caps)}`);
-      }
-      if (!mountedRef.current || requestId !== lidarRequestRef.current) return null;
-      setLiDARCapabilities(caps);
-      if (!caps.supported) {
-        setLiDARStatus('unsupported');
-        setLiDARError(caps.reason ?? 'LiDAR scene depth is unavailable on this device');
-        unlockExternal();
-        return caps;
-      }
-
-      await lockExternal();
-      if (!mountedRef.current || requestId !== lidarRequestRef.current) {
-        unlockExternal();
-        return null;
-      }
-
-      const started = await NativeStandardCamera.startLiDARDepthAsync();
-      if (__DEV__) {
-        // eslint-disable-next-line no-console
-        console.log(`LIDAR_DEPTH_START ${JSON.stringify(started)}`);
-      }
-      if (!mountedRef.current || requestId !== lidarRequestRef.current) {
-        void NativeStandardCamera.stopLiDARDepthAsync();
-        return null;
-      }
-      activeLiDARSessionIdRef.current = started.sessionId ?? null;
-      setLiDARCapabilities(started);
-      setLiDARStatus('running');
-      return started;
-    } catch (e) {
-      if (!mountedRef.current || requestId !== lidarRequestRef.current) return null;
-      setLiDARStatus('error');
-      setLiDARError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
-      unlockExternal();
-      return null;
-    }
-  }, [lockExternal, unlockExternal]);
-
-  const stopLiDAR = React.useCallback(async (): Promise<void> => {
-    lidarRequestRef.current += 1;
-    if (!mountedRef.current) return;
-    setLiDARStatus((previous) =>
-      previous === 'idle' || previous === 'stopped' || previous === 'unsupported' || previous === 'error'
-        ? 'stopped'
-        : 'stopping'
-    );
-    try {
-      await NativeStandardCamera.stopLiDARDepthAsync();
-    } finally {
-      activeLiDARSessionIdRef.current = null;
-      if (!mountedRef.current) return;
-      setLiDARStatus('stopped');
-      setLiDARCapabilities((previous) =>
-        previous ? { ...previous, running: false, state: 'stopped', frameNumber: 0 } : previous
-      );
-      unlockExternal();
-    }
-  }, [unlockExternal]);
 
   React.useEffect(() => {
     // @ref LLP 0013#xr-request-session — WebXR research sessions use the same
@@ -446,17 +364,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         if (event.state === 'running') {
           activeLiDARSessionIdRef.current = event.sessionId;
           setLiDARError(null);
-          setLiDARCapabilities((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  running: true,
-                  state: 'running',
-                  sessionId: event.sessionId,
-                  frameNumber: event.frameNumber,
-                }
-              : previous
-          );
           setLiDARStatus('running');
           return;
         }
@@ -464,53 +371,18 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         if (event.state === 'interrupted') {
           activeLiDARSessionIdRef.current = event.sessionId;
           setLiDARError(event.reason ?? 'ARKit scene depth session was interrupted');
-          setLiDARCapabilities((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  running: false,
-                  state: 'interrupted',
-                  sessionId: event.sessionId,
-                  frameNumber: event.frameNumber,
-                  reason: event.reason,
-                }
-              : previous
-          );
           setLiDARStatus('interrupted');
           return;
         }
 
         if (event.state === 'starting') {
           setLiDARError(null);
-          setLiDARCapabilities((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  running: false,
-                  state: 'starting',
-                  sessionId: event.sessionId,
-                  frameNumber: event.frameNumber,
-                }
-              : previous
-          );
           setLiDARStatus('starting');
           return;
         }
 
         if (event.state === 'failed') {
           activeLiDARSessionIdRef.current = null;
-          setLiDARCapabilities((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  running: false,
-                  state: 'failed',
-                  sessionId: event.sessionId,
-                  frameNumber: event.frameNumber,
-                  reason: event.reason,
-                }
-              : previous
-          );
           setLiDARStatus('error');
           setLiDARError(event.reason ?? 'ARKit scene depth session failed');
           unlockExternal();
@@ -519,17 +391,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
         if (event.state === 'stopped') {
           activeLiDARSessionIdRef.current = null;
-          setLiDARCapabilities((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  running: false,
-                  state: 'stopped',
-                  sessionId: event.sessionId,
-                  frameNumber: event.frameNumber,
-                }
-              : previous
-          );
           setLiDARStatus('stopped');
           unlockExternal();
         }
@@ -605,14 +466,11 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       userStopped,
       externalLocked,
       lidarStatus,
-      lidarCapabilities,
       lidarError,
       start,
       stop,
       lockExternal,
       unlockExternal,
-      startLiDAR,
-      stopLiDAR,
       applyConstraints,
     }),
     [
@@ -626,14 +484,11 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       userStopped,
       externalLocked,
       lidarStatus,
-      lidarCapabilities,
       lidarError,
       start,
       stop,
       lockExternal,
       unlockExternal,
-      startLiDAR,
-      stopLiDAR,
       applyConstraints,
     ]
   );

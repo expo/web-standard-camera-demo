@@ -9,9 +9,9 @@
 
 ## Summary
 
-This LLP specifies what a WebXR-based API would look like if this repo chose to
-expose the LiDAR Depth Studio demo through `navigator.xr` instead of the current
-demo-only native sidecar.
+This LLP specifies the WebXR-shaped API used by the LiDAR Depth Studio demo.
+The demo still depends on a private native ARKit sidecar, but application code
+talks to `navigator.xr` instead of calling native LiDAR frame getters directly.
 
 This is not a commitment to implement full WebXR. It is a concrete research
 spec and implementation track so we can evaluate the API shape honestly. The
@@ -365,9 +365,9 @@ This section documents a native implementation detail, not a WebXR-facing
 configuration surface.
 
 The WebXR research profile uses CPU-visible camera bytes because the current
-renderer uploads into WebGPU textures directly. To keep this experiment separate
-from the native sidecar demo, native WebXR frame delivery uses a WebXR-specific
-frame accessor when it needs a different camera preview size.
+renderer uploads into WebGPU textures directly. Native WebXR frame delivery uses
+a WebXR-specific frame accessor so preview-size tuning remains an implementation
+detail of this research profile.
 
 The current native tuning requests 1280x960 BGRA camera frames for the WebXR
 route. That value MUST NOT be exposed as a request-session option or other
@@ -678,12 +678,12 @@ a `WebGLTexture`.
 
 ## Implementation Recommendation
 
-Do not make this the production path for LLP 0012 yet.
-
-The WebXR-shaped demo is implemented as a separate research route and should
-stay there until the project explicitly decides to become an XR runtime. The
-next useful increment would be to add more WebXR-compatible metadata to the
-native sidecar payload:
+Keep this as the only user-facing LiDAR demo route, while continuing to label
+the `navigator.xr` surface as a research profile rather than a general WebXR
+runtime. The removed direct-native route should not be restored unless there is
+a specific native-side validation need that cannot be covered by the WebXR
+route. The next useful increment would be to add more WebXR-compatible metadata
+to the native sidecar payload:
 
 - `depthType`
 - `depthUsage`

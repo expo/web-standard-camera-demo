@@ -5,8 +5,6 @@ import Foundation
 import UIKit
 
 private let lidarDepthErrorDomain = "StandardCameraLiDARDepth"
-private let lidarCameraPreviewWidth = 960
-private let lidarCameraPreviewHeight = 720
 private let webXRCameraPreviewWidth = 1280
 private let webXRCameraPreviewHeight = 960
 private let lidarStartupTimeoutSeconds: TimeInterval = 5
@@ -362,8 +360,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   }
 
   func latestFrame(
-    cameraPreviewWidth: Int = lidarCameraPreviewWidth,
-    cameraPreviewHeight: Int = lidarCameraPreviewHeight
+    cameraPreviewWidth: Int,
+    cameraPreviewHeight: Int
   ) -> [String: Any]? {
     lock.lock()
     let depthMap = latestDepthMap
@@ -456,8 +454,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   }
 
   func latestWebXRFrame() -> [String: Any]? {
-    // @ref LLP 0013#xr-camera-resolution — The WebXR research profile uses a
-    // higher CPU-visible camera preview without changing the native LiDAR demo.
+    // @ref LLP 0013#xr-camera-resolution — The WebXR research profile owns its
+    // CPU-visible camera preview size as a private native detail.
     latestFrame(
       cameraPreviewWidth: webXRCameraPreviewWidth,
       cameraPreviewHeight: webXRCameraPreviewHeight

@@ -313,7 +313,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const [lastCenterDepthMeters, setLastCenterDepthMeters] = React.useState<number | null>(null);
   const [viewMode, setViewMode] = React.useState(2);
   const lastCenterDepthRef = React.useRef<number | null>(null);
-  const reticlePressProgress = React.useRef(new Animated.Value(0)).current;
+  const reticlePressProgress = React.useMemo(() => new Animated.Value(0), []);
   const targetDepthRef = React.useRef(targetDepth);
   const viewModeRef = React.useRef(viewMode);
 

@@ -232,11 +232,13 @@ So the implementation choices are:
   repo into an XR runtime project and would still not naturally feed the current
   WebGPU pipeline without additional WebGPU/WebXR binding work.
 
-Recommendation for this demo: keep the native sidecar as the production path,
-borrow WebXR naming/metadata where it improves clarity, and expose
-`navigator.xr` only in a separate XR-runtime research track. That research
-track now exists as a WebXR LiDAR variant of this demo; it must remain labeled
-experimental and must not change the default `getUserMedia` story.
+Recommendation for this demo: keep the native sidecar as the private ARKit
+implementation substrate, but expose the user-facing LiDAR demo only through
+the WebXR-shaped research route. The earlier direct native route was useful for
+initial device validation, but keeping both routes after the WebXR profile
+landed made the app carry two app-facing LiDAR APIs for the same sensor path.
+The WebXR route must remain labeled experimental and must not change the
+default `getUserMedia` story.
 
 Additional primary source:
 
@@ -252,13 +254,13 @@ Implementation files:
 
 - `modules/standard-camera/src/WebXRDepthProfile.ts` implements the
   WebXR-shaped research profile over the native LiDAR sidecar.
-- `src/app/(tabs)/(demo)/lidar-depth-webxr.tsx` is the variant route that uses
-  `navigator.xr` instead of calling `NativeStandardCamera.getLatestLiDARDepthFrame()`
-  directly.
+- `src/app/(tabs)/(demo)/lidar-depth-webxr.tsx` is the only user-facing LiDAR
+  demo route. It uses `navigator.xr`; app code does not call native LiDAR frame
+  getters directly.
 
 For this app, the right connection is therefore: keep the W3C camera API clean
-for ordinary RGB capture, expose LiDAR as an explicit iOS native extension, and
-feed its frames into web-shaped WebGPU code beside the `getUserMedia` demos.
+for ordinary RGB capture, implement LiDAR behind a private iOS native sidecar,
+and feed its frames into web-shaped WebGPU code beside the `getUserMedia` demos.
 
 ## Why not `getUserMedia` depth
 
@@ -325,7 +327,7 @@ ARWorldTrackingConfiguration + sceneDepth
    ↓
 ARFrame.capturedImage + ARFrame.sceneDepth.depthMap
    ↓
-StandardCamera native extension: 720p BGRA preview bytes + tight Float32 depth bytes
+StandardCamera native extension: BGRA preview bytes + tight Float32 depth bytes
    ↓
 JS uploads BGRA preview bytes into a bgra8unorm texture + Float32 depth bytes into r32float
    ↓
@@ -337,13 +339,13 @@ GPUCanvasContext.present()
 The route targets 30 fps uploads and renders every animation frame with the
 latest uploaded ARKit frame. In development builds it emits
 `WEBGPU_DEMO_PROFILE` records through the same system-log path as the LLP 0010
-camera demos, including `getLatestLiDARDepthFrame()`, depth/color upload
+camera demos, including WebXR frame acquisition, depth/color upload
 preparation, `writeTexture()`, and render submit/present timings.
 
 Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
 frames at 60Hz, while the original WebGPU route rendered only about 6fps because
-JS spent roughly 140ms per upload swizzling the 960x720 BGRA preview into RGBA.
-The route therefore uploads the native BGRA preview directly into a WebGPU
+JS spent roughly 140ms per upload swizzling BGRA preview bytes into RGBA. The
+route therefore uploads the native BGRA preview directly into a WebGPU
 `bgra8unorm` texture; depth upload and both `writeTexture()` calls were
 sub-millisecond in the same trace.
 
@@ -355,26 +357,28 @@ after navigation.
 
 ## Native extension shape
 
-The native module exposes four demo-only calls:
+The native module exposes demo-only calls for the WebXR-shaped profile:
 
 - `getLiDARDepthCapabilities()` reports support, simulator/device status, and
   whether the ARKit scene-depth semantic is available.
 - `startLiDARDepthAsync()` starts the ARKit session and resolves with the same
   capability payload.
+- `startLiDARDepthWithTypeAsync(depthType)` starts ARKit with the observable
+  WebXR depth type selected by `requestSession()`.
 - `stopLiDARDepth()` pauses the ARKit session.
-- `getLatestLiDARDepthFrame()` returns the latest tight-packed Float32 depth
-  frame plus a 960x720 BGRA ARKit camera preview, or `null` while no frame is
-  available.
+- `getLatestWebXRLiDARDepthFrame()` returns the latest tight-packed Float32
+  depth frame plus the WebXR route's BGRA ARKit camera preview, or `null` while
+  no frame is available.
 
 ARKit and AVFoundation must hand camera ownership over deterministically. The
 demo must not rely on fixed sleeps between stopping a `getUserMedia` stream and
 starting ARKit, or between pausing ARKit and letting AVFoundation resume. The
-context-level LiDAR start path first stops the active standard stream, then
+WebXR `requestSession()` path first stops the active standard stream, then
 awaits the native capture source's serialized release point before calling
-`startLiDARDepthAsync()`. The native LiDAR start promise resolves only after
-ARKit has produced a first scene-depth frame, so JS `lidarStatus: "running"`
-means both camera ownership and depth delivery are proven. The stop path awaits
-ARKit pause before clearing the external camera lock.
+`startLiDARDepthWithTypeAsync()`. The native LiDAR start promise resolves only
+after ARKit has produced a first scene-depth frame, so a WebXR session only
+resolves after both camera ownership and depth delivery are proven. The stop
+path awaits ARKit pause before clearing the external camera lock.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,
@@ -397,24 +401,17 @@ The frame object contains:
 
 ## Implementation status
 
-The first implementation is present as `src/app/(tabs)/(demo)/lidar-depth.tsx`,
-`modules/standard-camera/ios/LiDARDepthSource.swift`, and the four demo-only
-module calls in `StandardCameraModule.swift`. It builds on the iOS simulator and
-the WPT runner remains green for the applicable Media Capture subset.
+The direct native LiDAR demo route has been removed. The remaining
+implementation is the WebXR-shaped route in
+`src/app/(tabs)/(demo)/lidar-depth-webxr.tsx`, backed by
+`modules/standard-camera/src/WebXRDepthProfile.ts`,
+`modules/standard-camera/ios/LiDARDepthSource.swift`, and the demo-only native
+module calls in `StandardCameraModule.swift`.
 
-The route's Start/Stop affordance is intentionally driven through
-`CameraContext`, alongside the shared `getUserMedia` camera state. ARKit and
-AVFoundation compete for the same iOS camera device, so the context treats the
-LiDAR session as an external camera owner: starting LiDAR stops and locks the
-standard stream, while stopping LiDAR releases that lock and lets the standard
-camera resume only if the user had not explicitly stopped it.
-
-Physical LiDAR validation can be launched with `?autorun=1`; the first live
-native frame logs a `LIDAR_DEPTH_LIVE` record with frame number, camera/depth
-dimensions, depth range, center depth, and closer-than-target ratio. Validation
-on an iPhone 15 Pro confirmed rising ARKit frame numbers and isolated the
-remaining performance-sensitive path to JS-side preview-buffer handling rather
-than WebGPU submission or depth texture upload.
+The WebXR profile's `requestSession()` path uses `CameraContext` only for the
+shared external camera lock. ARKit and AVFoundation compete for the same iOS
+camera device, so the profile stops and locks the standard stream before
+starting ARKit, then releases that lock when the XR session ends or fails.
 
 ## Validation
 

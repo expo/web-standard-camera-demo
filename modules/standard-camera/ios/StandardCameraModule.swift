@@ -227,14 +227,9 @@ public final class StandardCameraModule: Module {
       }
     }
 
-    Function("getLatestLiDARDepthFrame") { () -> [String: Any]? in
-      LiDARDepthSource.shared.latestFrame()
-    }
-
     Function("getLatestWebXRLiDARDepthFrame") { () -> [String: Any]? in
-      // @ref LLP 0013#xr-camera-resolution — WebXR uses a separate
-      // higher-resolution CPU camera image while the native sidecar keeps its
-      // existing upload size.
+      // @ref LLP 0013#xr-camera-resolution — WebXR owns the CPU-visible camera
+      // image size as a private implementation detail.
       LiDARDepthSource.shared.latestWebXRFrame()
     }
 

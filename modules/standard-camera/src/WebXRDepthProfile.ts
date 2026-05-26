@@ -577,8 +577,8 @@ export class WebXRSession extends EventTarget {
         this.#callbacks.delete(handle);
         return;
       }
-      // @ref LLP 0013#xr-camera-resolution - Keep the WebXR camera image
-      // sharper without changing the native LiDAR sidecar demo's frame size.
+      // @ref LLP 0013#xr-camera-resolution - The WebXR profile owns this
+      // CPU-visible camera image size as a private implementation detail.
       const nativeFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame();
       if (!nativeFrame || nativeFrame.frameNumber === scheduled.lastSeenFrameNumber) {
         scheduled.rafId = globalThis.requestAnimationFrame(pump);
