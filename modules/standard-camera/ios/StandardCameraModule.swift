@@ -204,6 +204,16 @@ public final class StandardCameraModule: Module {
       }
     }
 
+    AsyncFunction("startLiDARDepthWithTypeAsync") { (depthType: String, promise: Promise) in
+      DispatchQueue.main.async {
+        LiDARDepthSource.shared.start(
+          preferredDepthType: depthType,
+          resolve: { payload in promise.resolve(payload) },
+          reject: { error in promise.reject(error) }
+        )
+      }
+    }
+
     AsyncFunction("stopLiDARDepthAsync") { (promise: Promise) in
       DispatchQueue.main.async {
         LiDARDepthSource.shared.stop()
@@ -219,6 +229,13 @@ public final class StandardCameraModule: Module {
 
     Function("getLatestLiDARDepthFrame") { () -> [String: Any]? in
       LiDARDepthSource.shared.latestFrame()
+    }
+
+    Function("getLatestWebXRLiDARDepthFrame") { () -> [String: Any]? in
+      // @ref LLP 0013#xr-camera-resolution — WebXR uses a separate
+      // higher-resolution CPU camera image while the native sidecar keeps its
+      // existing upload size.
+      LiDARDepthSource.shared.latestWebXRFrame()
     }
 
     // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this

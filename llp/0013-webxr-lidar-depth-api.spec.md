@@ -128,6 +128,7 @@ async function startLiDARDepthStudio(device: GPUDevice): Promise<XRSession> {
   });
 
   const referenceSpace = await session.requestReferenceSpace("viewer");
+  const cpuCameraBinding = new XRCPUCameraBinding(session);
 
   session.requestAnimationFrame(function onXRFrame(time, frame) {
     session.requestAnimationFrame(onXRFrame);
@@ -136,25 +137,27 @@ async function startLiDARDepthStudio(device: GPUDevice): Promise<XRSession> {
     const view = pose?.views[0];
     if (!view) return;
 
-    const camera = frame.getCameraImage(view);
+    const camera = view.camera;
+    const cameraImage = camera ? cpuCameraBinding.getCameraImage(camera) : null;
     const depth = frame.getDepthInformation(view);
-    if (!camera || !depth) return;
+    if (!cameraImage || !depth) return;
 
-    uploadCameraToWebGPU(device, camera);
+    uploadCameraToWebGPU(device, cameraImage);
     uploadDepthToWebGPU(device, depth);
 
     const centerDepthMeters = depth.getDepthInMeters(0.5, 0.5);
-    renderLiDARDepthStudio({ camera, depth, centerDepthMeters });
+    renderLiDARDepthStudio({ camera: cameraImage, depth, centerDepthMeters });
   });
 
   return session;
 }
 ```
 
-The `cameraAccess` dictionary and `XRFrame.getCameraImage(view)` are repo-local
-extensions. Standard Raw Camera Access uses `view.camera` plus
+The `cameraAccess` dictionary and `XRCPUCameraBinding` are repo-local extensions.
+Standard Raw Camera Access uses `view.camera` plus
 `XRWebGLBinding.getCameraImage(camera)` to return an opaque `WebGLTexture`; that
-does not fit this demo's WebGPU upload path.
+does not fit this demo's WebGPU upload path. The demo therefore uses a
+binding-shaped CPU analog instead of adding new app-facing data to `XRFrame`.
 
 ## IDL Surface
 
@@ -225,7 +228,6 @@ interface XRFrame {
 
   getViewerPose(referenceSpace: XRReferenceSpace): XRViewerPose | null;
   getDepthInformation(view: XRView): XRCPUDepthInformation | null;
-  getCameraImage(view: XRView): XRCPUCameraImage | null;
 }
 
 interface XRReferenceSpace extends EventTarget {
@@ -278,6 +280,10 @@ interface XRCPUCameraImage {
   readonly data: ArrayBuffer;
   readonly normCameraImageFromNormView: XRRigidTransform;
 }
+
+interface XRCPUCameraBinding {
+  getCameraImage(camera: XRCamera): XRCPUCameraImage | null;
+}
 ```
 
 ## `xr-install`
@@ -326,6 +332,9 @@ capability check.
    - `usagePreference` MUST include `"cpu-optimized"`.
    - `dataFormatPreference` MUST include `"float32"`.
    - `depthTypeRequest` SHOULD prefer `"smooth"` before `"raw"`.
+   - The selected `depthType` is observable, so the native ARKit session MUST run
+     the matching frame semantic. It MUST NOT report `"raw"` while delivering
+     `smoothedSceneDepth`, or report `"smooth"` while delivering `sceneDepth`.
    - `matchDepthView` MUST be treated as `true`; `false` is unsupported.
 8. Select a camera configuration:
    - `usagePreference` MUST include `"cpu-optimized"`.
@@ -335,6 +344,9 @@ capability check.
      preview bytes are already BGRA and WebGPU can sample a `bgra8unorm`
      texture directly.
    - `matchCameraView` MUST be treated as `true`; `false` is unsupported.
+   - This profile does not expose a camera resolution constraint. Camera image
+     dimensions are implementation-selected and reported on
+     `XRCPUCameraImage.width` and `XRCPUCameraImage.height`.
 9. Request native camera permission. If permission is denied or restricted,
    reject with `NotAllowedError`.
 10. If another `getUserMedia` or LiDAR session is active, stop or suspend it
@@ -346,6 +358,23 @@ capability check.
 At most one immersive session may be active at a time. If a session is active,
 a second `requestSession("immersive-ar")` call MUST reject with
 `InvalidStateError`.
+
+## `xr-camera-resolution`
+
+This section documents a native implementation detail, not a WebXR-facing
+configuration surface.
+
+The WebXR research profile uses CPU-visible camera bytes because the current
+renderer uploads into WebGPU textures directly. To keep this experiment separate
+from the native sidecar demo, native WebXR frame delivery uses a WebXR-specific
+frame accessor when it needs a different camera preview size.
+
+The current native tuning requests 1280x960 BGRA camera frames for the WebXR
+route. That value MUST NOT be exposed as a request-session option or other
+caller-selectable camera resolution; callers only observe the actual returned
+image dimensions through `XRCPUCameraImage.width` and
+`XRCPUCameraImage.height`. Any further increase MUST be validated with
+physical-device `WEBGPU_DEMO_PROFILE` logs.
 
 ## `xr-session`
 
@@ -468,11 +497,13 @@ ray length.
 3. Return `null` if ARKit did not produce a camera image for this frame.
 4. Return an `XRCamera` object otherwise.
 
-`frame.getCameraImage(view)` is a repo-local CPU camera extension. It MUST:
+`XRCPUCameraBinding.getCameraImage(camera)` is a repo-local CPU camera extension
+that intentionally mirrors the standard binding shape more closely than an
+`XRFrame` method. It MUST:
 
 1. Throw `NotSupportedError` if `"camera-access"` was not granted.
 2. Throw `InvalidStateError` if `frame` is inactive or not an animation frame.
-3. Throw `InvalidStateError` if `view` does not belong to `frame`.
+3. Throw `InvalidStateError` if `camera` belongs to a different session.
 4. Return `null` if no aligned camera image is available.
 5. Return an `XRCPUCameraImage` object otherwise.
 
@@ -538,6 +569,11 @@ Native implementation sketch:
 The implementation MUST copy frame buffers before returning them to JS, or
 otherwise guarantee their lifetime until the animation-frame callback returns.
 
+Current implementation limit: the native transform/projection metadata is
+computed for the portrait WebXR demo viewport. That is enough to make timing and
+view/camera/depth coordinate objects data-backed instead of placeholders, but it
+is not a general orientation-aware WebXR compositor model.
+
 ## Permissions and Privacy
 
 `requestSession("immersive-ar", ...)` MUST require user activation.
@@ -601,7 +637,7 @@ Minimum tests for an implementation:
 11. `depth.getDepthInMeters(0.5, 0.5)` matches the corresponding center
     `Float32` sample multiplied by `rawValueToMeters`.
 12. Invalid depth samples return `0`.
-13. `frame.getCameraImage(view)` returns non-null and reports
+13. `view.camera` plus `XRCPUCameraBinding.getCameraImage(camera)` returns non-null and reports
     `data.byteLength === width * height * 4`.
 14. Depth and camera access after the animation-frame callback throws
     `InvalidStateError`.
@@ -633,6 +669,12 @@ is the native-app equivalent of the transient activation gate required by
 The research route intentionally still uploads CPU-visible `ArrayBuffer` data
 through ordinary WebGPU queue writes. It does not implement `XRWebGLBinding`,
 `XRWebGLDepthInformation`, `XRWebGPUBinding`, or zero-copy XR textures.
+
+The route uses `view.camera` plus the repo-local `XRCPUCameraBinding` analog for
+camera bytes. The first prototype's `frame.getCameraImage(view)` helper was
+removed because it hid the standard Raw Camera Access ownership model. This
+repo-local CPU binding remains non-standard because the standard binding returns
+a `WebGLTexture`.
 
 ## Implementation Recommendation
 

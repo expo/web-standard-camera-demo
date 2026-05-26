@@ -10,10 +10,12 @@ import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/n
 import type { SFSymbol } from 'sf-symbols-typescript';
 
 import { useCamera } from '@/contexts/CameraContext';
+import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs as perfNowMs } from '@/lib/webgpu-perf';
 import {
   installWebXRDepthProfile,
   runWithWebXRUserActivation,
+  WebXRCPUCameraBinding,
   type WebXRCPUDepthInformation,
   type WebXRCPUCameraImage,
   type WebXRFrame,
@@ -437,13 +439,9 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
       try {
         const referenceSpace = await session.requestReferenceSpace('viewer');
         if (cancelled) return;
-        const context = ref.current?.getContext('webgpu');
-        if (!context) {
-          throw new Error('getContext("webgpu") returned null');
-        }
-
+        const cameraBinding = new WebXRCPUCameraBinding(session);
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
+        const { context } = configureWebGpuCanvas(ref, device, presentationFormat);
         const profile = createWebGpuPerfProbe('lidar-depth-webxr', {
           cameraFormat: session.cameraFormat,
           depthType: session.depthType ?? 'none',
@@ -593,8 +591,10 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
           // @ref LLP 0016#depth-interpretation
           const depth = frame.getDepthInformation(view);
           // @ref LLP 0013#xr-camera-image
-          // @ref LLP 0017#native-camera-alignment
-          const camera = frame.getCameraImage(view);
+          // @ref LLP 0017#xr-webgl-get-camera-image — Use the repo-local CPU
+          // binding analog because this demo uploads camera bytes to WebGPU.
+          const xrCamera = view.camera;
+          const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
 
           if (depth && camera) {
             const depthStats = uploadDepth(depth);

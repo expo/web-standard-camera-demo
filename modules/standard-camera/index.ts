@@ -24,6 +24,7 @@ export { MediaStreamTrack } from './src/MediaStreamTrack';
 export { Video } from './src/HTMLVideoElement';
 export type { HTMLVideoElement, VideoProps } from './src/HTMLVideoElement';
 export {
+  WebXRCPUCameraBinding,
   WebXRCPUDepthInformation,
   WebXRCPUCameraImage,
   WebXRCamera,

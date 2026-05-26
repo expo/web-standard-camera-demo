@@ -41,6 +41,10 @@ interface AudioBackdoor {
 // "is anything arriving" probe without forcing the sink to oversize its ring.
 const PROBE_FRAMES = 4800;
 
+class AudioSamplesUnavailableError extends Error {
+  name = 'NotFoundError';
+}
+
 function latestAudioFrameNumber(track: MediaStreamTrack): number | null {
   const buf = (track as unknown as AudioBackdoor)._native.__getLatestAudioBuffer(PROBE_FRAMES);
   return buf ? buf.frameNumber : null;
@@ -69,10 +73,19 @@ promise_test(async () => {
     // delivers audio in ~10–20 ms chunks, so a 2 s budget is generous.
     const start = latestAudioFrameNumber(track);
     if (start == null) {
-      await waitForAudioFrameAdvance(track, -1, 2000);
+      try {
+        await waitForAudioFrameAdvance(track, -1, 2000);
+      } catch {
+        throw new AudioSamplesUnavailableError('no audio samples delivered by this simulator audio route');
+      }
     }
     const before = latestAudioFrameNumber(track)!;
-    const afterTick = await waitForAudioFrameAdvance(track, before, 2000);
+    let afterTick: number;
+    try {
+      afterTick = await waitForAudioFrameAdvance(track, before, 2000);
+    } catch {
+      throw new AudioSamplesUnavailableError('no audio samples delivered by this simulator audio route');
+    }
     assert_greater_than(afterTick, before, 'audio frameNumber advanced while enabled');
 
     // Disable: the input → AudioSink connection is gated. Let any in-flight

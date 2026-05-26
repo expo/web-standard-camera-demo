@@ -154,9 +154,11 @@ interface NativeStandardCameraModule {
    */
   getLiDARDepthCapabilities(): NativeLiDARDepthCapabilities;
   startLiDARDepthAsync(): Promise<NativeLiDARDepthCapabilities>;
+  startLiDARDepthWithTypeAsync(depthType: NativeLiDARDepthType): Promise<NativeLiDARDepthCapabilities>;
   stopLiDARDepthAsync(): Promise<void>;
   stopLiDARDepth(): void;
   getLatestLiDARDepthFrame(): NativeLiDARDepthFrame | null;
+  getLatestWebXRLiDARDepthFrame(): NativeLiDARDepthFrame | null;
   addListener(
     eventName: 'onLiDARDepthSessionState',
     listener: (event: NativeLiDARDepthSessionEvent) => void
@@ -188,6 +190,8 @@ export type NativeLiDARDepthSessionState =
   | 'failed'
   | 'stopped';
 
+export type NativeLiDARDepthType = 'raw' | 'smooth';
+
 export interface NativeLiDARDepthCapabilities {
   readonly supported: boolean;
   readonly running: boolean;
@@ -196,6 +200,7 @@ export interface NativeLiDARDepthCapabilities {
   readonly frameNumber?: number;
   readonly sceneDepth: boolean;
   readonly smoothedSceneDepth: boolean;
+  readonly depthType?: NativeLiDARDepthType;
   readonly reason?: string;
 }
 
@@ -212,11 +217,19 @@ export interface NativeLiDARDepthFrame {
   /** `width * height * 4` bytes, Float32 depth in meters, no row padding. */
   readonly depthData: Uint8Array;
   readonly depthFormat: 'r32float';
-  /** Low-resolution ARKit camera preview paired with the depth frame, when available. */
+  readonly depthType?: NativeLiDARDepthType;
+  /** ARFrame.timestamp, seconds on ARKit's monotonic clock. */
+  readonly timestamp?: number;
+  /** Column-major 4x4 matrices in WebXR-compatible order. */
+  readonly projectionMatrix?: readonly number[];
+  readonly viewTransform?: readonly number[];
+  readonly normDepthBufferFromNormView?: readonly number[];
+  /** ARKit camera preview paired with the depth frame, when available. */
   readonly colorWidth?: number;
   readonly colorHeight?: number;
   readonly colorData?: Uint8Array;
   readonly colorFormat?: 'bgra8unorm';
+  readonly normCameraImageFromNormView?: readonly number[];
   readonly frameNumber: number;
   readonly minDepth: number;
   readonly maxDepth: number;
