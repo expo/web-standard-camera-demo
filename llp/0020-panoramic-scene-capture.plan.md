@@ -59,6 +59,11 @@ Implemented:
 - Export: writes an ASCII `.ply` model into the app Documents directory before
   opening any optional share sheet, reports the Files-visible filename/size, and
   relies on iOS document sharing so the Documents directory is visible in Files.
+- Deterministic model tests: the pure reconstruction/export helpers live in
+  `src/lib/panoramic-scene-model.ts` and are covered by Bun tests for depth
+  unprojection, column-major transforms, BGRA color sampling, voxel fusion,
+  WebXR-shaped RGB-D surfel extraction, PLY export, Files path formatting, and
+  matrix inversion.
 
 Not yet implemented:
 
@@ -514,13 +519,20 @@ tests with physical-device profiling.
 
 Implementation tests:
 
-- synthetic intrinsics/depth unprojection produces expected camera-space points
+- synthetic projection/depth unprojection produces expected camera-space points
+  (`bun test src/lib/panoramic-scene-model.test.ts`)
 - camera-to-world transform application is correct
+  (`bun test src/lib/panoramic-scene-model.test.ts`)
 - image-plane crop/scale/intrinsics transforms round-trip known pixels
+- BGRA camera byte sampling preserves channel interpretation without a full-frame
+  JS swizzle (`bun test src/lib/panoramic-scene-model.test.ts`)
 - voxel deduplication keeps one representative per cell
+  (`bun test src/lib/panoramic-scene-model.test.ts`)
 - voxel averaging preserves a flat plane without biasing it toward the camera
 - keyframe policy accepts/rejects frames as expected
 - model stats stay within configured caps
+- PLY export includes vertex positions, normals, and uchar colors
+  (`bun test src/lib/panoramic-scene-model.test.ts`)
 
 Manual/device validation:
 
