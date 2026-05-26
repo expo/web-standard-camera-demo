@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Button, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useTheme } from '@/hooks/use-theme';
 
@@ -99,6 +99,7 @@ export default function RunTestsScreen(): React.JSX.Element {
       setRunning(false);
       abortRef.current = null;
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Preserve the current run callback identity.
   }, [running]);
 
   const stop = React.useCallback(() => {
@@ -134,7 +135,7 @@ export default function RunTestsScreen(): React.JSX.Element {
       </View>
 
       <View style={styles.videoSlot}>
-        <Video ref={videoRef} style={styles.video} autoplay />
+        <Video ref={videoRef} style={styles.video} />
       </View>
 
       <View style={styles.results}>

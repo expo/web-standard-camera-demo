@@ -6,11 +6,9 @@ module.exports = defineConfig([
   expoConfig,
   {
     rules: {
-      // React Compiler is enabled for this app, but existing camera/demo code
-      // still has effect-driven state and render-time instrumentation to migrate.
-      'react-hooks/immutability': 'warn',
-      'react-hooks/refs': 'warn',
-      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/immutability': 'error',
+      'react-hooks/refs': 'error',
+      'react-hooks/set-state-in-effect': 'error',
     },
   },
   {

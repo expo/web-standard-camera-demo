@@ -246,6 +246,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
     sourceRef.current = source;
   }, [source]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing camera-idle reset sequence. */
   React.useEffect(() => {
     if (stream || (cameraStatus !== 'idle' && cameraStatus !== 'stopping' && cameraStatus !== 'ended')) {
       return;
@@ -258,6 +259,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
     setFrameDimensions(null);
     setLastFrameNumber(null);
   }, [cameraStatus, setGrabError, stream]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Auto-start only when there is no live stream. We deliberately consume
   // whatever resolution Home (or the previous demo) negotiated — the demo's
@@ -567,6 +569,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const cameraOn = cameraStatus === 'playing';
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
+  // eslint-disable-next-line react-hooks/refs -- The long-lived WebGPU loop reads this ref between renders.
   previewRotatesRef.current = !isDesktop;
   const targetPreviewAspect = isDesktop ? 4 / 3 : DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
   const previewAspect = frameDimensions

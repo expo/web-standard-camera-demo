@@ -192,11 +192,11 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   // the WebGPU pipeline. The effect below keeps the ref in sync with the
   // context's active stream.
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
+  /* eslint-disable react-hooks/set-state-in-effect -- Keep the existing stream-swap HUD reset timing. */
   React.useEffect(() => {
     if (!stream) {
       imageCaptureRef.current = null;
       setSource('pending');
-      // eslint-disable-next-line no-console
       console.log(`CUBE_TRACE stream-cleared`);
       return;
     }
@@ -209,20 +209,19 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     try {
       imageCaptureRef.current = new ImageCapture(track);
       const s = track.getSettings() as { width?: number; height?: number };
-      // eslint-disable-next-line no-console
       console.log(
         `CUBE_TRACE stream-ready ${JSON.stringify({ trackId: track.id, label: track.label, w: s.width, h: s.height })}`
       );
     } catch (e) {
       imageCaptureRef.current = null;
       const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      // eslint-disable-next-line no-console
       console.log(`CUBE_TRACE ImageCapture-construct-fail ${JSON.stringify({ reason })}`);
     }
     return () => {
       imageCaptureRef.current = null;
     };
   }, [stream]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const rafRef = React.useRef<number | null>(null);
 
@@ -232,7 +231,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     let cancelled = false;
     let cleanup: (() => void) | null = null;
 
-    // eslint-disable-next-line no-console
     console.log(`CUBE_TRACE mount @ ${new Date().toISOString()}`);
 
     const startRender = (): void => {
@@ -370,7 +368,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           if (!hasReportedCameraSource) {
             hasReportedCameraSource = true;
             setSource('camera');
-            // eslint-disable-next-line no-console
             console.log(
               `CUBE_TRACE source-change ${JSON.stringify({ source: 'camera', w: frame.width, h: frame.height })}`
             );
@@ -479,7 +476,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           profile.count('renderFrames');
           if (now - lastReport >= 1000) {
             const fps = (frames / ((now - lastReport) / 1000)).toFixed(1);
-            // eslint-disable-next-line no-console
             console.log(
               `CUBE_FPS ${JSON.stringify({ fps: +fps, frames, source: activeSource, w: activeWidth, h: activeHeight, newFrames: newFramesThisSecond, grabs: grabsThisSecond, lastN: lastSeenFrameNumber })}`
             );
@@ -524,7 +520,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
         const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
         setError(message);
         setStatus('error');
-        // eslint-disable-next-line no-console
         console.log(`CUBE_RESULT ${JSON.stringify({ status: 'fail', error: message })}`);
       }
     };

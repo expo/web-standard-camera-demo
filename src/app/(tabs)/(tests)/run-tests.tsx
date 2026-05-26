@@ -128,7 +128,6 @@ function perfDump(label: string): void {
     profiles[id].totalBaseMs = +s.totalBaseMs.toFixed(2);
     profiles[id].maxActualMs = +s.maxActualMs.toFixed(2);
   }
-  // eslint-disable-next-line no-console
   console.log(
     `PERF ${label}: ${JSON.stringify({
       screenRenders: perf.screenRenders,
@@ -167,6 +166,7 @@ const LARGE_TITLE_HEIGHT = 52;
 const PILL_SLOT_HEIGHT = 64;
 
 export default function RunTestsScreen(): React.JSX.Element {
+  // eslint-disable-next-line react-hooks/immutability -- Module-scoped perf counters are diagnostic-only.
   perf.screenRenders++;
   const theme = useTheme();
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -183,6 +183,7 @@ export default function RunTestsScreen(): React.JSX.Element {
   // on the simulator don't see a high skip count and assume the suite is
   // broken — it just isn't relevant to a device-less host.
   const [environment, setEnvironment] = React.useState<TestEnvironment | null>(null);
+  void completed;
 
   const total = rows.length;
   const applicability = React.useMemo(
@@ -253,14 +254,12 @@ export default function RunTestsScreen(): React.JSX.Element {
     if (url == null) return;
     const m = /[?&]only=([^&]+)/.exec(url);
     onlyRef.current = m ? decodeURIComponent(m[1]) : undefined;
-    // eslint-disable-next-line no-console
     console.log(`[wpt:debug] URL filter parsed url=${url} only=${onlyRef.current ?? '<none>'}`);
   }, [url]);
 
   const run = React.useCallback(async () => {
     if (!videoRef.current) return;
     const only = onlyRef.current;
-    // eslint-disable-next-line no-console
     console.log(`[wpt:debug] run() called with only=${only ?? '<none>'}`);
     runAbortRef.current?.abort();
     const ac = new AbortController();
@@ -365,8 +364,10 @@ export default function RunTestsScreen(): React.JSX.Element {
   const groups = React.useMemo(() => {
     const t0 = now();
     const out = groupRows(rows);
+    /* eslint-disable react-hooks/immutability -- Module-scoped perf counters are diagnostic-only. */
     perf.groupRowsCalls++;
     perf.groupRowsTotalMs += now() - t0;
+    /* eslint-enable react-hooks/immutability */
     return out;
   }, [rows]);
   // Counts derived only from applicable rows so the displayed pass/fail/skip
@@ -375,8 +376,10 @@ export default function RunTestsScreen(): React.JSX.Element {
   const counts = React.useMemo(() => {
     const t0 = now();
     const out = countApplicable(rows, environment);
+    /* eslint-disable react-hooks/immutability -- Module-scoped perf counters are diagnostic-only. */
     perf.countByStatusCalls++;
     perf.countByStatusTotalMs += now() - t0;
+    /* eslint-enable react-hooks/immutability */
     return out;
   }, [rows, environment]);
   const applicableTotal = applicability?.applicable ?? total;
@@ -691,14 +694,6 @@ function rowArraysIdentical(a: Row[], b: Row[]): boolean {
   return true;
 }
 
-function countByStatus(rows: Row[]): Record<Status, number> {
-  const counts: Record<Status, number> = { pending: 0, running: 0, pass: 0, fail: 0, timeout: 0, skip: 0 };
-  for (const r of rows) {
-    counts[r.status]++;
-  }
-  return counts;
-}
-
 // Memoized so an unrelated section's row flip doesn't re-render every other
 // section header. `group.rows` is a stable reference when none of the rows
 // in that group changed (the run-loop's setRows updater shallow-clones the
@@ -717,6 +712,7 @@ const GroupSection = React.memo(function GroupSection({
   textColor: string;
   mutedColor: string;
 }): React.JSX.Element {
+  // eslint-disable-next-line react-hooks/immutability -- Module-scoped perf counters are diagnostic-only.
   perf.groupSectionRenders++;
   // Split rows into "applicable" (counts toward the run) and "pre-skipped"
   // (out-of-scope or device-missing — known at registration time, not a
@@ -747,6 +743,7 @@ const GroupSection = React.memo(function GroupSection({
     else if (r.status === 'timeout') applicableTimeout++;
     else if (r.status === 'skip') applicableRuntimeSkip++;
   }
+  void applicablePass;
   const preSkipTag =
     preSkipDeviceMissing > 0 && env
       ? `needs ${describeMissingDevices(env)}`
@@ -796,6 +793,7 @@ const ResultRow = React.memo(function ResultRow({
   textColor: string;
   mutedColor: string;
 }): React.JSX.Element {
+  // eslint-disable-next-line react-hooks/immutability -- Module-scoped perf counters are diagnostic-only.
   perf.rowRenders++;
   const color = STATUS_COLOR[row.status];
   const glyph = STATUS_GLYPH[row.status];

@@ -114,7 +114,6 @@ const CAMERA_HARDWARE_RELEASE_DELAY_MS = 150;
 
 // Module-load trace so we can confirm fresh JS reached the phone — appears
 // at the top of the JS evaluation, before any React renders.
-// eslint-disable-next-line no-console
 console.log(`CAMERA_CTX module-load @ ${new Date().toISOString()}`);
 
 const initialUrlPromise = Linking.getInitialURL();
@@ -263,7 +262,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       setError(null);
       setStatus('requesting');
       setUserStopped(false);
-      // eslint-disable-next-line no-console
       console.log(`CAMERA_CTX start req=${requestId} ${JSON.stringify(effective)}`);
 
       const video: MediaTrackConstraints = {};
@@ -282,7 +280,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
       try {
         const s = await navigator.mediaDevices.getUserMedia({ video });
-        // eslint-disable-next-line no-console
         console.log(
           `CAMERA_CTX gUM-ok req=${requestId} tracks=${s.getVideoTracks().length}`
         );
@@ -307,7 +304,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         }
       } catch (e) {
         const err = e as Error & { name?: string; constraint?: string };
-        // eslint-disable-next-line no-console
         console.log(
           `CAMERA_CTX gUM-fail req=${requestId} ${err.name ?? 'Error'}: ${err.message}`
         );
@@ -340,6 +336,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   // element reports loadeddata. Consumers that need the element (Home) handle
   // that wiring themselves; here we just expose the track's readyState so
   // status stays meaningful even without a video element.
+  /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing track-to-context status promotion. */
   React.useEffect(() => {
     if (!stream) return;
     const track = stream.getVideoTracks()[0];
@@ -355,6 +352,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       track.removeEventListener('ended', onEnded);
     };
   }, [stream]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useEffect(() => {
     const subscription = NativeStandardCamera.addListener(
@@ -414,12 +412,10 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         const initialUrl = await initialUrlPromise;
         if (cancelled) return;
         const gated = isTestsLaunchUrl(initialUrl);
-        // eslint-disable-next-line no-console
         console.log(`CAMERA_CTX gate resolved isTestsLaunch=${gated} initialUrl=${initialUrl}`);
         setAutoStartGate(gated ? 'blocked-by-tests' : 'allowed');
       } catch (e) {
         if (cancelled) return;
-        // eslint-disable-next-line no-console
         console.log(`CAMERA_CTX gate failed; allowing auto-start ${String(e)}`);
         setAutoStartGate('allowed');
       }
@@ -434,13 +430,14 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   // intent. Idempotent thanks to the transition-state guard.
   // Suppressed while `externalLocked` so we don't fight ARKit/LiDAR for the
   // AVCaptureDevice during their session.
+  /* eslint-disable react-hooks/set-state-in-effect -- Preserve current auto-start scheduling. */
   React.useEffect(() => {
     if (autoStartGate !== 'allowed' || userStopped || externalLocked) return;
     if (stream || status === 'requesting' || status === 'starting' || status === 'stopping') return;
-    // eslint-disable-next-line no-console
     console.log(`CAMERA_CTX auto-start firing (status=${status})`);
     void start();
   }, [autoStartGate, userStopped, externalLocked, stream, status, start]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const hardware: CameraHardwareState = React.useMemo(() => {
     if (lidarStatus === 'starting') return { owner: 'lidar', phase: 'starting' };

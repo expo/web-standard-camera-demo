@@ -287,6 +287,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
     setLastFrameNumber(null);
   }, [setGrabError]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing camera-idle reset sequence. */
   React.useEffect(() => {
     if (stream || (cameraStatus !== 'idle' && cameraStatus !== 'stopping' && cameraStatus !== 'ended')) {
       return;
@@ -295,6 +296,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
     setCaptureProfile('demo');
     resetFrameState();
   }, [cameraStatus, resetFrameState, stream]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const retryRelaxedCamera = React.useCallback((): void => {
     if (didRetryRelaxedCameraRef.current) return;
@@ -319,6 +321,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
   // rationale. We still mark the capture profile as 'demo' for the HUD; the
   // relaxed-fallback effect handles the case where Home's chosen mode can't
   // deliver frames the classifier expects.
+  /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing auto-start profile/reset timing. */
   React.useEffect(() => {
     if (didAutoStartCameraRef.current) return;
     if (userStopped || externalLocked) return;
@@ -330,6 +333,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraStatus, userStopped, externalLocked, stream]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useEffect(() => {
     if (didRetryRelaxedCameraRef.current || source === 'camera' || cameraStatus !== 'error' || stream) {
@@ -557,7 +561,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
                 sourceRef.current = frameSource;
                 setSource(frameSource);
                 if (__DEV__) {
-                  // eslint-disable-next-line no-console
                   console.log(
                     `NEURAL_LENS_SOURCE ${JSON.stringify({
                       height: frame.height,
@@ -684,6 +687,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
+  // eslint-disable-next-line react-hooks/refs -- The long-lived WebGPU loop reads this ref between renders.
   previewRotatesRef.current = !isDesktop;
   const targetPreviewAspect = isDesktop ? 4 / 3 : DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
   const previewAspect = frameDimensions

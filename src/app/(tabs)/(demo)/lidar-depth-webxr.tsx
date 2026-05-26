@@ -367,6 +367,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
     lastCenterDepthRef.current = null;
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Preserve the current unsupported-state initialization timing. */
   React.useEffect(() => {
     installWebXRDepthProfile();
     const xr = navigator.xr;
@@ -379,6 +380,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
       setSupport(supported ? 'immersive-ar + depth-sensing available' : 'WebXR LiDAR depth unsupported here');
     });
   }, [resetXRReadouts]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useEffect(() => {
     targetDepthRef.current = targetDepth;
@@ -769,6 +771,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
       cancelled = true;
       cleanup?.();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Preserve the existing XR render-loop lifetime.
   }, [adapter, device, ref, session, stageHeight, stageWidth]);
 
   const running = session !== null;

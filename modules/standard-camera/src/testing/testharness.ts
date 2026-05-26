@@ -820,7 +820,6 @@ export async function detectEnvironment(): Promise<TestEnvironment> {
       navigator?: { mediaDevices?: { enumerateDevices?: () => Promise<{ kind: string }[]> } };
     }).navigator?.mediaDevices;
     if (!md?.enumerateDevices) {
-      // eslint-disable-next-line no-console
       console.log('[wpt:debug] detectEnvironment: no navigator.mediaDevices.enumerateDevices');
       return { hasCamera: false, hasMicrophone: false };
     }
@@ -829,7 +828,6 @@ export async function detectEnvironment(): Promise<TestEnvironment> {
       hasCamera: devices.some((d) => d.kind === 'videoinput'),
       hasMicrophone: devices.some((d) => d.kind === 'audioinput'),
     };
-    // eslint-disable-next-line no-console
     console.log(
       `[wpt:debug] detectEnvironment: ${JSON.stringify(env)} from devices=${JSON.stringify(
         devices.map((d) => d.kind)
@@ -837,7 +835,6 @@ export async function detectEnvironment(): Promise<TestEnvironment> {
     );
     return env;
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.log(`[wpt:debug] detectEnvironment threw: ${(e as Error).name}: ${(e as Error).message}`);
     return { hasCamera: false, hasMicrophone: false };
   }
@@ -1047,32 +1044,26 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
       };
     }
   ).mediaDevices;
-  // eslint-disable-next-line no-console
   console.log('[wpt:debug] runAllTests: video probe start');
   try {
     const probeStream = await mediaDevices.getUserMedia({ video: true });
     for (const t of probeStream.getTracks()) t.stop();
     noCameraEnvironment = false;
-    // eslint-disable-next-line no-console
     console.log('[wpt:debug] runAllTests: video probe ok');
   } catch (e) {
     noCameraEnvironment = (e as { name?: string })?.name === 'NotFoundError';
-    // eslint-disable-next-line no-console
     console.log(
       `[wpt:debug] runAllTests: video probe err name=${(e as Error).name} msg=${(e as Error).message} → noCameraEnvironment=${noCameraEnvironment}`
     );
   }
-  // eslint-disable-next-line no-console
   console.log('[wpt:debug] runAllTests: audio probe start');
   try {
     const probeStream = await mediaDevices.getUserMedia({ audio: true });
     for (const t of probeStream.getTracks()) t.stop();
     noMicrophoneEnvironment = false;
-    // eslint-disable-next-line no-console
     console.log('[wpt:debug] runAllTests: audio probe ok');
   } catch (e) {
     noMicrophoneEnvironment = (e as { name?: string })?.name === 'NotFoundError';
-    // eslint-disable-next-line no-console
     console.log(
       `[wpt:debug] runAllTests: audio probe err name=${(e as Error).name} msg=${(e as Error).message} → noMicrophoneEnvironment=${noMicrophoneEnvironment}`
     );
@@ -1084,7 +1075,6 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     hasCamera: !noCameraEnvironment,
     hasMicrophone: !noMicrophoneEnvironment,
   };
-  // eslint-disable-next-line no-console
   console.log(`[wpt:debug] runAllTests: probed env=${JSON.stringify(env)}`);
   options.onEnvironment?.(env);
 
@@ -1279,7 +1269,6 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   const applicability = options.forceRunAll
     ? { total: tests.length, applicable: tests.length, outOfScope: 0, deviceMissing: 0 }
     : summarizeApplicability(env);
-  // eslint-disable-next-line no-console
   console.log(`[wpt:debug] runAllTests: applicability=${JSON.stringify(applicability)}`);
   const summary = {
     passed: results.filter((r) => r.status === 'pass').length,

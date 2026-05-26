@@ -108,7 +108,6 @@ export function createWebGpuPerfProbe(demo: string, staticInfo: WebGpuPerfExtra 
 
 function emitWebGpuProfile(message: string): void {
   if (typeof __DEV__ !== 'undefined' && !__DEV__) return;
-  // eslint-disable-next-line no-console
   console.log(message);
   try {
     NativeStandardCamera.__systemLogForTesting(message);
