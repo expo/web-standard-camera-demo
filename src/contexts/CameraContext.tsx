@@ -1,6 +1,8 @@
 import * as Linking from 'expo-linking';
 import * as React from 'react';
 
+import { KNOWN_FACING_AVAILABILITY, type CameraFacingAvailability } from '@/lib/camera-facing';
+
 import {
   NativeStandardCamera,
   setWebXRDepthCameraLockHandlers,
@@ -66,6 +68,7 @@ export interface CameraContextValue {
   constraints: CameraConstraints;
   settings: MediaTrackSettings | null;
   devices: MediaDeviceInfo[];
+  facingModeAvailability: CameraFacingAvailability;
   /**
    * True when the user has explicitly tapped Stop. Consumers that "want the
    * camera on by default" check this before auto-starting so their intent
@@ -463,6 +466,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       constraints,
       settings,
       devices,
+      facingModeAvailability: KNOWN_FACING_AVAILABILITY,
       userStopped,
       externalLocked,
       lidarStatus,

@@ -5,16 +5,56 @@ import ExpoModulesCore
 //                              native ExpoView. The TS wrapper exposes the
 //                              spec-shaped surface; this class is the bridge.
 // @ref LLP 0005#architecture — AVCaptureVideoPreviewLayer renders the session.
-// Mirrors expo-camera's pattern: install the preview layer as a sublayer
-// in layoutSubviews after the view has known bounds.
+// The backing layer is the AVCaptureVideoPreviewLayer itself (via
+// `+layerClass`) so React Native's style writes land on it directly. The web
+// spec idiom for mirroring a preview — `transform: scaleX(-1)` on the video
+// element — is honoured by observing the resulting `layer.transform` and
+// translating any horizontal flip into AVFoundation's
+// `AVCaptureConnection.isVideoMirrored`, which is the canonical iOS knob for
+// display-only preview mirroring. The mirror lives on the preview layer's
+// own connection, so downstream consumers (FrameSink, ImageCapture,
+// MediaStreamTrack.getSettings) still see un-flipped frames.
 
 internal final class VideoView: ExpoView {
-  private lazy var previewLayer: AVCaptureVideoPreviewLayer = {
-    let layer = AVCaptureVideoPreviewLayer()
-    layer.videoGravity = .resizeAspectFill
-    layer.needsDisplayOnBoundsChange = true
-    return layer
+  public override class var layerClass: AnyClass {
+    return AVCaptureVideoPreviewLayer.self
+  }
+
+  private var previewLayer: AVCaptureVideoPreviewLayer {
+    // Force-cast is safe because `+layerClass` above guarantees the layer's
+    // runtime type.
+    // swiftlint:disable:next force_cast
+    return layer as! AVCaptureVideoPreviewLayer
+  }
+
+  // Opaque black overlay used to express the "disabled track shows solid
+  // black frames" behaviour. We can't hide the preview layer itself any
+  // more — it IS the view's backing layer, so hiding it would also hide the
+  // backgroundColor we'd otherwise rely on — so we composite a black sublayer
+  // on top of the video and toggle that instead.
+  private lazy var disabledMaskLayer: CALayer = {
+    let mask = CALayer()
+    mask.backgroundColor = UIColor.black.cgColor
+    mask.isHidden = true
+    return mask
   }()
+
+  // KVO handle for `layer.transform`. React Native applies the React style
+  // `transform: [{ scaleX: -1 }]` by writing the resulting CATransform3D
+  // directly onto the layer (it does not go through UIView's `transform`
+  // property), so we have to observe the layer to learn about it.
+  private var layerTransformObservation: NSKeyValueObservation?
+
+  // Guard for the reentrant write inside the observer — when we reset
+  // `layer.transform` to identity, the observer fires again and we don't want
+  // to overwrite a freshly-set isVideoMirrored from the recursive callback.
+  private var applyingLayerTransform = false
+
+  // Last horizontal-flip state requested by the React style. Stored so we can
+  // re-apply it whenever the preview connection is (re)created via
+  // `attachStream`, since `connection.isVideoMirrored` lives on the
+  // AVCaptureConnection — which doesn't exist until a session is attached.
+  private var pendingPreviewMirror = false
 
   private var firstFrameObserver: NSKeyValueObservation?
   // CaptureSource the preview is currently subscribed to, so we can
@@ -38,11 +78,59 @@ internal final class VideoView: ExpoView {
     super.init(appContext: appContext)
     clipsToBounds = true
     backgroundColor = .black
+    previewLayer.videoGravity = .resizeAspectFill
+    previewLayer.needsDisplayOnBoundsChange = true
+    previewLayer.addSublayer(disabledMaskLayer)
+
+    // @ref LLP 0004 — Spec idiom for mirroring a preview is
+    // `transform: scaleX(-1)` on the video element. RN writes that onto
+    // `layer.transform`. AVCaptureVideoPreviewLayer's video rendering uses an
+    // IOSurface fast path that ignores the CALayer transform, so we translate
+    // a horizontal flip in the requested transform into AVFoundation's
+    // canonical `connection.isVideoMirrored` knob and reset the layer
+    // transform back to identity to avoid a second flip stacking with the
+    // mirrored video pixels.
+    layerTransformObservation = layer.observe(\.transform, options: [.new]) {
+      [weak self] _, _ in
+      self?.syncMirrorFromLayerTransform()
+    }
   }
 
   deinit {
+    layerTransformObservation?.invalidate()
     firstFrameObserver?.invalidate()
     previewSource?.unregisterPreview(self)
+  }
+
+  private func syncMirrorFromLayerTransform() {
+    if applyingLayerTransform { return }
+    let t = layer.transform
+    // CATransform3D.m11 is the X-axis scale; negative means a horizontal flip
+    // along the spec's `scaleX(-1)` idiom. (Other transforms like `rotate` are
+    // out of scope for preview mirroring; we just check the X-scale sign.)
+    pendingPreviewMirror = !CATransform3DIsIdentity(t) && t.m11 < 0
+
+    applyingLayerTransform = true
+    defer { applyingLayerTransform = false }
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if !CATransform3DIsIdentity(t) {
+      layer.transform = CATransform3DIdentity
+    }
+    applyPendingMirrorToConnection()
+    CATransaction.commit()
+  }
+
+  private func applyPendingMirrorToConnection() {
+    guard let connection = previewLayer.connection,
+          connection.isVideoMirroringSupported else {
+      return
+    }
+    if connection.isVideoMirrored != pendingPreviewMirror {
+      connection.automaticallyAdjustsVideoMirroring = false
+      connection.isVideoMirrored = pendingPreviewMirror
+    }
   }
 
   // Test hook — returns the preview layer's connection.isEnabled value.
@@ -55,20 +143,20 @@ internal final class VideoView: ExpoView {
 
   // Called by `CaptureSource.setVideoEnabled` so the preview layer's
   // separate AVCaptureConnection follows the video track's enabled state.
-  // Disabling the connection alone is not enough: the AVCaptureVideoPreviewLayer
-  // keeps its last frame as a static image (CALayer just stops repainting),
+  // Disabling the connection alone is not enough: AVCaptureVideoPreviewLayer
+  // keeps its last frame as a static image (the layer just stops repainting),
   // so a disabled track would *freeze* on the last live pixel rather than
-  // going black. We also hide the layer so the view's
-  // `backgroundColor = .black` shows through — that's the visible "solid
-  // black frames" the spec asks for. CATransaction's disable-actions
-  // suppresses the implicit fade Core Animation would otherwise apply.
+  // going black. We composite an opaque black mask sublayer over the preview
+  // so the visible result is the "solid black frames" the spec asks for.
+  // CATransaction's disable-actions suppresses the implicit fade Core
+  // Animation would otherwise apply.
   func setPreviewEnabled(_ enabled: Bool) {
     let apply: () -> Void = { [weak self] in
       guard let self else { return }
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       self.previewLayer.connection?.isEnabled = enabled
-      self.previewLayer.isHidden = !enabled
+      self.disabledMaskLayer.isHidden = enabled
       CATransaction.commit()
     }
     if Thread.isMainThread {
@@ -78,17 +166,16 @@ internal final class VideoView: ExpoView {
     }
   }
 
+  // The preview layer is the view's backing layer, so UIView's own
+  // bounds/frame handling resizes the preview automatically. We still
+  // resize the disabled-mask sublayer to track the bounds, and suppress Core
+  // Animation implicit animations on bounds changes so the initial layout
+  // doesn't slide in from the left when the screen first lays out.
   public override func layoutSubviews() {
-    super.layoutSubviews()
-    // Disable Core Animation's implicit animations so the preview layer doesn't
-    // animate its frame/transform when bounds change (which produced a visible
-    // slide-in when the screen first laid out).
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    previewLayer.frame = bounds
-    if previewLayer.superlayer == nil {
-      layer.insertSublayer(previewLayer, at: 0)
-    }
+    super.layoutSubviews()
+    disabledMaskLayer.frame = bounds
     CATransaction.commit()
   }
 
@@ -128,10 +215,14 @@ internal final class VideoView: ExpoView {
       connection.isEnabled = initiallyEnabled
       configurePreviewOrientation(connection)
     }
-    // Match the visibility-hide-on-disable behaviour from setPreviewEnabled
-    // so a stream attached while its track is already disabled doesn't
-    // briefly show live pixels before the first toggle.
-    previewLayer.isHidden = !initiallyEnabled
+    // Match the disabled-mask behaviour from setPreviewEnabled so a stream
+    // attached while its track is already disabled doesn't briefly show
+    // live pixels before the first toggle.
+    disabledMaskLayer.isHidden = initiallyEnabled
+    // Honour any mirror state requested via `transform: scaleX(-1)` before
+    // the session attached — `connection.isVideoMirrored` only exists once
+    // the connection does.
+    applyPendingMirrorToConnection()
     CATransaction.commit()
 
     // @ref LLP 0003#track-enabled — Subscribe so the preview layer's

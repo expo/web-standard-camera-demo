@@ -4,6 +4,7 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions,
 
 import { useCamera, type CameraConstraints } from '@/contexts/CameraContext';
 import { useTheme } from '@/hooks/use-theme';
+import { displayFacingMode } from '@/lib/camera-facing';
 import { addTestRunStartListener } from '@/lib/camera-run-events';
 import { Video, type HTMLVideoElement } from '../../../../modules/standard-camera';
 
@@ -59,6 +60,7 @@ export default function HomeScreen(): React.JSX.Element {
     constraints,
     settings,
     devices,
+    facingModeAvailability,
     userStopped,
     externalLocked,
     start,
@@ -100,10 +102,10 @@ export default function HomeScreen(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream, status, userStopped, externalLocked]);
 
-  // Resolve the user's current facing intent from explicit state or the
-  // resolved track settings. `deviceId` selection can imply either side.
-  const explicitFacing: 'user' | 'environment' | null =
-    constraints.facingMode ?? (settings?.facingMode as 'user' | 'environment' | undefined) ?? null;
+  // @ref LLP 0021#decision — Web browsers can omit `settings.facingMode` for
+  // desktop cameras; this demo treats that missing signal as front/self-view.
+  // Native iOS still uses the exact AVFoundation direction.
+  const activeFacing = displayFacingMode({ constraints, settings });
 
   const { frontDevices, backDevices } = React.useMemo(() => {
     const front: MediaDeviceInfo[] = [];
@@ -112,10 +114,10 @@ export default function HomeScreen(): React.JSX.Element {
       const f = facingOfDevice(d.label);
       if (f === 'user') front.push(d);
       else if (f === 'environment') back.push(d);
-      else (explicitFacing === 'user' ? front : back).push(d);
+      else (activeFacing === 'user' ? front : back).push(d);
     }
     return { frontDevices: front, backDevices: back };
-  }, [devices, explicitFacing]);
+  }, [devices, activeFacing]);
 
   const onPickFacing = React.useCallback(
     (m: 'user' | 'environment') => applyConstraints({ facingMode: m }),
@@ -155,7 +157,8 @@ export default function HomeScreen(): React.JSX.Element {
     }
   }, [cameraRunning, inlineStartStopDisabled, start, stop]);
 
-  const isFront = explicitFacing === 'user';
+  const isFront = activeFacing === 'user';
+  const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
   const selectedDeviceId = (settings?.deviceId as string | undefined) ?? constraints.deviceId;
   const isDesktop = width >= 1040;
   const contentStyle = [
@@ -186,14 +189,24 @@ export default function HomeScreen(): React.JSX.Element {
           </View>
 
           <View style={[styles.videoContainer, isDesktop ? styles.desktopVideoContainer : null]}>
-            <Video ref={videoRef} style={styles.video} />
+            <Video
+              ref={videoRef}
+              style={[styles.video, isFront ? styles.mirroredVideo : null]}
+            />
           </View>
         </View>
 
         <View style={[styles.settingsPane, isDesktop ? styles.desktopSettingsPane : null]}>
           <ControlRow label="Facing" theme={theme} desktop={isDesktop}>
             <FacingPill mode="user" selected={isFront} theme={theme} onPick={onPickFacing} label="Front" />
-            <FacingPill mode="environment" selected={!isFront} theme={theme} onPick={onPickFacing} label="Back" />
+            <FacingPill
+              disabled={backFacingDisabled}
+              mode="environment"
+              selected={!isFront}
+              theme={theme}
+              onPick={onPickFacing}
+              label="Back"
+            />
           </ControlRow>
 
           {frontDevices.length > 0 ? (
@@ -391,19 +404,29 @@ const ControlRow = React.memo(function ControlRow({
 });
 
 const FacingPill = React.memo(function FacingPill({
+  disabled,
   mode,
   label,
   selected,
   theme,
   onPick,
 }: {
+  disabled?: boolean;
   mode: 'user' | 'environment';
   label: string;
   selected: boolean;
   theme: Theme;
   onPick: (m: 'user' | 'environment') => void;
 }): React.JSX.Element {
-  return <PillBase label={label} selected={selected} theme={theme} onPress={() => onPick(mode)} />;
+  return (
+    <PillBase
+      disabled={disabled}
+      label={label}
+      selected={selected}
+      theme={theme}
+      onPress={() => onPick(mode)}
+    />
+  );
 });
 
 const DevicePill = React.memo(function DevicePill({
@@ -457,11 +480,13 @@ const FrameRatePill = React.memo(function FrameRatePill({
 });
 
 function PillBase({
+  disabled,
   label,
   selected,
   theme,
   onPress,
 }: {
+  disabled?: boolean;
   label: string;
   selected: boolean;
   theme: Theme;
@@ -469,12 +494,14 @@ function PillBase({
 }): React.JSX.Element {
   return (
     <Pressable
+      accessibilityState={{ disabled, selected }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.pill,
         {
           backgroundColor: selected ? theme.text : theme.backgroundElement,
-          opacity: pressed ? 0.7 : 1,
+          opacity: disabled ? 0.42 : pressed ? 0.7 : 1,
         },
       ]}>
       <Text style={[styles.pillText, { color: selected ? theme.backgroundElement : theme.text }]}>
@@ -590,6 +617,13 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     height: '100%',
+  },
+  // Spec idiom for mirroring a preview: `transform: scaleX(-1)` on the video
+  // element itself. The Video component honours this on both platforms — web
+  // renders it as a CSS transform on the underlying <video> and iOS forwards
+  // it onto the AVCaptureVideoPreviewLayer.
+  mirroredVideo: {
+    transform: [{ scaleX: -1 }],
   },
   controlRow: {
     gap: 4,

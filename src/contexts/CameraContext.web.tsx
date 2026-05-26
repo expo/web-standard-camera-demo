@@ -1,5 +1,11 @@
 import * as React from 'react';
 
+import {
+  DEFAULT_FACING_AVAILABILITY,
+  type CameraFacingAvailability,
+  type CameraFacingModeAvailability,
+} from '@/lib/camera-facing';
+
 export type CameraStatus =
   | 'idle'
   | 'requesting'
@@ -42,6 +48,7 @@ export interface CameraContextValue {
   constraints: CameraConstraints;
   settings: MediaTrackSettings | null;
   devices: MediaDeviceInfo[];
+  facingModeAvailability: CameraFacingAvailability;
   userStopped: boolean;
   externalLocked: boolean;
   lidarStatus: LiDARCameraStatus;
@@ -53,8 +60,17 @@ export interface CameraContextValue {
   applyConstraints: (patch: Partial<CameraConstraints>) => void;
 }
 
-const DEFAULT_CONSTRAINTS: CameraConstraints = { facingMode: 'environment' };
+const DEFAULT_CONSTRAINTS: CameraConstraints = { facingMode: 'user' };
 const CameraContext = React.createContext<CameraContextValue | null>(null);
+
+function isNoEnvironmentCameraError(error: unknown): boolean {
+  const err = error as { name?: string; constraint?: string } | undefined;
+  return (
+    err?.name === 'OverconstrainedError' ||
+    err?.name === 'NotFoundError' ||
+    err?.constraint === 'facingMode'
+  );
+}
 
 export function CameraProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [stream, setStream] = React.useState<MediaStream | null>(null);
@@ -63,6 +79,8 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const [constraints, setConstraints] = React.useState<CameraConstraints>(DEFAULT_CONSTRAINTS);
   const [settings, setSettings] = React.useState<MediaTrackSettings | null>(null);
   const [devices, setDevices] = React.useState<MediaDeviceInfo[]>([]);
+  const [environmentFacingAvailability, setEnvironmentFacingAvailability] =
+    React.useState<CameraFacingModeAvailability>('unknown');
   const [userStopped, setUserStopped] = React.useState(false);
   const streamRef = React.useRef<MediaStream | null>(null);
   const requestIdRef = React.useRef(0);
@@ -86,6 +104,29 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     const all = await mediaDevices.enumerateDevices();
     setDevices(all.filter((device) => device.kind === 'videoinput'));
   }, []);
+
+  const probeEnvironmentFacingMode = React.useCallback(
+    async (mediaDevices: MediaDevices, requestId: number): Promise<void> => {
+      if (environmentFacingAvailability !== 'unknown') return;
+      // @ref LLP 0021#decision — Once a camera grant exists, exact
+      // `environment` is the browser-backed probe for whether a Back camera is
+      // actually available. Stop the probe stream immediately so the visible
+      // app stream keeps owning the UI.
+      try {
+        const probe = await mediaDevices.getUserMedia({
+          video: { facingMode: { exact: 'environment' } },
+        });
+        for (const track of probe.getTracks()) track.stop();
+        if (requestId === requestIdRef.current) {
+          setEnvironmentFacingAvailability('available');
+        }
+      } catch (e) {
+        if (requestId !== requestIdRef.current) return;
+        setEnvironmentFacingAvailability(isNoEnvironmentCameraError(e) ? 'unavailable' : 'unknown');
+      }
+    },
+    [environmentFacingAvailability]
+  );
 
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {
@@ -129,9 +170,21 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         }
         streamRef.current = nextStream;
         setStream(nextStream);
-        setSettings(nextStream.getVideoTracks()[0]?.getSettings() ?? null);
+        const nextSettings = nextStream.getVideoTracks()[0]?.getSettings() ?? null;
+        setSettings(nextSettings);
+        if (nextSettings?.facingMode === 'environment') {
+          setEnvironmentFacingAvailability('available');
+        }
+        if (!effective.deviceId && effective.facingMode === 'environment' && !nextSettings?.facingMode) {
+          setConstraints((previous) =>
+            previous.facingMode === 'environment'
+              ? { ...previous, facingMode: 'user' }
+              : previous
+          );
+        }
         setStatus('playing');
         await refreshDevices();
+        void probeEnvironmentFacingMode(mediaDevices, requestId);
       } catch (e) {
         if (requestId !== requestIdRef.current) return;
         const err = e as Error & { name?: string; constraint?: string };
@@ -140,7 +193,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         setStatus('error');
       }
     },
-    [constraints, refreshDevices]
+    [constraints, probeEnvironmentFacingMode, refreshDevices]
   );
 
   const applyConstraints = React.useCallback(
@@ -180,6 +233,14 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     return { owner: null, phase: 'stopped' };
   }, [status]);
 
+  const facingModeAvailability: CameraFacingAvailability = React.useMemo(
+    () => ({
+      ...DEFAULT_FACING_AVAILABILITY,
+      environment: environmentFacingAvailability,
+    }),
+    [environmentFacingAvailability]
+  );
+
   const value: CameraContextValue = React.useMemo(
     () => ({
       stream,
@@ -189,6 +250,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       constraints,
       settings,
       devices,
+      facingModeAvailability,
       userStopped,
       externalLocked: false,
       lidarStatus: 'unsupported',
@@ -199,7 +261,20 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       unlockExternal: () => {},
       applyConstraints,
     }),
-    [applyConstraints, constraints, devices, error, hardware, settings, start, status, stop, stream, userStopped]
+    [
+      applyConstraints,
+      constraints,
+      devices,
+      error,
+      facingModeAvailability,
+      hardware,
+      settings,
+      start,
+      status,
+      stop,
+      stream,
+      userStopped,
+    ]
   );
 
   return <CameraContext.Provider value={value}>{children}</CameraContext.Provider>;

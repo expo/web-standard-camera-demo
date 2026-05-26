@@ -3,6 +3,14 @@ import { useFocusEffect } from 'expo-router';
 import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
+import {
+  Host,
+  Picker,
+  Text as UIText,
+  disabled as disabledModifier,
+  pickerStyle,
+  tag,
+} from '@/components/demo-platform-controls';
 import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import {
@@ -14,6 +22,7 @@ import {
   type CameraFrameUploadSource,
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
+import { displayFacingMode } from '@/lib/camera-facing';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -42,6 +51,10 @@ import { ImageCapture } from '../../../../modules/standard-camera';
 const SHADER = /* wgsl */ `
 struct Uniforms {
   modelViewProjection: mat4x4f,
+  mirror: f32,
+  _pad0: f32,
+  _pad1: f32,
+  _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -63,7 +76,11 @@ fn vs_main(@location(0) pos: vec3f, @location(1) uv: vec2f) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
-  return textureSample(srcTex, srcSampler, in.uv);
+  var uv = in.uv;
+  if (u.mirror > 0.5) {
+    uv.x = 1.0 - uv.x;
+  }
+  return textureSample(srcTex, srcSampler, uv);
 }
 `;
 
@@ -122,8 +139,34 @@ const SYNTHETIC_SIZE = 256;
 export default function CubeOfCamerasScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
-  const { stream, status: cameraStatus, error: cameraError, userStopped, externalLocked, start } = useCamera();
+  const {
+    stream,
+    status: cameraStatus,
+    error: cameraError,
+    constraints,
+    settings,
+    facingModeAvailability,
+    userStopped,
+    externalLocked,
+    start,
+    applyConstraints,
+  } = useCamera();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const cameraFacing = displayFacingMode({ constraints, settings });
+  // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
+  // when the web provider proves no environment camera exists.
+  const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
+  const mirrorRef = React.useRef(cameraFacing === 'user');
+  React.useEffect(() => {
+    mirrorRef.current = cameraFacing === 'user';
+  }, [cameraFacing]);
+  const setFacing = React.useCallback(
+    (facingMode: 'user' | 'environment'): void => {
+      if (facingMode === 'environment' && backFacingDisabled) return;
+      applyConstraints({ facingMode });
+    },
+    [applyConstraints, backFacingDisabled]
+  );
 
   // Defense-in-depth start-on-mount: the provider auto-starts at app launch,
   // but Fast Refresh can strand that effect. Honor an explicit user Stop so
@@ -256,9 +299,10 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
         });
 
         const uniformBuffer = device.createBuffer({
-          size: 64,
+          size: 80,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
+        const uniformScratch = new Float32Array(20);
 
         // Lazy-created on the first frame so we size the texture to whatever
         // dimensions the camera (or fallback) actually delivers.
@@ -379,7 +423,9 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
 
           const model = mat4Multiply(mat4RotateY(elapsed * 0.7), mat4RotateX(elapsed * 0.4));
           const mvp = mat4Multiply(viewProjection, model);
-          device.queue.writeBuffer(uniformBuffer, 0, mvp);
+          uniformScratch.set(mvp, 0);
+          uniformScratch[16] = mirrorRef.current ? 1 : 0;
+          device.queue.writeBuffer(uniformBuffer, 0, uniformScratch);
 
           const renderStart = nowMs();
           const encoder = device.createCommandEncoder();
@@ -499,6 +545,20 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
       <DemoPageFrame
         action="standard-camera"
         preview={<Canvas ref={ref} style={[styles.canvas, { height: canvasHeight, width: canvasWidth }]} />}
+        controls={
+          <View style={styles.controls}>
+            <Host style={styles.pickerHost}>
+              <Picker
+                modifiers={[pickerStyle('segmented')]}
+                label="Camera"
+                selection={cameraFacing}
+                onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
+                <UIText modifiers={[tag('environment'), disabledModifier(backFacingDisabled)]}>Back</UIText>
+                <UIText modifiers={[tag('user')]}>Front</UIText>
+              </Picker>
+            </Host>
+          </View>
+        }
         hud={
           <View style={styles.hud}>
             <Text style={styles.hudText}>Cube of cameras · {status}</Text>
@@ -614,6 +674,16 @@ const styles = StyleSheet.create({
   },
   canvas: {
     backgroundColor: '#0a0e1a',
+  },
+  controls: {
+    alignSelf: 'stretch',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  pickerHost: {
+    alignSelf: 'stretch',
+    height: 34,
   },
   hud: {
     paddingHorizontal: 16,

@@ -4,7 +4,15 @@ import * as React from 'react';
 import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
-import { Host, Picker, SymbolView, Text as UIText, pickerStyle, tag } from '@/components/demo-platform-controls';
+import {
+  Host,
+  Picker,
+  SymbolView,
+  Text as UIText,
+  disabled as disabledModifier,
+  pickerStyle,
+  tag,
+} from '@/components/demo-platform-controls';
 import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import {
@@ -16,6 +24,7 @@ import {
   type CameraFrameUploadSource,
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
+import { displayFacingMode, reportedFacingMode } from '@/lib/camera-facing';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -30,6 +39,10 @@ struct RenderUniforms {
   label: f32,
   confidence: f32,
   rotate: f32,
+  mirror: f32,
+  _pad0: f32,
+  _pad1: f32,
+  _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: RenderUniforms;
@@ -56,10 +69,14 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOut {
 }
 
 fn previewUv(uv: vec2f) -> vec2f {
-  if (u.rotate < 0.5) {
-    return uv;
+  var s = uv;
+  if (u.mirror > 0.5) {
+    s.x = 1.0 - s.x;
   }
-  return vec2f(uv.y, 1.0 - uv.x);
+  if (u.rotate < 0.5) {
+    return s;
+  }
+  return vec2f(s.y, 1.0 - s.x);
 }
 
 @fragment
@@ -190,6 +207,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
     error: cameraError,
     constraints,
     settings,
+    facingModeAvailability,
     userStopped,
     externalLocked,
     start,
@@ -216,6 +234,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const predictionRef = React.useRef(prediction);
   const preserveCameraPreviewUntilRef = React.useRef(0);
   const previewRotatesRef = React.useRef(false);
+  const mirrorRef = React.useRef(false);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   const didRetryRelaxedCameraRef = React.useRef(false);
@@ -224,10 +243,14 @@ export default function NeuralLensScreen(): React.JSX.Element {
   // the simulator we keep synthetic as the visual. Device.isDevice is
   // stable for the process lifetime, so a single initialization is enough.
   const suppressSyntheticRef = React.useRef(Device.isDevice);
-  const settingsFacing =
-    settings?.facingMode === 'user' || settings?.facingMode === 'environment'
-      ? settings.facingMode
-      : undefined;
+  const settingsFacing = reportedFacingMode(settings);
+  const cameraFacing = displayFacingMode({ constraints, settings });
+  // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
+  // when the web provider proves no environment camera exists.
+  const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
+  React.useEffect(() => {
+    mirrorRef.current = cameraFacing === 'user';
+  }, [cameraFacing]);
 
   const setGrabError = React.useCallback((message: string | null): void => {
     if (lastGrabErrorRef.current === message) return;
@@ -280,9 +303,9 @@ export default function NeuralLensScreen(): React.JSX.Element {
     resetFrameState();
     void start({
       ...RELAXED_CAPTURE_CONSTRAINTS,
-      facingMode: constraints.facingMode ?? settingsFacing ?? 'environment',
+      facingMode: cameraFacing,
     });
-  }, [constraints.facingMode, resetFrameState, settingsFacing, start]);
+  }, [cameraFacing, resetFrameState, start]);
 
   React.useEffect(() => {
     predictionRef.current = prediction;
@@ -382,7 +405,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
           minFilter: 'linear',
         });
         const renderUniformBuffer = device.createBuffer({
-          size: 16,
+          size: 32,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         const computeUniformBuffer = device.createBuffer({
@@ -571,6 +594,10 @@ export default function NeuralLensScreen(): React.JSX.Element {
               currentPrediction.labelIndex,
               currentPrediction.confidence,
               previewRotatesRef.current && texWidth > texHeight ? 1 : 0,
+              mirrorRef.current ? 1 : 0,
+              0,
+              0,
+              0,
             ])
           );
 
@@ -673,7 +700,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
   const previewHeight = previewWidth / previewAspect;
   const activeLabel = LABELS[prediction.labelIndex] ?? LABELS[0];
-  const cameraFacing = constraints.facingMode ?? settingsFacing ?? 'environment';
   const captureProfileLabel = captureProfile === 'demo' ? 'demo 1280x720@30' : 'relaxed @30';
   const reportedFrameRate =
     typeof settings?.frameRate === 'number' ? `${Math.round(settings.frameRate)} fps` : 'fps pending';
@@ -686,6 +712,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
+      if (facingMode === 'environment' && backFacingDisabled) return;
       didRetryRelaxedCameraRef.current = false;
       setCaptureProfile('demo');
       resetFrameState({ preserveCameraPreview: true });
@@ -694,7 +721,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
       // keeps whatever width/height/frameRate Home had.
       applyConstraints({ facingMode });
     },
-    [applyConstraints, resetFrameState]
+    [applyConstraints, backFacingDisabled, resetFrameState]
   );
   const showStoppedPlaceholder = Device.isDevice && source !== 'camera';
 
@@ -730,7 +757,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
                     label="Camera"
                     selection={cameraFacing}
                     onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
-                    <UIText modifiers={[tag('environment')]}>Back</UIText>
+                    <UIText modifiers={[tag('environment'), disabledModifier(backFacingDisabled)]}>Back</UIText>
                     <UIText modifiers={[tag('user')]}>Front</UIText>
                   </Picker>
                 </Host>

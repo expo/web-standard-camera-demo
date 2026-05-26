@@ -4,7 +4,8 @@ import { Pressable, StyleSheet, Text as RNText, View, type StyleProp, type TextS
 type SelectionValue = string | number | null;
 type TagModifier = { readonly kind: 'tag'; readonly value: SelectionValue };
 type PickerStyleModifier = { readonly kind: 'pickerStyle'; readonly value: string };
-type DemoModifier = TagModifier | PickerStyleModifier;
+type DisabledModifier = { readonly kind: 'disabled'; readonly value: boolean };
+type DemoModifier = DisabledModifier | TagModifier | PickerStyleModifier;
 
 export function tag(value: SelectionValue): TagModifier {
   return { kind: 'tag', value };
@@ -12,6 +13,10 @@ export function tag(value: SelectionValue): TagModifier {
 
 export function pickerStyle(value: string): PickerStyleModifier {
   return { kind: 'pickerStyle', value };
+}
+
+export function disabled(value = true): DisabledModifier {
+  return { kind: 'disabled', value };
 }
 
 export interface HostProps {
@@ -50,12 +55,16 @@ export function Picker<T extends SelectionValue = SelectionValue>({
     .filter(React.isValidElement<TextProps>)
     .map((child) => {
       const value = child.props.modifiers?.find((modifier): modifier is TagModifier => modifier.kind === 'tag')?.value;
+      const disabled = child.props.modifiers?.some(
+        (modifier): modifier is DisabledModifier => modifier.kind === 'disabled' && modifier.value
+      ) ?? false;
       return {
+        disabled,
         label: React.Children.toArray(child.props.children).join(''),
         value,
       };
     })
-    .filter((option): option is { label: string; value: SelectionValue } => option.value !== undefined);
+    .filter((option): option is { disabled: boolean; label: string; value: SelectionValue } => option.value !== undefined);
 
   return (
     <View style={styles.segmentedControl}>
@@ -64,15 +73,22 @@ export function Picker<T extends SelectionValue = SelectionValue>({
         return (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ selected }}
+            accessibilityState={{ disabled: option.disabled, selected }}
+            disabled={option.disabled}
             key={String(option.value)}
             onPress={() => onSelectionChange?.(option.value as T)}
             style={({ pressed }) => [
               styles.segment,
               selected ? styles.segmentSelected : null,
-              pressed ? styles.segmentPressed : null,
+              option.disabled ? styles.segmentDisabled : null,
+              pressed && !option.disabled ? styles.segmentPressed : null,
             ]}>
-            <RNText style={[styles.segmentText, selected ? styles.segmentTextSelected : null]}>
+            <RNText
+              style={[
+                styles.segmentText,
+                selected ? styles.segmentTextSelected : null,
+                option.disabled ? styles.segmentTextDisabled : null,
+              ]}>
               {option.label}
             </RNText>
           </Pressable>
@@ -156,6 +172,9 @@ const styles = StyleSheet.create({
   segmentPressed: {
     opacity: 0.78,
   },
+  segmentDisabled: {
+    opacity: 0.42,
+  },
   segmentSelected: {
     backgroundColor: '#f8fafc',
   },
@@ -166,6 +185,9 @@ const styles = StyleSheet.create({
   },
   segmentTextSelected: {
     color: '#0f172a',
+  },
+  segmentTextDisabled: {
+    color: '#64748b',
   },
   sliderHost: {
     height: 34,

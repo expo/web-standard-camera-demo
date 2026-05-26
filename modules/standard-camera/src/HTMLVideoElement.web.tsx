@@ -42,7 +42,73 @@ export const Video = React.forwardRef<HTMLVideoElement, VideoProps>(function Vid
       autoPlay={props.autoplay}
       muted
       playsInline
-      style={StyleSheet.flatten(props.style) as React.CSSProperties}
+      style={rnStyleToCss(props.style)}
     />
   );
 });
+
+// Translate a React Native style (an object, array, or registered id) into the
+// CSS properties HTML elements expect. `StyleSheet.flatten` resolves arrays
+// and ids but leaves RN-specific shapes like `transform: [{ scaleX: -1 }]`
+// alone, so we convert that one ourselves. The standard idiom for flipping a
+// <video> preview is `style="transform: scaleX(-1)"`; this surface accepts the
+// RN equivalent without callers having to know about the difference.
+function rnStyleToCss(style: StyleProp<ViewStyle>): React.CSSProperties | undefined {
+  const flat = StyleSheet.flatten(style) as
+    | (Record<string, unknown> & { transform?: unknown })
+    | undefined;
+  if (!flat) return undefined;
+  const { transform, ...rest } = flat;
+  const css = rest as React.CSSProperties;
+  if (Array.isArray(transform)) {
+    const serialized = rnTransformArrayToCss(transform as TransformEntry[]);
+    if (serialized) css.transform = serialized;
+  } else if (typeof transform === 'string') {
+    css.transform = transform;
+  }
+  return css;
+}
+
+type TransformEntry =
+  | { perspective: number }
+  | { rotate: string }
+  | { rotateX: string }
+  | { rotateY: string }
+  | { rotateZ: string }
+  | { scale: number }
+  | { scaleX: number }
+  | { scaleY: number }
+  | { translateX: number }
+  | { translateY: number }
+  | { skewX: string }
+  | { skewY: string };
+
+function rnTransformArrayToCss(entries: TransformEntry[]): string {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    const [key, value] = Object.entries(entry)[0] as [string, number | string];
+    switch (key) {
+      case 'perspective':
+        parts.push(`perspective(${value}px)`);
+        break;
+      case 'rotate':
+      case 'rotateX':
+      case 'rotateY':
+      case 'rotateZ':
+      case 'skewX':
+      case 'skewY':
+        parts.push(`${key}(${value})`);
+        break;
+      case 'scale':
+      case 'scaleX':
+      case 'scaleY':
+        parts.push(`${key}(${value})`);
+        break;
+      case 'translateX':
+      case 'translateY':
+        parts.push(`${key}(${value}px)`);
+        break;
+    }
+  }
+  return parts.join(' ');
+}

@@ -4,7 +4,16 @@ import * as React from 'react';
 import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
-import { Host, Picker, Slider, SymbolView, Text as UIText, pickerStyle, tag } from '@/components/demo-platform-controls';
+import {
+  Host,
+  Picker,
+  Slider,
+  SymbolView,
+  Text as UIText,
+  disabled as disabledModifier,
+  pickerStyle,
+  tag,
+} from '@/components/demo-platform-controls';
 import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import {
@@ -16,6 +25,7 @@ import {
   type CameraFrameUploadSource,
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
+import { displayFacingMode } from '@/lib/camera-facing';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -32,8 +42,8 @@ struct Uniforms {
   texelY: f32,
   intensity: f32,
   rotate: f32,
+  mirror: f32,
   _pad1: f32,
-  _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -64,10 +74,14 @@ fn luma(c: vec3f) -> f32 {
 }
 
 fn previewUv(uv: vec2f) -> vec2f {
-  if (u.rotate < 0.5) {
-    return uv;
+  var s = uv;
+  if (u.mirror > 0.5) {
+    s.x = 1.0 - s.x;
   }
-  return vec2f(uv.y, 1.0 - uv.x);
+  if (u.rotate < 0.5) {
+    return s;
+  }
+  return vec2f(s.y, 1.0 - s.x);
 }
 
 fn sampleAt(uv: vec2f) -> vec4f {
@@ -165,6 +179,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
     error: cameraError,
     constraints,
     settings,
+    facingModeAvailability,
     userStopped,
     externalLocked,
     start,
@@ -190,6 +205,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const lastGrabErrorRef = React.useRef<string | null>(null);
   const preserveCameraPreviewUntilRef = React.useRef(0);
   const previewRotatesRef = React.useRef(false);
+  const mirrorRef = React.useRef(false);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   // On real hardware we always suppress the synthetic test pattern — both
@@ -463,7 +479,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
               1 / (rotatesPreview ? texWidth : texHeight),
               intensityRef.current,
               rotatesPreview ? 1 : 0,
-              0,
+              mirrorRef.current ? 1 : 0,
               0,
             ])
           );
@@ -566,14 +582,17 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const previewStageHeight = previewStageWidth / targetPreviewAspect;
   const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
   const previewHeight = previewWidth / previewAspect;
-  const settingsFacing =
-    settings?.facingMode === 'user' || settings?.facingMode === 'environment'
-      ? settings.facingMode
-      : undefined;
-  const cameraFacing = constraints.facingMode ?? settingsFacing ?? 'environment';
+  const cameraFacing = displayFacingMode({ constraints, settings });
+  // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
+  // when the web provider proves no environment camera exists.
+  const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
+  React.useEffect(() => {
+    mirrorRef.current = cameraFacing === 'user';
+  }, [cameraFacing]);
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
+      if (facingMode === 'environment' && backFacingDisabled) return;
       if (sourceRef.current === 'camera') {
         preserveCameraPreviewUntilRef.current = Date.now() + CAMERA_SWITCH_PREVIEW_HOLD_MS;
       }
@@ -583,7 +602,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
       // stream.
       applyConstraints({ facingMode });
     },
-    [applyConstraints]
+    [applyConstraints, backFacingDisabled]
   );
 
   // On real hardware we cover the canvas with a centered SF Symbol any time
@@ -633,7 +652,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
                   label="Camera"
                   selection={cameraFacing}
                   onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
-                  <UIText modifiers={[tag('environment')]}>Back</UIText>
+                  <UIText modifiers={[tag('environment'), disabledModifier(backFacingDisabled)]}>Back</UIText>
                   <UIText modifiers={[tag('user')]}>Front</UIText>
                 </Picker>
               </Host>
