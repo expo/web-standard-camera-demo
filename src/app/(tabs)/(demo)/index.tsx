@@ -41,15 +41,6 @@ export default function DemoCatalogScreen(): React.JSX.Element {
       />
 
       <DemoChoiceCard
-        accentColor="#2dd4bf"
-        description="Native ARKit camera plus LiDAR depth rendered as WebGPU contours and occlusion."
-        detail="ARKit RGB + sceneDepth -> GPUTextures -> WGSL fusion"
-        href="/lidar-depth"
-        status="experimental"
-        title="LiDAR depth"
-      />
-
-      <DemoChoiceCard
         accentColor="#a78bfa"
         description="The same LiDAR depth story expressed through a small navigator.xr research profile."
         detail="navigator.xr -> XRFrame depth/camera bytes -> GPUTextures -> WGSL"
