@@ -9,6 +9,9 @@ export const KEYFRAME_MIN_INTERVAL_MS = 280;
 export const KEYFRAME_MIN_TRANSLATION_M = 0.1;
 export const KEYFRAME_MIN_ROTATION_DEG = 10;
 export const MIN_KEYFRAME_SURFELS = 96;
+export const PANORAMIC_COVERAGE_YAW_BINS = 12;
+export const PANORAMIC_COVERAGE_PITCH_BINS = 3;
+export const PANORAMIC_COVERAGE_PITCH_RANGE_DEG = 60;
 export const SURFEL_STRIDE_FLOATS = 12;
 export const SURFEL_STRIDE_BYTES = SURFEL_STRIDE_FLOATS * 4;
 
@@ -68,6 +71,12 @@ export interface KeyframeAcceptanceInput {
   minTranslationM?: number;
   position: Vec3;
   time: number;
+}
+
+export interface PanoramicCoverageOptions {
+  pitchBins?: number;
+  pitchRangeDeg?: number;
+  yawBins?: number;
 }
 
 export interface PanoramicRigidTransform {
@@ -149,6 +158,38 @@ export function shouldAcceptPanoramicKeyframe({
     return { accepted: false, reason: 'too-similar', rotationDeg, translationM };
   }
   return { accepted: true, reason: null, rotationDeg, translationM };
+}
+
+export function panoramicCoverageKey(
+  forward: Vec3,
+  {
+    pitchBins = PANORAMIC_COVERAGE_PITCH_BINS,
+    pitchRangeDeg = PANORAMIC_COVERAGE_PITCH_RANGE_DEG,
+    yawBins = PANORAMIC_COVERAGE_YAW_BINS,
+  }: PanoramicCoverageOptions = {}
+): string {
+  const direction = normalize(forward);
+  const yaw = Math.atan2(direction[0], -direction[2]);
+  const yawUnit = positiveModulo(yaw / (Math.PI * 2), 1);
+  const pitchRangeRad = Math.max(1, pitchRangeDeg) * Math.PI / 180;
+  const pitch = Math.asin(clamp(direction[1], -1, 1));
+  const pitchUnit = clamp((pitch + pitchRangeRad) / (pitchRangeRad * 2), 0, 0.999999);
+  const safeYawBins = Math.max(1, Math.floor(yawBins));
+  const safePitchBins = Math.max(1, Math.floor(pitchBins));
+  const yawBin = Math.min(safeYawBins - 1, Math.floor(yawUnit * safeYawBins));
+  const pitchBin = Math.min(safePitchBins - 1, Math.floor(pitchUnit * safePitchBins));
+  return `${yawBin}:${pitchBin}`;
+}
+
+export function panoramicCoveragePercent(
+  sectors: ReadonlySet<string>,
+  {
+    pitchBins = PANORAMIC_COVERAGE_PITCH_BINS,
+    yawBins = PANORAMIC_COVERAGE_YAW_BINS,
+  }: Pick<PanoramicCoverageOptions, 'pitchBins' | 'yawBins'> = {}
+): number {
+  const totalSectors = Math.max(1, Math.floor(yawBins) * Math.floor(pitchBins));
+  return clamp(sectors.size / totalSectors * 100, 0, 100);
 }
 
 export function appendDepthSurfels(
@@ -804,6 +845,11 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  if (!Number.isFinite(value) || divisor === 0) return 0;
+  return ((value % divisor) + divisor) % divisor;
 }
 
 export function clamp(value: number, min: number, max: number): number {

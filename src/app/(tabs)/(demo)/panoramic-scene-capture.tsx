@@ -25,6 +25,8 @@ import {
   MAX_KEYFRAMES,
   MAX_SURFELS,
   MIN_KEYFRAME_SURFELS,
+  panoramicCoverageKey,
+  panoramicCoveragePercent,
   performanceNow,
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
@@ -139,6 +141,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const sessionRef = React.useRef<WebXRSession | null>(null);
   const xrRafRef = React.useRef<number | null>(null);
   const pointStoreRef = React.useRef<number[]>([]);
+  const coverageSectorsRef = React.useRef<Set<string>>(new Set());
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
@@ -221,6 +224,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   function resetCapture(): void {
     pointStoreRef.current = [];
+    coverageSectorsRef.current = new Set();
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
     surfelCountRef.current = 0;
@@ -836,7 +840,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     keyframeCountRef.current += 1;
     surfelCountRef.current += added.surfelCount;
     keyframeRef.current = { forward, position, time };
-    setCoveragePercent(Math.min(100, Math.round(keyframeCountRef.current / MAX_KEYFRAMES * 100)));
+    coverageSectorsRef.current.add(panoramicCoverageKey(forward));
+    setCoveragePercent(panoramicCoveragePercent(coverageSectorsRef.current));
     setFrameInfo(
       `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - samples: ${surfelCountRef.current}/${MAX_SURFELS} - camera color: ${added.cameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
     );

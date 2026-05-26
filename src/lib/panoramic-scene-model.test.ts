@@ -8,6 +8,8 @@ import {
   MAX_KEYFRAMES,
   MAX_SURFELS,
   MIN_KEYFRAME_SURFELS,
+  panoramicCoverageKey,
+  panoramicCoveragePercent,
   sampleCameraColor,
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
@@ -140,6 +142,42 @@ test('shouldAcceptPanoramicKeyframe accepts first, translated, and rotated keyfr
     forward: [0.22, 0, -0.98],
     position: [0, 0, 0],
   }).accepted).toBe(true);
+});
+
+test('panoramic coverage tracks unique horizontal view sectors', () => {
+  const options = { pitchBins: 1, yawBins: 4 };
+  const sectors = new Set([
+    panoramicCoverageKey([0, 0, -1], options),
+    panoramicCoverageKey([1, 0, 0], options),
+    panoramicCoverageKey([0, 0, 1], options),
+    panoramicCoverageKey([-1, 0, 0], options),
+  ]);
+
+  expect(sectors.size).toBe(4);
+  expect(panoramicCoveragePercent(sectors, options)).toBe(100);
+});
+
+test('panoramic coverage separates upward and downward scan bands', () => {
+  const options = { pitchBins: 3, yawBins: 1 };
+  const sectors = new Set([
+    panoramicCoverageKey([0, -0.86, -0.5], options),
+    panoramicCoverageKey([0, 0, -1], options),
+    panoramicCoverageKey([0, 0.86, -0.5], options),
+  ]);
+
+  expect(sectors.size).toBe(3);
+  expect(panoramicCoveragePercent(sectors, options)).toBe(100);
+});
+
+test('panoramic coverage does not double-count repeated directions', () => {
+  const options = { pitchBins: 1, yawBins: 4 };
+  const sectors = new Set([
+    panoramicCoverageKey([0, 0, -1], options),
+    panoramicCoverageKey([0.02, 0, -1], options),
+  ]);
+
+  expect(sectors.size).toBe(1);
+  expect(panoramicCoveragePercent(sectors, options)).toBe(25);
 });
 
 test('serializeModelAsPly emits vertex colors and normals for Files export', () => {
