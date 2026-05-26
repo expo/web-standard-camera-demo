@@ -1,10 +1,10 @@
-import { Button as UIButton, Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
-import { buttonStyle, controlSize, disabled, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import { Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
+import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import type { SFSymbol } from 'sf-symbols-typescript';
@@ -313,6 +313,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const [lastCenterDepthMeters, setLastCenterDepthMeters] = React.useState<number | null>(null);
   const [viewMode, setViewMode] = React.useState(2);
   const lastCenterDepthRef = React.useRef<number | null>(null);
+  const reticlePressProgress = React.useRef(new Animated.Value(0)).current;
   const targetDepthRef = React.useRef(targetDepth);
   const viewModeRef = React.useRef(viewMode);
 
@@ -776,11 +777,37 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
     }
     return { label: 'XR', style: styles.badgeWarn };
   })();
-  const canPinCenterDepth = lastCenterDepthMeters !== null && xrLive;
-  const pinCenterDepth = (): void => {
+  const canSetCenterTarget = lastCenterDepthMeters !== null && xrLive;
+  const setCenterTarget = (): void => {
     const center = lastCenterDepthRef.current;
     if (!center || !Number.isFinite(center)) return;
     setTargetDepth(clampDepth(center));
+  };
+  const animateReticlePress = React.useCallback(
+    (toValue: number): void => {
+      Animated.spring(reticlePressProgress, {
+        damping: 18,
+        mass: 0.6,
+        stiffness: 220,
+        toValue,
+        useNativeDriver: true,
+      }).start();
+    },
+    [reticlePressProgress]
+  );
+  const reticleAnimatedStyle = {
+    opacity: reticlePressProgress.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 0.78],
+    }),
+    transform: [
+      {
+        scale: reticlePressProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 0.9],
+        }),
+      },
+    ],
   };
   const planeSelection = OCCLUSION_DEPTHS_M.find((depth) => Math.abs(targetDepth - depth) < 0.01);
   const showStoppedPlaceholder = Device.isDevice && !xrLive;
@@ -794,10 +821,21 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
         contentInsetAdjustmentBehavior="automatic">
         <View style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
           <Canvas ref={ref} style={styles.canvas} />
-          <View pointerEvents="none" style={styles.reticle}>
-            <View style={styles.reticleHorizontal} />
-            <View style={styles.reticleVertical} />
-          </View>
+          <Pressable
+            accessibilityLabel="Set target to center depth"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canSetCenterTarget }}
+            disabled={!canSetCenterTarget}
+            hitSlop={18}
+            onPressIn={() => animateReticlePress(1)}
+            onPressOut={() => animateReticlePress(0)}
+            onPress={setCenterTarget}
+            style={styles.reticleHitTarget}>
+            <Animated.View pointerEvents="none" style={[styles.reticle, reticleAnimatedStyle]}>
+              <View style={styles.reticleHorizontal} />
+              <View style={styles.reticleVertical} />
+            </Animated.View>
+          </Pressable>
           {showStoppedPlaceholder ? (
             <View pointerEvents="none" style={styles.stoppedOverlay}>
               <SymbolView
@@ -888,21 +926,6 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
                   </UIText>
                 ))}
               </Picker>
-            </Host>
-          </View>
-
-          <View style={styles.buttonRow}>
-            <Host matchContents>
-              <UIButton
-                modifiers={[
-                  buttonStyle('bordered'),
-                  controlSize('large'),
-                  disabled(!canPinCenterDepth),
-                ]}
-                systemImage="scope"
-                label="Pin center"
-                onPress={pinCenterDepth}
-              />
             </Host>
           </View>
         </View>
@@ -1038,28 +1061,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
-  reticle: {
+  reticleHitTarget: {
     alignItems: 'center',
-    height: 34,
+    height: 52,
     justifyContent: 'center',
     left: '50%',
-    marginLeft: -17,
-    marginTop: -17,
+    marginLeft: -26,
+    marginTop: -26,
     position: 'absolute',
     top: '50%',
-    width: 34,
+    width: 52,
+  },
+  reticle: {
+    alignItems: 'center',
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
   },
   reticleHorizontal: {
     backgroundColor: 'rgba(248, 250, 252, 0.82)',
-    height: 1,
+    borderRadius: 1,
+    height: 2,
     position: 'absolute',
-    width: 34,
+    width: 36,
   },
   reticleVertical: {
     backgroundColor: 'rgba(248, 250, 252, 0.82)',
-    height: 34,
+    borderRadius: 1,
+    height: 36,
     position: 'absolute',
-    width: 1,
+    width: 2,
   },
   stageReadout: {
     backgroundColor: 'rgba(5, 7, 18, 0.72)',
@@ -1208,13 +1239,6 @@ const styles = StyleSheet.create({
     color: '#fca5a5',
     fontFamily: 'Menlo',
     fontSize: 11,
-  },
-  buttonRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingTop: 8,
   },
   depthControl: {
     gap: 7,

@@ -42,7 +42,7 @@ export default function DemoCatalogScreen(): React.JSX.Element {
 
       <DemoChoiceCard
         accentColor="#a78bfa"
-        description="The same LiDAR depth story expressed through a small navigator.xr research profile."
+        description="ARKit camera frames and LiDAR scene depth flow through a tiny navigator.xr profile, then WebGPU visualizes focus planes and foreground masks."
         detail="navigator.xr -> XRFrame depth/camera bytes -> GPUTextures -> WGSL"
         href="/lidar-depth-webxr"
         status="experimental"
