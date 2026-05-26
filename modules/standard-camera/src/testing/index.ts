@@ -64,6 +64,7 @@ import './local/enumerate-multi-device';
 import './local/facingMode-switch';
 import './local/frameRate-resolution';
 import './local/MediaStream-construction';
+import './local/MediaStreamTrack-disabled-audio';
 import './local/MediaStreamTrack-disabled-video';
 import './local/MediaStreamTrack-mute';
 

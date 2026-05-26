@@ -43,6 +43,16 @@ export interface NativeMediaStreamTrack {
    */
   __getLatestFrame(): NativeMediaStreamFrame | null;
 
+  /**
+   * @internal Audio analog of `__getLatestFrame()`. Snapshots up to
+   * `maxFrames` frames (one frame = one sample per channel) of interleaved
+   * Float32 LPCM from the AudioSink's rolling buffer. The same accessor is
+   * intended to back MediaRecorder, a future Web Audio bridge, and audio-
+   * level meters. Returns null on a video track, an ended track, or before
+   * any audio samples have arrived.
+   */
+  __getLatestAudioBuffer(maxFrames: number): NativeMediaStreamAudioBuffer | null;
+
   addListener(
     eventName: 'ended' | 'mute' | 'unmute',
     listener: () => void
@@ -62,6 +72,28 @@ export interface NativeMediaStreamFrame {
    * was opened. Lets callers tell whether the camera is actively pushing
    * frames (rising) or stalled (flat) — distinct from whether grabFrame()
    * keeps re-reading the same retained buffer.
+   */
+  readonly frameNumber: number;
+}
+
+/** Interleaved Float32 LPCM audio snapshot returned by
+ *  `__getLatestAudioBuffer()`. */
+export interface NativeMediaStreamAudioBuffer {
+  /**
+   * Interleaved Float32 LPCM samples in chronological order. The bridge
+   * delivers raw bytes; the polyfill wraps them as a `Float32Array` before
+   * surfacing to callers. Length is `frames * channelCount`.
+   */
+  readonly samples: Uint8Array;
+  /** Sample rate the audio session is running at, in Hz. */
+  readonly sampleRate: number;
+  /** Channel count (typically 1 for the built-in mic). */
+  readonly channelCount: number;
+  /**
+   * Monotonic counter of audio frames written to the sink since the source
+   * was opened (one frame = one sample per channel). Lets callers tell
+   * whether iOS is actively pushing audio (rising) or stopped (flat) —
+   * the audio analog of `NativeMediaStreamFrame.frameNumber`.
    */
   readonly frameNumber: number;
 }

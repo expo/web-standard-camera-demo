@@ -302,19 +302,78 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   }
 }
 
-// @ref LLP 0009#audio-build-session — Audio analog of FrameSink. We hold an
+// @ref LLP 0009#audio-build-session — Audio analog of FrameSink. Holds an
 // AVCaptureAudioDataOutput attached to the session so samples actively flow
 // and `audioConnection.isEnabled = false` actually has something to gate.
-// We don't currently consume samples (the audio path simply routes through
-// AVAudioSession); the delegate is set so the output reports activity if any
-// consumer ever wants it.
+// Also maintains a small rolling buffer of the most-recent Float32 LPCM
+// samples so consumers (MediaRecorder, Web Audio bridge, level meters, the
+// disabled-audio test) can read recent activity without a separate hook
+// path. The buffer is the audio analog of FrameSink's latest CVPixelBuffer.
+//
+// We don't request a specific audioSettings here — on iOS that property is
+// read-only and AVFoundation delivers the platform-native format (Float32
+// LPCM in current iOS versions). The captureOutput callback inspects the
+// per-buffer AudioStreamBasicDescription and only writes when the format
+// is in fact Float32 LPCM. Anything else is dropped (and the frameCounter
+// doesn't advance), which is the safe failure mode — the disabled-audio
+// test sees "no samples arriving" rather than wrong values.
 internal final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
   let output = AVCaptureAudioDataOutput()
   private let queue = DispatchQueue(label: "dev.ide.standardcamera.audio-sink")
 
+  // Ring buffer holding the most-recent ~200ms of interleaved Float32
+  // samples. 48 kHz × 2 ch × 0.2 s = 19,200 floats; padded to a power of 2
+  // for cheap modulo-via-mask. Held under `bufferLock`; the delegate writes
+  // from `queue`, JS reads from the main thread via copyLatestSamples.
+  private let bufferLock = NSLock()
+  private static let ringCapacity = 32_768
+  private var ring = [Float](repeating: 0, count: ringCapacity)
+  private var writeIndex: Int = 0
+  // Monotonic frames-written counter (one frame = one sample per channel).
+  // Returned alongside copyLatestSamples so JS can tell whether iOS is
+  // pushing new audio (rising) or stopped (flat) — the audio analog of
+  // FrameSink's frameNumber.
+  private var totalFramesWritten: UInt64 = 0
+  private var sampleRate: Double = 0
+  private var channelCount: Int = 0
+
   override init() {
     super.init()
+    // `audioSettings` is macOS-only — on iOS AVCaptureAudioDataOutput
+    // delivers whatever LPCM format iOS picks for the route. The
+    // captureOutput callback inspects each buffer's ASBD and only copies
+    // into the ring when it sees Float32 LPCM. Frame counting happens
+    // regardless of format, so consumers that only care about "samples
+    // arriving" (the disabled-audio test) work even if the route's format
+    // doesn't match what the ring stores.
     output.setSampleBufferDelegate(self, queue: queue)
+  }
+
+  /// Snapshots the most-recent `maxFrames` frames (one frame = one sample
+  /// per channel) as interleaved Float32 in chronological order, with the
+  /// ring's wrap undone so JS sees a contiguous buffer. Always returns a
+  /// value while the AudioSink exists, even before any callbacks have
+  /// fired — `frameNumber` is 0 in that case so callers can distinguish
+  /// "no audio sink" (null at the caller) from "sink exists but no
+  /// samples yet" (frameNumber=0).
+  func copyLatestSamples(maxFrames: Int) -> (samples: [Float], sampleRate: Double, channelCount: Int, frameNumber: UInt64) {
+    bufferLock.lock()
+    defer { bufferLock.unlock() }
+    guard channelCount > 0, totalFramesWritten > 0 else {
+      return ([], sampleRate, channelCount, totalFramesWritten)
+    }
+    let perFrame = channelCount
+    let wantFloats = min(maxFrames * perFrame, AudioSink.ringCapacity)
+    let endExclusive = writeIndex
+    let startInclusive = ((endExclusive - wantFloats) % AudioSink.ringCapacity + AudioSink.ringCapacity) % AudioSink.ringCapacity
+    var out = [Float](); out.reserveCapacity(wantFloats)
+    if startInclusive < endExclusive {
+      out.append(contentsOf: ring[startInclusive..<endExclusive])
+    } else {
+      out.append(contentsOf: ring[startInclusive..<AudioSink.ringCapacity])
+      out.append(contentsOf: ring[0..<endExclusive])
+    }
+    return (out, sampleRate, channelCount, totalFramesWritten)
   }
 
   func captureOutput(
@@ -322,6 +381,56 @@ internal final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDe
     didOutput sampleBuffer: CMSampleBuffer,
     from connection: AVCaptureConnection
   ) {
-    // No-op in v1; consumers (future MediaRecorder, audio analyser) would tap in here.
+    guard let fmtDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+          let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(fmtDesc) else {
+      return
+    }
+    let asbd = asbdPtr.pointee
+    let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+
+    // Frame counter advances on every delivered buffer regardless of
+    // format, so "samples are flowing" is observable even if the format
+    // doesn't match what the ring expects below. The disabled-audio test
+    // only checks this counter; ring contents are for richer consumers.
+    let channels = max(1, Int(asbd.mChannelsPerFrame))
+    bufferLock.lock()
+    sampleRate = asbd.mSampleRate
+    channelCount = channels
+    totalFramesWritten &+= UInt64(frames)
+    bufferLock.unlock()
+
+    // Ring write only fires for Float32 LPCM. If the route delivers
+    // anything else, we still count frames but skip the copy — better to
+    // surface an empty `samples` array to consumers than wrong values.
+    // `audioSettings` is read-only on iOS for AVCaptureAudioDataOutput, so
+    // we accept whatever iOS chooses and report mismatches via the NSLog.
+    guard asbd.mFormatID == kAudioFormatLinearPCM,
+          (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
+          asbd.mBitsPerChannel == 32 else {
+      return
+    }
+    guard let block = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+    var totalLength: Int = 0
+    var dataPtr: UnsafeMutablePointer<Int8>?
+    guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil,
+                                      totalLengthOut: &totalLength, dataPointerOut: &dataPtr) == kCMBlockBufferNoErr,
+          let raw = dataPtr else {
+      return
+    }
+    let floatCount = totalLength / MemoryLayout<Float>.size
+
+    bufferLock.lock()
+    let cap = AudioSink.ringCapacity
+    raw.withMemoryRebound(to: Float.self, capacity: floatCount) { src in
+      let firstChunk = min(floatCount, cap - writeIndex)
+      ring.withUnsafeMutableBufferPointer { dst in
+        memcpy(dst.baseAddress! + writeIndex, src, firstChunk * MemoryLayout<Float>.size)
+        if floatCount > firstChunk {
+          memcpy(dst.baseAddress!, src + firstChunk, (floatCount - firstChunk) * MemoryLayout<Float>.size)
+        }
+      }
+    }
+    writeIndex = (writeIndex + floatCount) % cap
+    bufferLock.unlock()
   }
 }

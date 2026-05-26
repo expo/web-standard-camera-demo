@@ -355,6 +355,15 @@ public final class StandardCameraModule: Module {
       Function("__getLatestFrame") { (track: MediaStreamTrack) -> [String: Any]? in
         track.getLatestFrame()
       }
+
+      // @ref LLP 0009#audio-build-session — Symmetric audio-buffer accessor.
+      // `maxFrames` caps the frame count returned (one frame = one sample
+      // per channel); the actual return may be shorter if the ring hasn't
+      // filled yet. Returns nil on a video track, an ended track, or before
+      // any audio samples have arrived.
+      Function("__getLatestAudioBuffer") { (track: MediaStreamTrack, maxFrames: Int) -> [String: Any]? in
+        track.getLatestAudioBuffer(maxFrames: maxFrames)
+      }
     }
 
     // MARK: - VideoView

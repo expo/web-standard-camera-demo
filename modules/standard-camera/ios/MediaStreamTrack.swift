@@ -257,6 +257,30 @@ internal final class MediaStreamTrack: SharedObject {
     ]
   }
 
+  // Audio analog of getLatestFrame() — snapshots the most-recent `maxFrames`
+  // frames (one frame = one sample per channel) of interleaved Float32 LPCM
+  // from the AudioSink's rolling buffer. The same accessor is intended to
+  // back MediaRecorder, a future Web Audio bridge, and audio-level meters.
+  // The disabled-audio test uses only the `frameNumber` to detect "samples
+  // stopped arriving" without inspecting values; future consumers will pull
+  // `samples` directly. Returns nil if no audio samples have arrived yet.
+  func getLatestAudioBuffer(maxFrames: Int) -> [String: Any]? {
+    if kind != "audio" || readyState == "ended" {
+      return nil
+    }
+    guard let audioSink = source?.audioSink else {
+      return nil
+    }
+    let snap = audioSink.copyLatestSamples(maxFrames: maxFrames)
+    let data = snap.samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    return [
+      "samples": data,
+      "sampleRate": snap.sampleRate,
+      "channelCount": snap.channelCount,
+      "frameNumber": snap.frameNumber,
+    ]
+  }
+
   // Called by CaptureSource when an AVCaptureSession runtime error fires.
   // @ref LLP 0008#event-mediastreamtrack-ended — non-stop() termination path.
   func endByRuntimeError() {
