@@ -316,7 +316,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       await current.end();
       sessionRef.current = null;
       setSession(null);
-      setStatus(model ? 'captured' : 'idle');
+      setStatus('idle');
     } catch (e) {
       setStatus('error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -341,20 +341,21 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   // @ref LLP 0020#privacy-and-permissions - Export is an explicit user action
   // and uses the system share sheet; captures are not uploaded or saved silently.
   async function saveModel(): Promise<void> {
-    if (!model || saving) return;
+    const capturedModel = statusRef.current === 'captured' ? modelRef.current : null;
+    if (!capturedModel || saving) return;
     setSaving(true);
     setError(null);
     setSaveInfo('writing .ply');
     try {
       const filename = modelFileName();
       const file = new File(Paths.document, filename);
-      const ply = serializeModelAsPly(model);
+      const ply = serializeModelAsPly(capturedModel);
       file.create({ overwrite: true });
       file.write(ply);
       const savedSize = file.exists ? file.size : ply.length;
       const filesLocation = formatFilesLocation(filename, savedSize);
       setSaveInfo(filesLocation);
-      logExportMetrics(model, file.uri, filename, savedSize);
+      logExportMetrics(capturedModel, file.uri, filename, savedSize);
       const available = await Sharing.isAvailableAsync();
       if (!available) {
         return;
@@ -374,9 +375,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   const running = session !== null;
+  const capturedModelAvailable = status === 'captured' && model !== null;
   const canStart = status === 'idle' || status === 'captured';
   const canCapture = status === 'scanning' && liveSurfelCount > 0;
-  const canSave = model !== null && !saving;
+  const canSave = capturedModelAvailable && !saving;
   const transitioning = status === 'requesting' || status === 'ending';
   const unsupported = status === 'unsupported';
   const displayError = error ?? lidarError;
@@ -690,8 +692,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 <CommandButton
                   disabled={transitioning}
                   icon="arrow.counterclockwise"
-                  label={model ? 'Recenter' : 'Reset'}
-                  onPress={model ? resetViewer : resetCapture}
+                  label={capturedModelAvailable ? 'Recenter' : 'Reset'}
+                  onPress={capturedModelAvailable ? resetViewer : resetCapture}
                   tone="secondary"
                 />
               </View>

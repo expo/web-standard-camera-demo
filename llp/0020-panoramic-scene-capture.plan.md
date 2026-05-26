@@ -67,9 +67,10 @@ Implemented:
 - Model-view reset: after capture, the Reset slot becomes a Recenter action
   that restores the orbit/pinch viewer state without deleting the captured
   model.
-- Export: writes an ASCII `.ply` model into the app Documents directory before
-  opening any optional share sheet, reports the Files-visible filename/size, and
-  relies on iOS document sharing so the Documents directory is visible in Files.
+- Export: after explicit Capture, writes an ASCII `.ply` model into the app
+  Documents directory before opening any optional share sheet, reports the
+  Files-visible filename/size, and relies on iOS document sharing so the
+  Documents directory is visible in Files.
 - Deterministic model tests: the pure reconstruction/export helpers live in
   `src/lib/panoramic-scene-model.ts` and are covered by Bun tests for depth
   unprojection, column-major transforms, BGRA color sampling, voxel fusion,
