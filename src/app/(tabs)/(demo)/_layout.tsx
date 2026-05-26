@@ -110,6 +110,13 @@ export default function DemoStackLayout(): React.JSX.Element {
           ...DARK_DEMO_HEADER_OPTIONS,
         }}
       />
+      <Stack.Screen
+        name="panoramic-scene-capture"
+        options={{
+          title: 'Scene Capture',
+          ...DARK_DEMO_HEADER_OPTIONS,
+        }}
+      />
     </Stack>
   );
 }

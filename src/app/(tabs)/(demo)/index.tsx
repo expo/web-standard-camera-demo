@@ -50,6 +50,15 @@ export default function DemoCatalogScreen(): React.JSX.Element {
       />
 
       <DemoChoiceCard
+        accentColor="#22d3ee"
+        description="Scan a scene with WebXR depth, capture sparse keyframes, then inspect a frozen WebGPU surfel model."
+        detail="navigator.xr depth-sensing -> XRCPUDepthInformation -> WebGPU surfels"
+        href="/panoramic-scene-capture"
+        status="prototype"
+        title="Panoramic scene capture"
+      />
+
+      <DemoChoiceCard
         accentColor="#60a5fa"
         description="A spinning WebGPU cube textured with frames from the shared camera stream."
         detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL"
