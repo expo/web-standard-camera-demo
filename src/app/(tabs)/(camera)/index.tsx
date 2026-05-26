@@ -106,6 +106,7 @@ export default function HomeScreen(): React.JSX.Element {
   // desktop cameras; this demo treats that missing signal as front/self-view.
   // Native iOS still uses the exact AVFoundation direction.
   const activeFacing = displayFacingMode({ constraints, settings });
+  const selectedDeviceId = (settings?.deviceId as string | undefined) ?? constraints.deviceId;
 
   const { frontDevices, backDevices } = React.useMemo(() => {
     const front: MediaDeviceInfo[] = [];
@@ -120,20 +121,32 @@ export default function HomeScreen(): React.JSX.Element {
   }, [devices, activeFacing]);
 
   const onPickFacing = React.useCallback(
-    (m: 'user' | 'environment') => applyConstraints({ facingMode: m }),
-    [applyConstraints]
+    (m: 'user' | 'environment') => {
+      if (m === activeFacing) return;
+      applyConstraints({ facingMode: m });
+    },
+    [activeFacing, applyConstraints]
   );
   const onPickDevice = React.useCallback(
-    (id: string) => applyConstraints({ deviceId: id }),
-    [applyConstraints]
+    (id: string) => {
+      if (id === selectedDeviceId) return;
+      applyConstraints({ deviceId: id });
+    },
+    [applyConstraints, selectedDeviceId]
   );
   const onPickResolution = React.useCallback(
-    (w: number | undefined, h: number | undefined) => applyConstraints({ width: w, height: h }),
-    [applyConstraints]
+    (w: number | undefined, h: number | undefined) => {
+      if (constraints.width === w && constraints.height === h) return;
+      applyConstraints({ width: w, height: h });
+    },
+    [applyConstraints, constraints.height, constraints.width]
   );
   const onPickFrameRate = React.useCallback(
-    (fr: number | undefined) => applyConstraints({ frameRate: fr }),
-    [applyConstraints]
+    (fr: number | undefined) => {
+      if (constraints.frameRate === fr) return;
+      applyConstraints({ frameRate: fr });
+    },
+    [applyConstraints, constraints.frameRate]
   );
   const cameraRunning = status === 'playing';
   const cameraTransitioning =
@@ -159,7 +172,6 @@ export default function HomeScreen(): React.JSX.Element {
 
   const isFront = activeFacing === 'user';
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
-  const selectedDeviceId = (settings?.deviceId as string | undefined) ?? constraints.deviceId;
   const isDesktop = width >= 1040;
   const contentStyle = [
     styles.contentContainer,

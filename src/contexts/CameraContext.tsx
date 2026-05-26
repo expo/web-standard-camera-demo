@@ -1,6 +1,7 @@
 import * as Linking from 'expo-linking';
 import * as React from 'react';
 
+import { cameraConstraintsEqual, mergeCameraConstraints } from '@/lib/camera-constraints';
 import { KNOWN_FACING_AVAILABILITY, type CameraFacingAvailability } from '@/lib/camera-facing';
 
 import {
@@ -322,9 +323,8 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const applyConstraints = React.useCallback(
     (patch: Partial<CameraConstraints>): void => {
       setConstraints((prev) => {
-        const merged: CameraConstraints = { ...prev, ...patch };
-        if (patch.deviceId) delete merged.facingMode;
-        if (patch.facingMode) delete merged.deviceId;
+        const merged = mergeCameraConstraints(prev, patch);
+        if (cameraConstraintsEqual(prev, merged)) return prev;
         // Re-start only if a stream is already live — picking a constraint
         // before pressing Start should update the stored value silently.
         if (streamRef.current) {

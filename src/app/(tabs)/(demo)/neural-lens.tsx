@@ -712,6 +712,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
+      if (facingMode === cameraFacing) return;
       if (facingMode === 'environment' && backFacingDisabled) return;
       didRetryRelaxedCameraRef.current = false;
       setCaptureProfile('demo');
@@ -721,7 +722,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
       // keeps whatever width/height/frameRate Home had.
       applyConstraints({ facingMode });
     },
-    [applyConstraints, backFacingDisabled, resetFrameState]
+    [applyConstraints, backFacingDisabled, cameraFacing, resetFrameState]
   );
   const showStoppedPlaceholder = Device.isDevice && source !== 'camera';
 

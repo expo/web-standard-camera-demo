@@ -592,6 +592,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
+      if (facingMode === cameraFacing) return;
       if (facingMode === 'environment' && backFacingDisabled) return;
       if (sourceRef.current === 'camera') {
         preserveCameraPreviewUntilRef.current = Date.now() + CAMERA_SWITCH_PREVIEW_HOLD_MS;
@@ -602,7 +603,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
       // stream.
       applyConstraints({ facingMode });
     },
-    [applyConstraints, backFacingDisabled]
+    [applyConstraints, backFacingDisabled, cameraFacing]
   );
 
   // On real hardware we cover the canvas with a centered SF Symbol any time

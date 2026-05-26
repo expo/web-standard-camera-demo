@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { cameraConstraintsEqual, mergeCameraConstraints } from '@/lib/camera-constraints';
 import {
   DEFAULT_FACING_AVAILABILITY,
   type CameraFacingAvailability,
@@ -199,9 +200,8 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const applyConstraints = React.useCallback(
     (patch: Partial<CameraConstraints>): void => {
       setConstraints((previous) => {
-        const merged: CameraConstraints = { ...previous, ...patch };
-        if (patch.deviceId) delete merged.facingMode;
-        if (patch.facingMode) delete merged.deviceId;
+        const merged = mergeCameraConstraints(previous, patch);
+        if (cameraConstraintsEqual(previous, merged)) return previous;
         if (streamRef.current) {
           void start(merged);
         }
