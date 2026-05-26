@@ -1,12 +1,15 @@
 import { Host, Picker, Slider, Text as UIText } from '@expo/ui/swift-ui';
 import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
+import { useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
+import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
+import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
 
 // @ref LLP 0010#demo-2-shader-playground — Live camera frames flow through
@@ -126,7 +129,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 
 const SYNTHETIC_SIZE = 256;
 const SYNTHETIC_FALLBACK_DELAY_MS = 3000;
-const FRAME_UPLOAD_INTERVAL_MS = 100;
+const FRAME_UPLOAD_INTERVAL_MS = 33;
 const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
 const DEMO_CAPTURE_CONSTRAINTS = { width: 640, height: 480, frameRate: 30 } as const;
 
@@ -275,20 +278,19 @@ export default function ShaderLensScreen(): React.JSX.Element {
     };
   }, [setGrabError, stream]);
 
-  React.useEffect(() => {
-    if (!device) return;
+  useFocusEffect(
+    React.useCallback(() => {
+    if (!device) return undefined;
     let cancelled = false;
     let cleanup: (() => void) | null = null;
 
     const startRender = (): void => {
       try {
-        const context = ref.current?.getContext('webgpu');
-        if (!context) {
-          throw new Error('getContext("webgpu") returned null');
-        }
-
+        const profile = createWebGpuPerfProbe('shader-lens', {
+          uploadIntervalMs: FRAME_UPLOAD_INTERVAL_MS,
+        });
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
+        const { context } = configureWebGpuCanvas(ref, device, presentationFormat);
 
         const shaderModule = device.createShaderModule({ code: SHADER });
         const pipeline = device.createRenderPipeline({
@@ -377,11 +379,12 @@ export default function ShaderLensScreen(): React.JSX.Element {
                 setGrabError(null);
               } else {
                 try {
-                  const bitmap = await imageCapture.grabFrame();
+                  const bitmap = await profile.timeAsync('grabFrame', () => imageCapture.grabFrame());
                   frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
                   frameSource = 'camera';
                   preserveCameraPreviewUntilRef.current = 0;
                   lastSeenFrameNumber = bitmap._frameNumber;
+                  profile.recordFrameNumber(bitmap._frameNumber);
                   bitmap.close();
                   setGrabError(null);
                 } catch (e) {
@@ -414,6 +417,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
               frame = { data: syntheticPixels, height: SYNTHETIC_SIZE, width: SYNTHETIC_SIZE };
             } else if (!frame) {
               lastUpload = now;
+              profile.count('uploadSkips');
             }
             if (cancelled) return;
 
@@ -426,11 +430,15 @@ export default function ShaderLensScreen(): React.JSX.Element {
 
               setFrameInfo(frame.width, frame.height);
               ensureTexture(frame.width, frame.height);
-              device.queue.writeTexture(
-                { texture: cameraTexture! },
-                frame.data,
-                { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-                { width: frame.width, height: frame.height }
+              profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
+              profile.count('uploadedBytes', frame.data.byteLength);
+              profile.time('writeTexture', () =>
+                device.queue.writeTexture(
+                  { texture: cameraTexture! },
+                  frame.data,
+                  { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+                  { width: frame.width, height: frame.height }
+                )
               );
               lastUpload = now;
             }
@@ -459,6 +467,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
             ])
           );
 
+          const renderStart = nowMs();
           const encoder = device.createCommandEncoder();
           const pass = encoder.beginRenderPass({
             colorAttachments: [
@@ -476,13 +485,23 @@ export default function ShaderLensScreen(): React.JSX.Element {
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           frames += 1;
+          profile.count('renderFrames');
           if (now - lastReport >= 1000) {
-            setFps((frames / ((now - lastReport) / 1000)).toFixed(1));
+            const fpsValue = frames / ((now - lastReport) / 1000);
+            setFps(fpsValue.toFixed(1));
             if (lastSeenFrameNumber !== null) {
               setLastFrameNumber(lastSeenFrameNumber);
             }
+            profile.report({
+              cameraStatus: cameraStatusRef.current,
+              fps: Number(fpsValue.toFixed(1)),
+              height: texHeight,
+              source: sourceRef.current,
+              width: texWidth,
+            });
             frames = 0;
             lastReport = now;
           }
@@ -518,7 +537,8 @@ export default function ShaderLensScreen(): React.JSX.Element {
       clearTimeout(timer);
       cleanup?.();
     };
-  }, [adapter, device, ref, setFrameInfo, setGrabError]);
+  }, [adapter, device, ref, setFrameInfo, setGrabError])
+  );
 
   // Drive Start/Stop off the context's status machine, not `stream != null`.
   // The stream stays non-null across the 'ended' transition (track ended by

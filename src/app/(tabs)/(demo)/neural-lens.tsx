@@ -1,12 +1,15 @@
 import { Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
 import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
+import { useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
+import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
+import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
 
 // @ref LLP 0010#demo-3-tiny-webgpu-classifier — A no-WASM AI demo: camera
@@ -129,7 +132,7 @@ fn classify() {
 
 const SYNTHETIC_SIZE = 256;
 const SYNTHETIC_FALLBACK_DELAY_MS = 3000;
-const FRAME_UPLOAD_INTERVAL_MS = 100;
+const FRAME_UPLOAD_INTERVAL_MS = 33;
 const INFERENCE_INTERVAL_MS = 450;
 const RELAXED_CAMERA_RETRY_MS = 2500;
 const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
@@ -341,20 +344,20 @@ export default function NeuralLensScreen(): React.JSX.Element {
     };
   }, [setGrabError, stream]);
 
-  React.useEffect(() => {
-    if (!device) return;
+  useFocusEffect(
+    React.useCallback(() => {
+    if (!device) return undefined;
     let cancelled = false;
     let cleanup: (() => void) | null = null;
 
     const startRender = (): void => {
       try {
-        const context = ref.current?.getContext('webgpu');
-        if (!context) {
-          throw new Error('getContext("webgpu") returned null');
-        }
-
+        const profile = createWebGpuPerfProbe('neural-lens', {
+          inferenceIntervalMs: INFERENCE_INTERVAL_MS,
+          uploadIntervalMs: FRAME_UPLOAD_INTERVAL_MS,
+        });
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
+        const { context } = configureWebGpuCanvas(ref, device, presentationFormat);
 
         const renderModule = device.createShaderModule({ code: RENDER_SHADER });
         const computeModule = device.createShaderModule({ code: COMPUTE_SHADER });
@@ -454,7 +457,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
             pass.end();
             encoder.copyBufferToBuffer(scoreBuffer, 0, readbackBuffer, 0, SCORE_FLOATS * 4);
             device.queue.submit([encoder.finish()]);
-            await readbackBuffer.mapAsync(GPUMapMode.READ);
+            await profile.timeAsync('inferenceReadback', () => readbackBuffer.mapAsync(GPUMapMode.READ));
             if (cancelled) {
               readbackBuffer.unmap();
               return;
@@ -465,6 +468,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
             const next = makePrediction(values);
             predictionRef.current = next;
             setPrediction(next);
+            profile.count('inferences');
             setInferenceError(null);
           } catch (e) {
             setInferenceError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -486,11 +490,12 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
             if (imageCapture) {
               try {
-                const bitmap = await imageCapture.grabFrame();
+                const bitmap = await profile.timeAsync('grabFrame', () => imageCapture.grabFrame());
                 frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
                 frameSource = 'camera';
                 preserveCameraPreviewUntilRef.current = 0;
                 lastSeenFrameNumber = bitmap._frameNumber;
+                profile.recordFrameNumber(bitmap._frameNumber);
                 bitmap.close();
                 setGrabError(null);
               } catch (e) {
@@ -514,6 +519,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
               frame = { data: syntheticPixels, height: SYNTHETIC_SIZE, width: SYNTHETIC_SIZE };
             } else if (!frame) {
               lastUpload = now;
+              profile.count('uploadSkips');
             }
             if (cancelled) return;
 
@@ -536,11 +542,15 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
               setFrameInfo(frame.width, frame.height);
               ensureTexture(frame.width, frame.height);
-              device.queue.writeTexture(
-                { texture: cameraTexture! },
-                frame.data,
-                { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-                { width: frame.width, height: frame.height }
+              profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
+              profile.count('uploadedBytes', frame.data.byteLength);
+              profile.time('writeTexture', () =>
+                device.queue.writeTexture(
+                  { texture: cameraTexture! },
+                  frame.data,
+                  { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+                  { width: frame.width, height: frame.height }
+                )
               );
               lastUpload = now;
             }
@@ -565,6 +575,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
             ])
           );
 
+          const renderStart = nowMs();
           const encoder = device.createCommandEncoder();
           const pass = encoder.beginRenderPass({
             colorAttachments: [
@@ -582,6 +593,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           if (now - lastInference >= INFERENCE_INTERVAL_MS) {
             lastInference = now;
@@ -589,11 +601,19 @@ export default function NeuralLensScreen(): React.JSX.Element {
           }
 
           frames += 1;
+          profile.count('renderFrames');
           if (now - lastReport >= 1000) {
-            setFps((frames / ((now - lastReport) / 1000)).toFixed(1));
+            const fpsValue = frames / ((now - lastReport) / 1000);
+            setFps(fpsValue.toFixed(1));
             if (lastSeenFrameNumber !== null) {
               setLastFrameNumber(lastSeenFrameNumber);
             }
+            profile.report({
+              fps: Number(fpsValue.toFixed(1)),
+              height: texHeight,
+              source: sourceRef.current,
+              width: texWidth,
+            });
             frames = 0;
             lastReport = now;
           }
@@ -632,7 +652,8 @@ export default function NeuralLensScreen(): React.JSX.Element {
       clearTimeout(timer);
       cleanup?.();
     };
-  }, [adapter, device, ref, setFrameInfo, setGrabError]);
+  }, [adapter, device, ref, setFrameInfo, setGrabError])
+  );
 
   const targetPreviewAspect = DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
   const previewAspect = frameDimensions

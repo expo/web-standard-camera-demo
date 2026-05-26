@@ -149,7 +149,7 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Architecture.** Same data path as Demo 1 from `getUserMedia` through `GPUTexture`. The difference is the render target: a full-screen triangle (or quad) rather than a cube, and the fragment shader varies per effect.
 
-**Status:** First version implemented. The route uses a demo-sized 640×480 @ 30 fps capture profile, uploads camera frames through the same `ImageCapture.grabFrame()` byte path as the cube demo at a capped cadence, then samples the texture from WGSL with selectable effects: original, posterize, edges, heat, and kaleidoscope. It has a synthetic fallback when no camera frame is available.
+**Status:** First version implemented. The route uses a demo-sized 640×480 @ 30 fps capture profile, uploads camera frames through the same `ImageCapture.grabFrame()` byte path as the cube demo at a 30 fps target cadence, then samples the texture from WGSL with selectable effects: original, posterize, edges, heat, and kaleidoscope. It has a synthetic fallback when no camera frame is available.
 
 **Complexity:** Low to medium. The first effect is the bulk of the work (sets up the full-screen pass, sample binding, parameter uniform buffer). Each additional effect is a small WGSL file plus a chip in the UI.
 
@@ -168,7 +168,7 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, applies fixed model weights, and writes class logits into a storage buffer. A `MAP_READ` buffer copies back only eight floats: five logits plus three feature readouts.
 
-**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
+**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
 
 **Complexity:** Low. No model download, no tokenizer, no runtime dependency. The main risk is GPU buffer readback support in `react-native-wgpu`, which is validated by the route smoke test.
 
@@ -246,6 +246,39 @@ same Transformers.js WebGPU model path
 9. **Demo 4: MNIST.** Stretch — schedule only after simpler demos land.
 
 Total wall-clock to Demo 1 shipping: roughly four days from milestone 0, assuming no surprises.
+
+## Performance instrumentation
+
+The first shipped routes still use the interim CPU-byte bridge:
+`ImageCapture.grabFrame()` copies the latest `CVPixelBuffer` into tight-packed
+BGRA bytes, and JS uploads those bytes with `device.queue.writeTexture()`. This
+keeps the W3C-shaped demo surface working before LLP 0011's zero-copy
+`SharedTextureMemory` bridge exists, but it is not the intended final fast path.
+
+The demo routes emit structured `WEBGPU_DEMO_PROFILE` records in development
+builds. Records include render frame rate, camera/synthetic upload counts,
+uploaded bytes, native `grabFrame()` time, `writeTexture()` enqueue time, and
+render submit/present timing. They are sent both to `console.log` and to the
+native system-log hook so simulator runs can be inspected with `simctl log` even
+when the Metro terminal UI is not attached.
+
+Render loops are route-focus scoped with Expo Router's `useFocusEffect`. Stack
+screens remain mounted when another demo is pushed, and leaving a hidden WebGPU
+canvas running in the background makes the foreground demo look artificially
+slow. Losing focus cancels the animation frame and destroys the route's GPU
+resources; returning to the route creates a fresh pipeline.
+
+Current upload targets:
+
+- `shader-lens`: upload at 30 fps, render every animation frame.
+- `neural-lens`: upload at 30 fps, render every animation frame, run inference
+  readback at a lower cadence.
+- `cube`: upload at 30 fps, render every animation frame with the latest
+  uploaded texture.
+
+If physical-device profiling shows `grabFrame()` or per-frame byte upload
+dominating, the fix is not more WGSL tuning; it is the LLP 0011 zero-copy bridge
+so WebGPU samples the IOSurface-backed camera texture directly.
 
 ## What "shipped" looks like, per demo
 

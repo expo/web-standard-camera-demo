@@ -1,8 +1,11 @@
 import * as React from 'react';
+import { useFocusEffect } from 'expo-router';
 import { Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
+import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
+import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
 
 // @ref LLP 0010#demo-1-rotating-cube-of-cameras — Existing WebGPU camera
@@ -11,12 +14,12 @@ import { ImageCapture } from '../../../../modules/standard-camera';
 // Rotating cube whose six faces all show the live camera. The demo reads the
 // active MediaStream from CameraContext (shared with the Home screen — both
 // surfaces see the same stream), wraps the first video track in a W3C
-// `ImageCapture`, and pulls a frame per animation tick via
-// `imageCapture.grabFrame()`. The frame is uploaded into a `bgra8unorm` GPU
-// texture and sampled by the cube's fragment shader — the same shape an
-// unmodified browser WebGPU demo would take. When no stream is active (camera
-// stopped or simulator with no AVCaptureDevice), the loop falls back to a
-// procedurally-generated test pattern uploaded the same way.
+// `ImageCapture`, and uploads a fresh `grabFrame()` result at a 30 fps target
+// while the cube still renders every animation tick. The frame is uploaded into
+// a `bgra8unorm` GPU texture and sampled by the cube's fragment shader — the
+// same shape an unmodified browser WebGPU demo would take. When no stream is
+// active (camera stopped or simulator with no AVCaptureDevice), the loop falls
+// back to a procedurally-generated test pattern uploaded the same way.
 //
 // Spec surface used:
 //   - navigator.mediaDevices.getUserMedia (Media Capture and Streams)
@@ -58,6 +61,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 // and a UV. Wound CCW when viewed from outside the cube so back-face culling
 // keeps the inside hidden.
 const CUBE_VERTEX_COUNT = 36;
+const CAMERA_UPLOAD_INTERVAL_MS = 33;
 const CUBE_VERTICES = new Float32Array([
   // +Z (front)
   -1, -1, 1, 0, 1,
@@ -176,8 +180,9 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
 
   const rafRef = React.useRef<number | null>(null);
 
-  React.useEffect(() => {
-    if (!device) return;
+  useFocusEffect(
+    React.useCallback(() => {
+    if (!device) return undefined;
     let cancelled = false;
     let cleanup: (() => void) | null = null;
 
@@ -186,13 +191,12 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
 
     const startRender = (): void => {
       try {
-        const context = ref.current?.getContext('webgpu');
-        if (!context) {
-          throw new Error('getContext("webgpu") returned null');
-        }
-
+        const profile = createWebGpuPerfProbe('cube', {
+          uploadIntervalMs: CAMERA_UPLOAD_INTERVAL_MS,
+        });
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
+        const canvas = configureWebGpuCanvas(ref, device, presentationFormat);
+        const context = canvas.context;
 
         const shaderModule = device.createShaderModule({ code: SHADER });
 
@@ -230,9 +234,8 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           },
         });
 
-        const canvas = ref.current!.getNativeSurface();
-        const canvasWidth = Math.max(1, Math.floor(canvas.width));
-        const canvasHeight = Math.max(1, Math.floor(canvas.height));
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
 
         const depthTexture = device.createTexture({
           size: { width: canvasWidth, height: canvasHeight },
@@ -286,7 +289,11 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
         const startedAt = Date.now();
         let frames = 0;
         let lastReport = startedAt;
+        let lastUpload = 0;
         let lastReportedSource: 'camera' | 'synthetic' | null = null;
+        let activeSource: 'camera' | 'synthetic' = 'synthetic';
+        let activeWidth = SYNTHETIC_SIZE;
+        let activeHeight = SYNTHETIC_SIZE;
         let lastSeenFrameNumber: number | null = null;
         let newFramesThisSecond = 0;
         let grabsThisSecond = 0;
@@ -298,58 +305,81 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
 
         const renderFrame = async (): Promise<void> => {
           if (cancelled) return;
-          const elapsed = (Date.now() - startedAt) / 1000;
+          const now = Date.now();
+          const elapsed = (now - startedAt) / 1000;
+          const shouldUpload = bindGroup == null || now - lastUpload >= CAMERA_UPLOAD_INTERVAL_MS;
 
-          // Pull from the active ImageCapture (set by the stream effect
-          // whenever the context's stream changes). Fall back to synthetic
-          // whenever there's no capture or the camera hasn't produced a
-          // frame yet.
-          const ic = imageCaptureRef.current;
-          let frame: Frame | null = null;
-          let frameSource: 'camera' | 'synthetic' = 'synthetic';
-          if (ic) {
-            try {
-              const bitmap = await ic.grabFrame();
-              frame = { width: bitmap.width, height: bitmap.height, data: bitmap._data };
-              frameSource = 'camera';
-              grabsThisSecond++;
-              if (bitmap._frameNumber !== lastSeenFrameNumber) {
-                newFramesThisSecond++;
-                lastSeenFrameNumber = bitmap._frameNumber;
+          if (shouldUpload) {
+            // Pull from the active ImageCapture (set by the stream effect
+            // whenever the context's stream changes). Fall back to synthetic
+            // whenever there's no capture or the camera hasn't produced a
+            // frame yet. Uploads are capped at 30 fps so one expensive
+            // pixel-buffer copy cannot slow every visual animation frame.
+            const ic = imageCaptureRef.current;
+            let frame: Frame | null = null;
+            let frameSource: 'camera' | 'synthetic' = 'synthetic';
+            if (ic) {
+              try {
+                const bitmap = await profile.timeAsync('grabFrame', () => ic.grabFrame());
+                frame = { width: bitmap.width, height: bitmap.height, data: bitmap._data };
+                frameSource = 'camera';
+                grabsThisSecond++;
+                profile.recordFrameNumber(bitmap._frameNumber);
+                if (bitmap._frameNumber !== lastSeenFrameNumber) {
+                  newFramesThisSecond++;
+                  lastSeenFrameNumber = bitmap._frameNumber;
+                }
+                bitmap.close();
+              } catch (e) {
+                const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+                setLastGrabError(reason);
               }
-              bitmap.close();
-            } catch (e) {
-              const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-              setLastGrabError(reason);
             }
-          }
-          if (!frame) {
-            fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
-            frame = { width: SYNTHETIC_SIZE, height: SYNTHETIC_SIZE, data: syntheticPixels };
-          }
-          if (cancelled) return;
+            if (!frame) {
+              fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
+              frame = { width: SYNTHETIC_SIZE, height: SYNTHETIC_SIZE, data: syntheticPixels };
+            }
+            if (cancelled) return;
 
-          if (frameSource !== lastReportedSource) {
-            lastReportedSource = frameSource;
-            setSource(frameSource);
-            // eslint-disable-next-line no-console
-            console.log(
-              `CUBE_TRACE source-change ${JSON.stringify({ source: frameSource, w: frame.width, h: frame.height })}`
+            if (frameSource !== lastReportedSource) {
+              lastReportedSource = frameSource;
+              setSource(frameSource);
+              // eslint-disable-next-line no-console
+              console.log(
+                `CUBE_TRACE source-change ${JSON.stringify({ source: frameSource, w: frame.width, h: frame.height })}`
+              );
+            }
+
+            const currentBindGroup = ensureTexture(frame.width, frame.height);
+            profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
+            profile.count('uploadedBytes', frame.data.byteLength);
+            profile.time('writeTexture', () =>
+              device.queue.writeTexture(
+                { texture: cameraTexture! },
+                frame.data,
+                { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+                { width: frame.width, height: frame.height }
+              )
             );
+            activeSource = frameSource;
+            activeWidth = frame.width;
+            activeHeight = frame.height;
+            bindGroup = currentBindGroup;
+            lastUpload = now;
           }
 
-          const currentBindGroup = ensureTexture(frame.width, frame.height);
-          device.queue.writeTexture(
-            { texture: cameraTexture! },
-            frame.data,
-            { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-            { width: frame.width, height: frame.height }
-          );
+          if (!bindGroup) {
+            rafRef.current = requestAnimationFrame(() => {
+              void renderFrame();
+            });
+            return;
+          }
 
           const model = mat4Multiply(mat4RotateY(elapsed * 0.7), mat4RotateX(elapsed * 0.4));
           const mvp = mat4Multiply(viewProjection, model);
           device.queue.writeBuffer(uniformBuffer, 0, mvp);
 
+          const renderStart = nowMs();
           const encoder = device.createCommandEncoder();
           const pass = encoder.beginRenderPass({
             colorAttachments: [
@@ -368,24 +398,33 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             },
           });
           pass.setPipeline(pipeline);
-          pass.setBindGroup(0, currentBindGroup);
+          pass.setBindGroup(0, bindGroup);
           pass.setVertexBuffer(0, vertexBuffer);
           pass.draw(CUBE_VERTEX_COUNT);
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           frames++;
-          const now = Date.now();
+          profile.count('renderFrames');
           if (now - lastReport >= 1000) {
             const fps = (frames / ((now - lastReport) / 1000)).toFixed(1);
             // eslint-disable-next-line no-console
             console.log(
-              `CUBE_FPS ${JSON.stringify({ fps: +fps, frames, source: frameSource, w: frame.width, h: frame.height, newFrames: newFramesThisSecond, grabs: grabsThisSecond, lastN: lastSeenFrameNumber })}`
+              `CUBE_FPS ${JSON.stringify({ fps: +fps, frames, source: activeSource, w: activeWidth, h: activeHeight, newFrames: newFramesThisSecond, grabs: grabsThisSecond, lastN: lastSeenFrameNumber })}`
             );
             if (lastSeenFrameNumber !== null) {
               setLastFrameNumber(lastSeenFrameNumber);
             }
+            profile.report({
+              fps: Number(fps),
+              grabs: grabsThisSecond,
+              height: activeHeight,
+              newFrames: newFramesThisSecond,
+              source: activeSource,
+              width: activeWidth,
+            });
             frames = 0;
             newFramesThisSecond = 0;
             grabsThisSecond = 0;
@@ -428,7 +467,8 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
       clearTimeout(timer);
       cleanup?.();
     };
-  }, [device, adapter, ref]);
+  }, [device, adapter, ref])
+  );
 
   // Driven by the status machine, not `stream != null`, so an externally
   // ended track (status='ended', stream still set) doesn't leave the nav

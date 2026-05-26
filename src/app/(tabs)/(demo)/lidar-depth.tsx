@@ -8,6 +8,7 @@ import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-n
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
+import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import {
   NativeStandardCamera,
@@ -380,13 +381,8 @@ export default function LiDARDepthScreen(): React.JSX.Element {
         const profile = createWebGpuPerfProbe('lidar-depth', {
           uploadIntervalMs: FRAME_UPLOAD_INTERVAL_MS,
         });
-        const context = ref.current?.getContext('webgpu');
-        if (!context) {
-          throw new Error('getContext("webgpu") returned null');
-        }
-
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
+        const { context } = configureWebGpuCanvas(ref, device, presentationFormat);
 
         device.pushErrorScope('validation');
         const shaderModule = device.createShaderModule({ code: DEPTH_SHADER });
