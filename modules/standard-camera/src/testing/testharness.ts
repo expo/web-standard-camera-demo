@@ -224,22 +224,12 @@ const TEST_NAME_REQUIREMENTS = new Map<
     'Tests that a media element with an assigned MediaStream does not start advancing currentTime until potentially playing',
     { requirement: 'out-of-scope', reason: 'out-of-scope: requires HTMLCanvasElement.captureStream' },
   ],
-  // crop-and-scale isn't supported by our AVFoundation pipeline (LLP 0001).
-  ['getUserMedia() supports setting crop-and-scale as resizeMode without downscaling.',
-    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
-  ['getUserMedia() supports setting crop-and-scale as resizeMode with downscaling.',
-    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
-  ['getUserMedia() supports setting crop-and-scale as resizeMode with decimation.',
-    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
-  ['Video track getCapabilities() resizeMode properly supported. Value: crop-and-scale',
-    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
-  ['Video device getCapabilities() resizeMode properly supported. Value: crop-and-scale',
-    { requirement: 'out-of-scope', reason: 'out-of-scope: crop-and-scale resizeMode is not implemented' }],
-  // iPhone cameras don't expose a 320-wide format; "ideal: 320" can only be
-  // satisfied with cropping (out of scope).
+  // @ref LLP 0008#video-properties — `'INVALID'` is not in the resizeMode
+  // enum; gUM rejects it synchronously in `flattenVideo` (MediaDevices.ts)
+  // before any AVCaptureDevice lookup, so the test runs on the simulator.
   [
-    'Tests that setting a required constraint with an ideal value in getUserMedia works',
-    { requirement: 'out-of-scope', reason: 'out-of-scope: iPhone cameras have no 320-wide format and we do not crop' },
+    'getUserMedia() fails with exact invalid resizeMode.',
+    { requirement: 'always', reason: '' },
   ],
   // Requires AudioContext.createMediaStreamDestination(); we ship audio
   // capture but no WebAudio implementation.

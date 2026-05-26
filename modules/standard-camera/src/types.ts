@@ -81,6 +81,13 @@ export interface MediaDeviceInfo {
 }
 
 // Flat constraints sent to native — JS normalizes web shape to this.
+// @ref LLP 0008#video-properties — resizeMode is one of the constrainable
+// video properties. `'none'` means deliver frames at the device's native
+// dimensions; `'crop-and-scale'` opts into the source-side crop+scale stage
+// in FrameSink that satisfies `width` / `height` constraints that no native
+// AVCaptureDevice format would otherwise hit. See LLP 0001's
+// "`resizeMode: \"crop-and-scale\"` is in scope" callout for the scope
+// decision and where the implementation lives.
 export interface FlatVideoConstraints {
   deviceId?: string;
   facingMode?: string;
@@ -88,6 +95,7 @@ export interface FlatVideoConstraints {
   height?: number;
   frameRate?: number;
   aspectRatio?: number;
+  resizeMode?: 'none' | 'crop-and-scale';
 }
 
 // @ref LLP 0002#surface-accepted-from-js — Flat audio constraints. We split

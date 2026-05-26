@@ -173,7 +173,10 @@ export class MediaDevices extends EventTarget {
             aspectRatio: { min: 0, max: 16 / 9 },
             frameRate: { min: 0, max: 60 },
             facingMode: ['environment'],
-            resizeMode: ['none'],
+            // @ref LLP 0008#video-properties — Both `resizeMode` values are
+            // in scope (see LLP 0001). Native track-level capabilities have
+            // a matching entry — see `MediaStreamTrack.swift` videoCapabilities.
+            resizeMode: ['none', 'crop-and-scale'],
             deviceId: granted ? d.deviceId : '',
             groupId: granted ? d.groupId : '',
           }
@@ -329,19 +332,30 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
     const v = pickNumber(c.aspectRatio);
     if (v !== undefined) out.aspectRatio = v;
   }
-  // resizeMode is exposed as a constraint but we only support "none". Reject
-  // `{exact: <not-none>}` up front; otherwise accept any basic/ideal value
-  // (per spec, ideals are best-effort and getSettings reports what we picked).
+  // @ref LLP 0008#video-properties — `resizeMode` ∈ {"none","crop-and-scale"}.
+  // Both values are in scope per LLP 0001. Reject `{exact: <anything else>}`
+  // with `OverconstrainedError(resizeMode)` per spec; basic/ideal forms are
+  // best-effort, and the actual value we ended up running is what
+  // `getSettings().resizeMode` reports.
   if ((c as { resizeMode?: unknown }).resizeMode !== undefined) {
     const rm = (c as { resizeMode?: unknown }).resizeMode;
     const exact =
       rm && typeof rm === 'object' ? (rm as { exact?: unknown }).exact : undefined;
-    if (typeof exact === 'string' && exact !== 'none') {
+    const basic = typeof rm === 'string' ? rm : undefined;
+    if (typeof exact === 'string' && exact !== 'none' && exact !== 'crop-and-scale') {
       throw new DOMException(
         'Constraint cannot be satisfied: resizeMode',
         'OverconstrainedError',
         'resizeMode'
       );
+    }
+    // Forward the requested value (whether from `exact`, `ideal`, or a bare
+    // string) to native so the FrameSink crop+scale stage can opt in.
+    // Unrecognized basic / ideal values fall back to `'none'` since the spec
+    // treats them as best-effort hints rather than hard rejections.
+    const requested = exact ?? basic ?? (rm && typeof rm === 'object' ? (rm as { ideal?: unknown }).ideal : undefined);
+    if (typeof requested === 'string') {
+      out.resizeMode = requested === 'crop-and-scale' ? 'crop-and-scale' : 'none';
     }
   }
   return out;
