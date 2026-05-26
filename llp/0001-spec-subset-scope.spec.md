@@ -4,7 +4,7 @@
 **Status:** Active
 **Systems:** standard-camera
 **Author:** James Ide
-**Date:** 2026-05-19 (audio brought into scope 2026-05-22)
+**Date:** 2026-05-19 (audio brought into scope 2026-05-22; `resizeMode: "crop-and-scale"` brought into scope 2026-05-26)
 **Related:** 0000, 0002, 0003, 0004, 0009, 0012, 0013, 0018
 
 ## Summary
@@ -40,6 +40,14 @@ LiDAR demo route.
 `getUserMedia({ audio: <truthy> })` resolves to a `MediaStream` containing exactly one `MediaStreamTrack` whose `kind === "audio"`. Audio devices are surfaced via `enumerateDevices()` once the caller has been granted microphone access. Audio track `getSettings()` reports `sampleRate`, `sampleSize`, `echoCancellation`, `autoGainControl`, `noiseSuppression`, `voiceIsolation`, `latency`, `channelCount`, `deviceId`, `groupId`. `getCapabilities()` reports the matching capability ranges / enums. iOS implementation details — `AVCaptureDevice(for: .audio)`, `AVAudioSession` configuration, `AVCaptureAudioDataOutput` as the audio FrameSink, echo-cancellation via `setMode(.voiceChat)` — are documented in [LLP 0009](./0009-audio-ios-mapping.decision.md).
 
 `getUserMedia({ audio: true, video: true })` returns a `MediaStream` containing one video track and one audio track sharing a single `AVCaptureSession`. Stopping either track is independent of the other; the session is stopped when both tracks (across any clones) have ended.
+
+### `resizeMode: "crop-and-scale"` is in scope (as of 2026-05-26)
+
+Video tracks support both spec values of `resizeMode`: `"none"` (the default — frames pass through at the device's native dimensions) and `"crop-and-scale"`, which picks the closest natively-supported `AVCaptureDevice.Format` and center-crops + bilinear-rescales it in `FrameSink`'s sample-buffer callback to satisfy explicit `width` / `height` constraints. Without this, `getUserMedia({ video: { width: { ideal: 320 } } })` can't be satisfied on iPhone cameras whose smallest native format is wider than the request, which is why the WPT `GUM-required-constraint-with-ideal-value` test and the `MediaStreamTrack-getCapabilities` `Value: crop-and-scale` sub-tests were marked out-of-scope in the per-name overrides; with `crop-and-scale` in scope they become applicable again.
+
+`getCapabilities()` reports `resizeMode: ["none", "crop-and-scale"]` for both the video track and the matching `InputDeviceInfo` entry; `getSettings().resizeMode` reflects whichever mode the session ended up in (chosen from `MediaTrackConstraints.resizeMode` and the closest-format selection). The cropped/scaled `CVPixelBuffer` is what `__getLatestFrame()` returns and what the `AVCaptureVideoPreviewLayer` renders, so on-screen and WebGPU consumers see identical pixels.
+
+`"none"` remains the default when constraints don't request a specific dimension; the existing behaviour is unchanged for callers that don't opt in.
 
 ## Status legend
 
