@@ -1,0 +1,44 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="body" x1="100" y1="150" x2="404" y2="372" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FCFF" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#A9F8FF" stop-opacity="0.1"/>
+    </linearGradient>
+    <linearGradient id="bodyStroke" x1="110" y1="142" x2="407" y2="378" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="0.5" stop-color="#77F7FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#34D399" stop-opacity="0.82"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(225 215) rotate(52) scale(143)">
+      <stop stop-color="#E7FDFF"/>
+      <stop offset="0.22" stop-color="#76F7FF"/>
+      <stop offset="0.58" stop-color="#116D80"/>
+      <stop offset="1" stop-color="#06151C"/>
+    </radialGradient>
+    <linearGradient id="lensStroke" x1="165" y1="138" x2="349" y2="371" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FDFF"/>
+      <stop offset="0.48" stop-color="#74F4FF"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="aperture" x1="195" y1="176" x2="325" y2="346" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FDFF" stop-opacity="0.72"/>
+      <stop offset="0.45" stop-color="#9AFBFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#1DD9A3" stop-opacity="0.32"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="256" cy="360" rx="165" ry="42" fill="#020617" opacity="0.35"/>
+  <circle cx="256" cy="277" r="126" fill="#020617" opacity="0.45"/>
+  <g>
+    <path d="M177 155L198 122C207 108 223 99 240 99H272C289 99 305 108 314 122L335 155H177Z" fill="url(#body)" stroke="url(#bodyStroke)" stroke-opacity="0.85" stroke-width="9" stroke-linejoin="round"/>
+    <rect x="89" y="150" width="334" height="234" rx="77" fill="url(#body)" stroke="url(#bodyStroke)" stroke-width="9"/>
+    <path d="M125 209V178H156M387 209V178H356M125 305V337H156M387 305V337H356" stroke="#E8FEFF" stroke-opacity="0.7" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="354" cy="197" r="14" fill="#34D399" stroke="#D9FFF5" stroke-width="5"/>
+    <circle cx="256" cy="266" r="119" fill="#061017" stroke="url(#lensStroke)" stroke-width="15"/>
+    <circle cx="256" cy="266" r="95" fill="url(#glass)" stroke="#E9FDFF" stroke-opacity="0.7" stroke-width="4"/>
+    <path d="M256 174L336 220V312L256 358L176 312V220L256 174Z" fill="url(#aperture)" stroke="#DDFBFF" stroke-opacity="0.42" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M256 174L256 266L336 220M336 312L256 266L256 358M176 312L256 266L176 220" stroke="#F3FEFF" stroke-opacity="0.32" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="256" cy="266" r="39" fill="#051219" stroke="#8FFBFF" stroke-opacity="0.88" stroke-width="5"/>
+    <circle cx="241" cy="248" r="13" fill="#F8FEFF" fill-opacity="0.9"/>
+    <circle cx="284" cy="296" r="8" fill="#35E0AC" fill-opacity="0.82"/>
+  </g>
+</svg>

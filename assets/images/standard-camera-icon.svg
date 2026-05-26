@@ -1,0 +1,72 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="86" y1="44" x2="928" y2="978" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="0.48" stop-color="#123B47"/>
+      <stop offset="1" stop-color="#0A6F81"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 482) rotate(90) scale(560)">
+      <stop offset="0" stop-color="#2EF5FF" stop-opacity="0.24"/>
+      <stop offset="0.5" stop-color="#2EF5FF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#020817" stop-opacity="0.72"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" stroke="#D6FBFF" stroke-opacity="0.24" stroke-width="2"/>
+    </pattern>
+    <linearGradient id="body" x1="200" y1="300" x2="808" y2="744" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FCFF" stop-opacity="0.21"/>
+      <stop offset="1" stop-color="#A9F8FF" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="bodyStroke" x1="220" y1="284" x2="814" y2="756" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.82"/>
+      <stop offset="0.5" stop-color="#77F7FF" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#34D399" stop-opacity="0.74"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(450 430) rotate(52) scale(286)">
+      <stop stop-color="#E7FDFF"/>
+      <stop offset="0.22" stop-color="#76F7FF"/>
+      <stop offset="0.58" stop-color="#116D80"/>
+      <stop offset="1" stop-color="#06151C"/>
+    </radialGradient>
+    <linearGradient id="lensStroke" x1="330" y1="276" x2="698" y2="742" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FDFF"/>
+      <stop offset="0.48" stop-color="#74F4FF"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="aperture" x1="390" y1="352" x2="650" y2="692" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FDFF" stop-opacity="0.72"/>
+      <stop offset="0.45" stop-color="#9AFBFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#1DD9A3" stop-opacity="0.32"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#vignette)"/>
+  <rect x="96" y="100" width="832" height="824" rx="116" fill="url(#grid)" opacity="0.44"/>
+
+  <g opacity="0.5">
+    <path d="M176 256H260M218 214V298" stroke="#B8FAFF" stroke-opacity="0.38" stroke-width="8" stroke-linecap="round"/>
+    <path d="M764 256H848M806 214V298" stroke="#B8FAFF" stroke-opacity="0.38" stroke-width="8" stroke-linecap="round"/>
+    <path d="M176 770H260M218 728V812" stroke="#B8FAFF" stroke-opacity="0.3" stroke-width="8" stroke-linecap="round"/>
+    <path d="M764 770H848M806 728V812" stroke="#B8FAFF" stroke-opacity="0.3" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <ellipse cx="512" cy="720" rx="330" ry="84" fill="#020617" opacity="0.35"/>
+  <g>
+    <path d="M354 310L396 244C414 216 445 198 479 198H545C579 198 610 216 628 244L670 310H354Z" fill="url(#body)" stroke="url(#bodyStroke)" stroke-opacity="0.82" stroke-width="18" stroke-linejoin="round"/>
+    <rect x="178" y="300" width="668" height="468" rx="154" fill="url(#body)" stroke="url(#bodyStroke)" stroke-width="18"/>
+    <path d="M250 418V356H312M774 418V356H712M250 610V674H312M774 610V674H712" stroke="#E8FEFF" stroke-opacity="0.68" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="708" cy="394" r="28" fill="#34D399" stroke="#D9FFF5" stroke-width="10"/>
+  </g>
+
+  <circle cx="512" cy="554" r="252" fill="#020617" opacity="0.42"/>
+  <g>
+    <circle cx="512" cy="532" r="238" fill="#061017" stroke="url(#lensStroke)" stroke-width="30"/>
+    <circle cx="512" cy="532" r="190" fill="url(#glass)" stroke="#E9FDFF" stroke-opacity="0.7" stroke-width="8"/>
+    <path d="M512 348L672 440V624L512 716L352 624V440L512 348Z" fill="url(#aperture)" stroke="#DDFBFF" stroke-opacity="0.42" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M512 348L512 532L672 440M672 624L512 532L512 716M352 624L512 532L352 440" stroke="#F3FEFF" stroke-opacity="0.32" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="512" cy="532" r="78" fill="#051219" stroke="#8FFBFF" stroke-opacity="0.88" stroke-width="10"/>
+    <circle cx="482" cy="496" r="26" fill="#F8FEFF" fill-opacity="0.9"/>
+    <circle cx="568" cy="592" r="16" fill="#35E0AC" fill-opacity="0.82"/>
+  </g>
+</svg>

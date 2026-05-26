@@ -1,0 +1,26 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="36" y1="18" x2="476" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="0.48" stop-color="#123B47"/>
+      <stop offset="1" stop-color="#0A6F81"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 240) rotate(90) scale(290)">
+      <stop offset="0" stop-color="#2EF5FF" stop-opacity="0.24"/>
+      <stop offset="0.52" stop-color="#2EF5FF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#020817" stop-opacity="0.72"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#D6FBFF" stroke-opacity="0.25" stroke-width="1.4"/>
+    </pattern>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#vignette)"/>
+  <rect x="48" y="50" width="416" height="412" rx="58" fill="url(#grid)" opacity="0.44"/>
+  <g opacity="0.52">
+    <path d="M88 128H130M109 107V149" stroke="#B8FAFF" stroke-opacity="0.38" stroke-width="4" stroke-linecap="round"/>
+    <path d="M382 128H424M403 107V149" stroke="#B8FAFF" stroke-opacity="0.38" stroke-width="4" stroke-linecap="round"/>
+    <path d="M88 386H130M109 365V407" stroke="#B8FAFF" stroke-opacity="0.3" stroke-width="4" stroke-linecap="round"/>
+    <path d="M382 386H424M403 365V407" stroke="#B8FAFF" stroke-opacity="0.3" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>
