@@ -43,6 +43,9 @@ Implemented:
   `WebXRCPUCameraBinding` analog of Raw Camera Access, maps normalized view
   coordinates into the camera image with `normCameraImageFromNormView`, and
   falls back to depth palette colors when camera pixels are unavailable.
+- Basic voxel fusion: repeated world-space samples are merged into 4.5 cm
+  voxel surfels with weighted position/radius averages, lower weights for
+  distant samples, and camera-color-preferred color averaging.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
 - Export: writes an ASCII `.ply` model into the app Documents directory,
@@ -53,7 +56,7 @@ Implemented:
 
 Not yet implemented:
 
-- Voxel deduplication / weighted fusion.
+- Confidence/normal-aware fusion and explicit surfel normal estimation.
 - Geometry-grade ARKit intrinsics exposure or a native unprojection helper.
 - Physical-device proof that a captured flat wall has correct metric scale and
   camera/depth alignment.

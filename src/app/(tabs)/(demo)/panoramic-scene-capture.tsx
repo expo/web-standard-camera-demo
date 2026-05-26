@@ -35,6 +35,7 @@ const SAMPLE_GRID_X = 44;
 const SAMPLE_GRID_Y = 34;
 const MIN_DEPTH_M = 0.35;
 const MAX_DEPTH_M = 4.8;
+const VOXEL_SIZE_M = 0.045;
 const SURFEL_STRIDE_FLOATS = 8;
 const SURFEL_STRIDE_BYTES = SURFEL_STRIDE_FLOATS * 4;
 const QUAD_VERTEX_COUNT = 6;
@@ -115,14 +116,33 @@ interface CaptureModel {
   cameraColoredSurfels: number;
   colorSource: 'camera' | 'depth' | 'mixed';
   keyframes: number;
+  rawSampleCount: number;
   surfelCount: number;
   surfels: Float32Array;
+  voxelSizeMeters: number;
 }
 
 interface KeyframeSnapshot {
   forward: Vec3;
   position: Vec3;
   time: number;
+}
+
+interface SurfelVoxelAccumulator {
+  cameraB: number;
+  cameraG: number;
+  cameraR: number;
+  cameraWeight: number;
+  count: number;
+  fallbackB: number;
+  fallbackG: number;
+  fallbackR: number;
+  fallbackWeight: number;
+  radius: number;
+  weight: number;
+  x: number;
+  y: number;
+  z: number;
 }
 
 interface ViewerState {
@@ -149,7 +169,6 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const pointStoreRef = React.useRef<number[]>([]);
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
-  const cameraColoredSurfelCountRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
   const statusRef = React.useRef<CaptureStatus>('checking');
@@ -231,7 +250,6 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     pointStoreRef.current = [];
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
-    cameraColoredSurfelCountRef.current = 0;
     surfelCountRef.current = 0;
     viewerRef.current = DEFAULT_VIEWER_STATE;
     publishModel(null);
@@ -321,7 +339,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   async function captureModel(): Promise<void> {
-    const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current, cameraColoredSurfelCountRef.current);
+    const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
     if (!nextModel || nextModel.surfelCount === 0) {
       setError('No valid depth samples have been captured yet.');
       return;
@@ -746,11 +764,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           frame.predictedDisplayTime
         );
         if (accepted) {
-          const nextModel = buildModel(
-            pointStoreRef.current,
-            keyframeCountRef.current,
-            cameraColoredSurfelCountRef.current
-          );
+          const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
           if (nextModel) {
             publishModel(nextModel);
             setModelInfo(formatModelInfo(nextModel));
@@ -807,11 +821,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     if (added.surfelCount <= 0) return false;
     keyframeCountRef.current += 1;
     surfelCountRef.current += added.surfelCount;
-    cameraColoredSurfelCountRef.current += added.cameraColoredSurfels;
     keyframeRef.current = { forward, position, time };
     setCoveragePercent(Math.min(100, Math.round(keyframeCountRef.current / MAX_KEYFRAMES * 100)));
     setFrameInfo(
-      `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - surfels: ${surfelCountRef.current}/${MAX_SURFELS} - camera color: ${added.cameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
+      `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - samples: ${surfelCountRef.current}/${MAX_SURFELS} - camera color: ${added.cameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
     );
     return true;
   }
@@ -881,33 +894,148 @@ function appendDepthSurfels(
       const color = sampledColor ?? depthPalette(depthMeters);
       if (sampledColor) cameraColoredSurfels += 1;
       const radius = Math.max(0.6, 2.4 - depthMeters * 0.26);
-      store.push(world[0], world[1], world[2], radius, color[0], color[1], color[2], 1);
+      const weight = surfelSampleWeight(depthMeters) * (sampledColor ? 1 : -1);
+      store.push(world[0], world[1], world[2], radius, color[0], color[1], color[2], weight);
       added += 1;
     }
   }
   return { cameraColoredSurfels, surfelCount: added };
 }
 
-function buildModel(points: number[], keyframes: number, cameraColoredSurfels: number): CaptureModel | null {
-  const surfelCount = Math.floor(points.length / SURFEL_STRIDE_FLOATS);
+function surfelSampleWeight(depthMeters: number): number {
+  // Distant ARKit depth samples cover more world area and tend to be noisier;
+  // keep them useful for coverage without letting them dominate fused voxels.
+  return clamp(1.35 / Math.max(depthMeters * depthMeters, 0.5), 0.14, 1.8);
+}
+
+// @ref LLP 0020#reconstruction-pipeline - Repeated observations of the same
+// world-space cell are fused into one weighted surfel instead of appended as
+// duplicate points.
+function fuseSurfels(points: number[]): SurfelVoxelAccumulator[] {
+  const voxels = new Map<string, SurfelVoxelAccumulator>();
+  for (let i = 0; i + SURFEL_STRIDE_FLOATS <= points.length; i += SURFEL_STRIDE_FLOATS) {
+    const x = points[i] ?? 0;
+    const y = points[i + 1] ?? 0;
+    const z = points[i + 2] ?? 0;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const rawWeight = points[i + 7] ?? 1;
+    const weight = Math.max(Math.abs(rawWeight), 1e-4);
+    const key = voxelKey(x, y, z);
+    let voxel = voxels.get(key);
+    if (!voxel) {
+      voxel = {
+        cameraB: 0,
+        cameraG: 0,
+        cameraR: 0,
+        cameraWeight: 0,
+        count: 0,
+        fallbackB: 0,
+        fallbackG: 0,
+        fallbackR: 0,
+        fallbackWeight: 0,
+        radius: 0,
+        weight: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+      };
+      voxels.set(key, voxel);
+    }
+    addSampleToVoxel(voxel, points, i, weight, rawWeight > 0);
+  }
+  return [...voxels.values()];
+}
+
+function addSampleToVoxel(
+  voxel: SurfelVoxelAccumulator,
+  points: number[],
+  offset: number,
+  weight: number,
+  hasCameraColor: boolean
+): void {
+  voxel.x += (points[offset] ?? 0) * weight;
+  voxel.y += (points[offset + 1] ?? 0) * weight;
+  voxel.z += (points[offset + 2] ?? 0) * weight;
+  voxel.radius += (points[offset + 3] ?? 1) * weight;
+  voxel.weight += weight;
+  voxel.count += 1;
+  const r = (points[offset + 4] ?? 0) * weight;
+  const g = (points[offset + 5] ?? 0) * weight;
+  const b = (points[offset + 6] ?? 0) * weight;
+  if (hasCameraColor) {
+    voxel.cameraR += r;
+    voxel.cameraG += g;
+    voxel.cameraB += b;
+    voxel.cameraWeight += weight;
+  } else {
+    voxel.fallbackR += r;
+    voxel.fallbackG += g;
+    voxel.fallbackB += b;
+    voxel.fallbackWeight += weight;
+  }
+}
+
+function voxelKey(x: number, y: number, z: number): string {
+  return [
+    Math.floor(x / VOXEL_SIZE_M),
+    Math.floor(y / VOXEL_SIZE_M),
+    Math.floor(z / VOXEL_SIZE_M),
+  ].join(',');
+}
+
+function buildModel(points: number[], keyframes: number): CaptureModel | null {
+  const rawSampleCount = Math.floor(points.length / SURFEL_STRIDE_FLOATS);
+  if (rawSampleCount <= 0) return null;
+  const fused = fuseSurfels(points);
+  const surfelCount = fused.length;
   if (surfelCount <= 0) return null;
-  const surfels = new Float32Array(points);
+  const surfels = new Float32Array(surfelCount * SURFEL_STRIDE_FLOATS);
   const boundsMin: Vec3 = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
   const boundsMax: Vec3 = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
-  for (let i = 0; i < surfels.length; i += SURFEL_STRIDE_FLOATS) {
-    boundsMin[0] = Math.min(boundsMin[0], surfels[i] ?? 0);
-    boundsMin[1] = Math.min(boundsMin[1], surfels[i + 1] ?? 0);
-    boundsMin[2] = Math.min(boundsMin[2], surfels[i + 2] ?? 0);
-    boundsMax[0] = Math.max(boundsMax[0], surfels[i] ?? 0);
-    boundsMax[1] = Math.max(boundsMax[1], surfels[i + 1] ?? 0);
-    boundsMax[2] = Math.max(boundsMax[2], surfels[i + 2] ?? 0);
+  let fusedCameraColoredSurfels = 0;
+  for (let index = 0; index < fused.length; index += 1) {
+    const voxel = fused[index];
+    if (!voxel) continue;
+    const invWeight = 1 / Math.max(voxel.weight, 1e-6);
+    const x = voxel.x * invWeight;
+    const y = voxel.y * invWeight;
+    const z = voxel.z * invWeight;
+    const radius = clamp(voxel.radius * invWeight, 0.45, 2.6);
+    const hasCameraColor = voxel.cameraWeight > 0;
+    const colorWeight = hasCameraColor ? voxel.cameraWeight : Math.max(voxel.fallbackWeight, 1e-6);
+    const offset = index * SURFEL_STRIDE_FLOATS;
+    surfels[offset] = x;
+    surfels[offset + 1] = y;
+    surfels[offset + 2] = z;
+    surfels[offset + 3] = radius;
+    surfels[offset + 4] = hasCameraColor ? voxel.cameraR / colorWeight : voxel.fallbackR / colorWeight;
+    surfels[offset + 5] = hasCameraColor ? voxel.cameraG / colorWeight : voxel.fallbackG / colorWeight;
+    surfels[offset + 6] = hasCameraColor ? voxel.cameraB / colorWeight : voxel.fallbackB / colorWeight;
+    surfels[offset + 7] = voxel.weight;
+    if (hasCameraColor) fusedCameraColoredSurfels += 1;
+    boundsMin[0] = Math.min(boundsMin[0], x);
+    boundsMin[1] = Math.min(boundsMin[1], y);
+    boundsMin[2] = Math.min(boundsMin[2], z);
+    boundsMax[0] = Math.max(boundsMax[0], x);
+    boundsMax[1] = Math.max(boundsMax[1], y);
+    boundsMax[2] = Math.max(boundsMax[2], z);
   }
-  const colorSource = cameraColoredSurfels <= 0
+  const colorSource = fusedCameraColoredSurfels <= 0
     ? 'depth'
-    : cameraColoredSurfels >= surfelCount
+    : fusedCameraColoredSurfels >= surfelCount
       ? 'camera'
       : 'mixed';
-  return { boundsMax, boundsMin, cameraColoredSurfels, colorSource, keyframes, surfelCount, surfels };
+  return {
+    boundsMax,
+    boundsMin,
+    cameraColoredSurfels: fusedCameraColoredSurfels,
+    colorSource,
+    keyframes,
+    rawSampleCount,
+    surfelCount,
+    surfels,
+    voxelSizeMeters: VOXEL_SIZE_M,
+  };
 }
 
 function formatModelInfo(model: CaptureModel): string {
@@ -916,7 +1044,7 @@ function formatModelInfo(model: CaptureModel): string {
     model.boundsMax[1] - model.boundsMin[1],
     model.boundsMax[2] - model.boundsMin[2],
   ];
-  return `model: ${model.keyframes} keyframes - ${model.surfelCount} surfels - ${model.colorSource} color - ${size
+  return `model: ${model.keyframes} keyframes - ${model.surfelCount} surfels from ${model.rawSampleCount} samples - ${model.colorSource} color - ${size
     .map((value) => `${Math.max(0, value).toFixed(1)}m`)
     .join(' x ')}`;
 }
@@ -928,6 +1056,8 @@ function serializeModelAsPly(model: CaptureModel): string {
     'comment standard-camera-app panoramic WebXR depth capture',
     `comment color_source ${model.colorSource}`,
     `comment camera_colored_surfels ${model.cameraColoredSurfels}`,
+    `comment raw_surfel_samples ${model.rawSampleCount}`,
+    `comment voxel_size_meters ${model.voxelSizeMeters.toFixed(3)}`,
     `element vertex ${model.surfelCount}`,
     'property float x',
     'property float y',
