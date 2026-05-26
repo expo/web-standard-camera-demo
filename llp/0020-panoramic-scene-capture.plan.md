@@ -64,6 +64,9 @@ Implemented:
   Files-visible path, file URI, byte count, keyframe count, and surfel count.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
+- Model-view reset: after capture, the Reset slot becomes a Recenter action
+  that restores the orbit/pinch viewer state without deleting the captured
+  model.
 - Export: writes an ASCII `.ply` model into the app Documents directory before
   opening any optional share sheet, reports the Files-visible filename/size, and
   relies on iOS document sharing so the Documents directory is visible in Files.

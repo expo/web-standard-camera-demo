@@ -243,6 +243,13 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
   }
 
+  function resetViewer(): void {
+    viewerRef.current = DEFAULT_VIEWER_STATE;
+    viewerGestureStartRef.current = DEFAULT_VIEWER_STATE;
+    pinchDistanceStartRef.current = null;
+    setViewer(DEFAULT_VIEWER_STATE);
+  }
+
   async function startSession(): Promise<void> {
     if (sessionRef.current) return;
     installWebXRDepthProfile();
@@ -683,8 +690,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 <CommandButton
                   disabled={transitioning}
                   icon="arrow.counterclockwise"
-                  label="Reset"
-                  onPress={resetCapture}
+                  label={model ? 'Recenter' : 'Reset'}
+                  onPress={model ? resetViewer : resetCapture}
                   tone="secondary"
                 />
               </View>
