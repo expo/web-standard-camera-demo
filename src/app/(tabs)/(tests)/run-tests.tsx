@@ -1,10 +1,9 @@
 import { Stack, useFocusEffect } from 'expo-router';
+import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import { GlassContainer, GlassView } from 'expo-glass-effect';
 import * as Linking from 'expo-linking';
 import * as React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Button as UIButton, Host } from '@expo/ui/swift-ui';
-import { disabled, labelStyle } from '@expo/ui/swift-ui/modifiers';
 import Animated, {
   useAnimatedScrollHandler,
   useAnimatedStyle,
@@ -396,27 +395,41 @@ export default function RunTestsScreen(): React.JSX.Element {
   }));
 
 
-  // Rendered into the native nav bar's right slot. An SF Symbol keeps the
-  // action compact so it doesn't compete with the large-title text. While a
-  // run is in flight the button flips to `stop.fill` and a destructive role
-  // so the affordance honestly invites a cancel — tapping it aborts the
-  // loop (see `cancel`/`run`'s AbortController). We deliberately leave the
-  // rest of the header options alone — touching things like `headerStyle`,
-  // `headerBlurEffect`, or `headerTransparent` can change content insets or
-  // the large-title shrink animation, both of which we depend on.
-  const headerRight = React.useCallback(
-    () => (
-      <Host matchContents>
-        <UIButton
-          onPress={cancelling ? undefined : running ? cancel : run}
-          systemImage={running ? 'stop.fill' : 'play.fill'}
-          label={cancelling ? 'Stopping' : running ? 'Stop' : 'Run tests'}
-          role={running ? 'destructive' : 'default'}
-          modifiers={[labelStyle('iconOnly'), disabled(cancelling)]}
-        />
-      </Host>
-    ),
-    [cancelling, running, run, cancel]
+  // Rendered into the native nav bar's right slot as a real UIBarButtonItem
+  // (via `unstable_headerRightItems`), so hit-testing is handled by UIKit
+  // directly. While a run is in flight the button flips to `stop.fill` and
+  // a red tint so the affordance honestly invites a cancel — tapping it
+  // aborts the loop (see `cancel`/`run`'s AbortController). We deliberately
+  // leave the rest of the header options alone — touching things like
+  // `headerStyle`, `headerBlurEffect`, or `headerTransparent` can change
+  // content insets or the large-title shrink animation, both of which we
+  // depend on.
+  const headerLabel = cancelling ? 'Stopping' : running ? 'Stop' : 'Run tests';
+  const headerRightItems = React.useCallback(
+    (): NativeStackHeaderItem[] => [
+      {
+        type: 'button' as const,
+        label: headerLabel,
+        accessibilityLabel: headerLabel,
+        disabled: cancelling,
+        icon: {
+          type: 'sfSymbol' as const,
+          name: running ? 'stop.fill' : 'play.fill',
+        },
+        identifier: 'wpt-run-stop',
+        onPress: () => {
+          if (cancelling) return;
+          if (running) {
+            cancel();
+          } else {
+            void run();
+          }
+        },
+        tintColor: running ? '#ff453a' : theme.text,
+        variant: 'plain' as const,
+      },
+    ],
+    [cancelling, headerLabel, running, run, cancel, theme.text]
   );
 
   // Drive the pill's `top` from the scroll position. UIScrollView places
@@ -450,7 +463,7 @@ export default function RunTestsScreen(): React.JSX.Element {
           title: 'Tests',
           headerLargeTitle: true,
           headerShadowVisible: false,
-          headerRight,
+          unstable_headerRightItems: headerRightItems,
         }}
       />
       {/* ScrollView is rendered as a direct child of the screen so that the
