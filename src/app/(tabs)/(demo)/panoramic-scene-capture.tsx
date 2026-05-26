@@ -36,7 +36,7 @@ const SAMPLE_GRID_Y = 34;
 const MIN_DEPTH_M = 0.35;
 const MAX_DEPTH_M = 4.8;
 const VOXEL_SIZE_M = 0.045;
-const SURFEL_STRIDE_FLOATS = 8;
+const SURFEL_STRIDE_FLOATS = 12;
 const SURFEL_STRIDE_BYTES = SURFEL_STRIDE_FLOATS * 4;
 const QUAD_VERTEX_COUNT = 6;
 
@@ -51,12 +51,14 @@ struct Uniforms {
 struct VsIn {
   @location(0) positionRadius: vec4f,
   @location(1) colorWeight: vec4f,
+  @location(2) normalCount: vec4f,
 };
 
 struct VsOut {
   @builtin(position) position: vec4f,
   @location(0) color: vec4f,
   @location(1) local: vec2f,
+  @location(2) normal: vec3f,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -85,6 +87,7 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vertexIndex: u32) -> VsOut {
   out.position = clip;
   out.color = vec4f(in.colorWeight.rgb, 1.0);
   out.local = corner;
+  out.normal = normalize(in.normalCount.xyz);
   return out;
 }
 
@@ -95,7 +98,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     discard;
   }
   let alpha = smoothstep(1.0, 0.55, d);
-  let lit = in.color.rgb * (0.68 + alpha * 0.38);
+  let lightDir = normalize(vec3f(-0.25, 0.72, 0.64));
+  let diffuse = 0.52 + 0.38 * max(dot(normalize(in.normal), lightDir), 0.0);
+  let lit = in.color.rgb * (diffuse + alpha * 0.18);
   return vec4f(lit, 1.0);
 }
 `;
@@ -116,6 +121,7 @@ interface CaptureModel {
   cameraColoredSurfels: number;
   colorSource: 'camera' | 'depth' | 'mixed';
   keyframes: number;
+  normalEstimatedSurfels: number;
   rawSampleCount: number;
   surfelCount: number;
   surfels: Float32Array;
@@ -138,6 +144,11 @@ interface SurfelVoxelAccumulator {
   fallbackG: number;
   fallbackR: number;
   fallbackWeight: number;
+  normalEstimatedWeight: number;
+  normalWeight: number;
+  nx: number;
+  ny: number;
+  nz: number;
   radius: number;
   weight: number;
   x: number;
@@ -495,6 +506,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 attributes: [
                   { shaderLocation: 0, offset: 0, format: 'float32x4' },
                   { shaderLocation: 1, offset: 16, format: 'float32x4' },
+                  { shaderLocation: 2, offset: 32, format: 'float32x4' },
                 ],
                 stepMode: 'instance',
               },
@@ -870,6 +882,7 @@ function appendDepthSurfels(
   if (!inverseProjection) return { cameraColoredSurfels: 0, surfelCount: 0 };
   const values = new Float32Array(depth.data);
   const depthTransform = depth.normDepthBufferFromNormView.matrix;
+  const cameraPosition = extractPosition(cameraToWorld);
   const cameraBytes = camera ? new Uint8Array(camera.data) : null;
   const cameraTransform = camera?.normCameraImageFromNormView.matrix ?? null;
   let added = 0;
@@ -878,16 +891,25 @@ function appendDepthSurfels(
     const viewY = (gy + 0.5) / SAMPLE_GRID_Y;
     for (let gx = 0; gx < SAMPLE_GRID_X && added + existingSurfels < MAX_SURFELS; gx += 1) {
       const viewX = (gx + 0.5) / SAMPLE_GRID_X;
-      const depthPoint = transformNormalizedPoint(depthTransform, viewX, viewY);
-      const px = Math.round(clamp01(depthPoint.x) * Math.max(0, depth.width - 1));
-      const py = Math.round(clamp01(depthPoint.y) * Math.max(0, depth.height - 1));
-      const rawDepth = values[py * depth.width + px] ?? 0;
-      const depthMeters = rawDepth * depth.rawValueToMeters;
+      const depthMeters = sampleDepthMeters(values, depth, depthTransform, viewX, viewY);
       if (!Number.isFinite(depthMeters) || depthMeters < MIN_DEPTH_M || depthMeters > MAX_DEPTH_M) {
         continue;
       }
       const cameraPoint = unprojectViewSample(inverseProjection, viewX, viewY, depthMeters);
       const world = transformPoint(cameraToWorld, cameraPoint);
+      const normalSample = estimateWorldNormal(
+        values,
+        depth,
+        depthTransform,
+        inverseProjection,
+        cameraToWorld,
+        cameraPosition,
+        world,
+        viewX,
+        viewY,
+        depthMeters,
+        cameraPoint
+      );
       const sampledColor = camera && cameraBytes && cameraTransform
         ? sampleCameraColor(camera, cameraBytes, cameraTransform, viewX, viewY)
         : null;
@@ -895,11 +917,95 @@ function appendDepthSurfels(
       if (sampledColor) cameraColoredSurfels += 1;
       const radius = Math.max(0.6, 2.4 - depthMeters * 0.26);
       const weight = surfelSampleWeight(depthMeters) * (sampledColor ? 1 : -1);
-      store.push(world[0], world[1], world[2], radius, color[0], color[1], color[2], weight);
+      store.push(
+        world[0],
+        world[1],
+        world[2],
+        radius,
+        color[0],
+        color[1],
+        color[2],
+        weight,
+        normalSample.normal[0],
+        normalSample.normal[1],
+        normalSample.normal[2],
+        normalSample.confidence
+      );
       added += 1;
     }
   }
   return { cameraColoredSurfels, surfelCount: added };
+}
+
+function sampleDepthMeters(
+  values: Float32Array,
+  depth: WebXRCPUDepthInformation,
+  normDepthBufferFromNormView: Float32Array,
+  viewX: number,
+  viewY: number
+): number {
+  const depthPoint = transformNormalizedPoint(normDepthBufferFromNormView, viewX, viewY);
+  if (!Number.isFinite(depthPoint.x) || !Number.isFinite(depthPoint.y)) return Number.NaN;
+  const px = Math.round(clamp01(depthPoint.x) * Math.max(0, depth.width - 1));
+  const py = Math.round(clamp01(depthPoint.y) * Math.max(0, depth.height - 1));
+  const rawDepth = values[py * depth.width + px] ?? 0;
+  return rawDepth * depth.rawValueToMeters;
+}
+
+function estimateWorldNormal(
+  values: Float32Array,
+  depth: WebXRCPUDepthInformation,
+  depthTransform: Float32Array,
+  inverseProjection: Float32Array,
+  cameraToWorld: Float32Array,
+  cameraPosition: Vec3,
+  worldPoint: Vec3,
+  viewX: number,
+  viewY: number,
+  depthMeters: number,
+  cameraPoint: Vec3
+): { confidence: number; normal: Vec3 } {
+  const fallback = observationFacingNormal(cameraToWorld, cameraPoint);
+  const stepX = 1 / SAMPLE_GRID_X;
+  const stepY = 1 / SAMPLE_GRID_Y;
+  const xForward = viewX + stepX <= 0.98;
+  const yForward = viewY + stepY <= 0.98;
+  const neighborX = xForward ? viewX + stepX : viewX - stepX;
+  const neighborY = yForward ? viewY + stepY : viewY - stepY;
+  if (neighborX < 0 || neighborX > 1 || neighborY < 0 || neighborY > 1) {
+    return { confidence: 0.25, normal: fallback };
+  }
+
+  const depthX = sampleDepthMeters(values, depth, depthTransform, neighborX, viewY);
+  const depthY = sampleDepthMeters(values, depth, depthTransform, viewX, neighborY);
+  const discontinuityThreshold = Math.max(0.1, depthMeters * 0.06);
+  if (
+    !isUsableNeighborDepth(depthX, depthMeters, discontinuityThreshold) ||
+    !isUsableNeighborDepth(depthY, depthMeters, discontinuityThreshold)
+  ) {
+    return { confidence: 0.25, normal: fallback };
+  }
+
+  const cameraPointX = unprojectViewSample(inverseProjection, neighborX, viewY, depthX);
+  const cameraPointY = unprojectViewSample(inverseProjection, viewX, neighborY, depthY);
+  const vecX = xForward ? subtract(cameraPointX, cameraPoint) : subtract(cameraPoint, cameraPointX);
+  const vecY = yForward ? subtract(cameraPointY, cameraPoint) : subtract(cameraPoint, cameraPointY);
+  const normalCamera = cross(vecY, vecX);
+  if (Math.hypot(normalCamera[0], normalCamera[1], normalCamera[2]) <= 1e-5) {
+    return { confidence: 0.25, normal: fallback };
+  }
+  let normalWorld = normalize(transformDirection(cameraToWorld, normalize(normalCamera)));
+  if (dot(normalWorld, subtract(cameraPosition, worldPoint)) < 0) {
+    normalWorld = scaleVec3(normalWorld, -1);
+  }
+  return { confidence: 1, normal: normalWorld };
+}
+
+function isUsableNeighborDepth(depthMeters: number, centerDepthMeters: number, threshold: number): boolean {
+  return Number.isFinite(depthMeters) &&
+    depthMeters >= MIN_DEPTH_M &&
+    depthMeters <= MAX_DEPTH_M &&
+    Math.abs(depthMeters - centerDepthMeters) <= threshold;
 }
 
 function surfelSampleWeight(depthMeters: number): number {
@@ -933,6 +1039,11 @@ function fuseSurfels(points: number[]): SurfelVoxelAccumulator[] {
         fallbackG: 0,
         fallbackR: 0,
         fallbackWeight: 0,
+        normalEstimatedWeight: 0,
+        normalWeight: 0,
+        nx: 0,
+        ny: 0,
+        nz: 0,
         radius: 0,
         weight: 0,
         x: 0,
@@ -959,6 +1070,15 @@ function addSampleToVoxel(
   voxel.radius += (points[offset + 3] ?? 1) * weight;
   voxel.weight += weight;
   voxel.count += 1;
+  const normalConfidence = clamp(points[offset + 11] ?? 0, 0, 1);
+  const normalWeight = weight * normalConfidence;
+  voxel.nx += (points[offset + 8] ?? 0) * normalWeight;
+  voxel.ny += (points[offset + 9] ?? 0) * normalWeight;
+  voxel.nz += (points[offset + 10] ?? 0) * normalWeight;
+  voxel.normalWeight += normalWeight;
+  if (normalConfidence >= 1) {
+    voxel.normalEstimatedWeight += normalWeight;
+  }
   const r = (points[offset + 4] ?? 0) * weight;
   const g = (points[offset + 5] ?? 0) * weight;
   const b = (points[offset + 6] ?? 0) * weight;
@@ -993,6 +1113,7 @@ function buildModel(points: number[], keyframes: number): CaptureModel | null {
   const boundsMin: Vec3 = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
   const boundsMax: Vec3 = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
   let fusedCameraColoredSurfels = 0;
+  let normalEstimatedSurfels = 0;
   for (let index = 0; index < fused.length; index += 1) {
     const voxel = fused[index];
     if (!voxel) continue;
@@ -1001,6 +1122,9 @@ function buildModel(points: number[], keyframes: number): CaptureModel | null {
     const y = voxel.y * invWeight;
     const z = voxel.z * invWeight;
     const radius = clamp(voxel.radius * invWeight, 0.45, 2.6);
+    const normal = voxel.normalWeight > 0
+      ? normalize([voxel.nx / voxel.normalWeight, voxel.ny / voxel.normalWeight, voxel.nz / voxel.normalWeight])
+      : [0, 1, 0] as Vec3;
     const hasCameraColor = voxel.cameraWeight > 0;
     const colorWeight = hasCameraColor ? voxel.cameraWeight : Math.max(voxel.fallbackWeight, 1e-6);
     const offset = index * SURFEL_STRIDE_FLOATS;
@@ -1012,7 +1136,12 @@ function buildModel(points: number[], keyframes: number): CaptureModel | null {
     surfels[offset + 5] = hasCameraColor ? voxel.cameraG / colorWeight : voxel.fallbackG / colorWeight;
     surfels[offset + 6] = hasCameraColor ? voxel.cameraB / colorWeight : voxel.fallbackB / colorWeight;
     surfels[offset + 7] = voxel.weight;
+    surfels[offset + 8] = normal[0];
+    surfels[offset + 9] = normal[1];
+    surfels[offset + 10] = normal[2];
+    surfels[offset + 11] = voxel.count;
     if (hasCameraColor) fusedCameraColoredSurfels += 1;
+    if (voxel.normalEstimatedWeight > 0) normalEstimatedSurfels += 1;
     boundsMin[0] = Math.min(boundsMin[0], x);
     boundsMin[1] = Math.min(boundsMin[1], y);
     boundsMin[2] = Math.min(boundsMin[2], z);
@@ -1031,6 +1160,7 @@ function buildModel(points: number[], keyframes: number): CaptureModel | null {
     cameraColoredSurfels: fusedCameraColoredSurfels,
     colorSource,
     keyframes,
+    normalEstimatedSurfels,
     rawSampleCount,
     surfelCount,
     surfels,
@@ -1044,7 +1174,7 @@ function formatModelInfo(model: CaptureModel): string {
     model.boundsMax[1] - model.boundsMin[1],
     model.boundsMax[2] - model.boundsMin[2],
   ];
-  return `model: ${model.keyframes} keyframes - ${model.surfelCount} surfels from ${model.rawSampleCount} samples - ${model.colorSource} color - ${size
+  return `model: ${model.keyframes} keyframes - ${model.surfelCount} surfels from ${model.rawSampleCount} samples - ${model.normalEstimatedSurfels} normals - ${model.colorSource} color - ${size
     .map((value) => `${Math.max(0, value).toFixed(1)}m`)
     .join(' x ')}`;
 }
@@ -1056,12 +1186,16 @@ function serializeModelAsPly(model: CaptureModel): string {
     'comment standard-camera-app panoramic WebXR depth capture',
     `comment color_source ${model.colorSource}`,
     `comment camera_colored_surfels ${model.cameraColoredSurfels}`,
+    `comment estimated_normal_surfels ${model.normalEstimatedSurfels}`,
     `comment raw_surfel_samples ${model.rawSampleCount}`,
     `comment voxel_size_meters ${model.voxelSizeMeters.toFixed(3)}`,
     `element vertex ${model.surfelCount}`,
     'property float x',
     'property float y',
     'property float z',
+    'property float nx',
+    'property float ny',
+    'property float nz',
     'property uchar red',
     'property uchar green',
     'property uchar blue',
@@ -1072,6 +1206,9 @@ function serializeModelAsPly(model: CaptureModel): string {
       plyNumber(model.surfels[i] ?? 0),
       plyNumber(model.surfels[i + 1] ?? 0),
       plyNumber(model.surfels[i + 2] ?? 0),
+      plyNumber(model.surfels[i + 8] ?? 0),
+      plyNumber(model.surfels[i + 9] ?? 1),
+      plyNumber(model.surfels[i + 10] ?? 0),
       colorByte(model.surfels[i + 4] ?? 0),
       colorByte(model.surfels[i + 5] ?? 0),
       colorByte(model.surfels[i + 6] ?? 0),
@@ -1161,6 +1298,14 @@ function transformPoint(matrix: Float32Array, point: Vec3): Vec3 {
     matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12],
     matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13],
     matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2] + matrix[14],
+  ];
+}
+
+function transformDirection(matrix: Float32Array, point: Vec3): Vec3 {
+  return [
+    matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2],
+    matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2],
+    matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2],
   ];
 }
 
@@ -1310,6 +1455,19 @@ function extractForward(matrix: Float32Array): Vec3 {
 
 function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+function subtract(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function scaleVec3(v: Vec3, scale: number): Vec3 {
+  return [v[0] * scale, v[1] * scale, v[2] * scale];
+}
+
+function observationFacingNormal(cameraToWorld: Float32Array, cameraPoint: Vec3): Vec3 {
+  const pointToCamera = normalize([-cameraPoint[0], -cameraPoint[1], -cameraPoint[2]]);
+  return normalize(transformDirection(cameraToWorld, pointToCamera));
 }
 
 function angleDegrees(a: Vec3, b: Vec3): number {
