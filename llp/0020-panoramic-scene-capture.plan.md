@@ -1,7 +1,7 @@
 # LLP 0020: Panoramic WebXR scene capture
 
 **Type:** Plan
-**Status:** Proposed
+**Status:** Active
 **Systems:** demo, webxr-lidar-api, standard-camera-native-extension
 **Author:** Codex
 **Date:** 2026-05-26
@@ -9,21 +9,52 @@
 
 ## Summary
 
-This LLP describes a proposed demo that lets a user scan a room like a
+This LLP describes an experimental demo that lets a user scan a room like a
 panoramic camera, then press Capture to freeze the scan into a 3D scene model
 rendered with WebGPU.
 
-The right first version is a colored surfel/point-cloud model, not a full
-textured triangle mesh. ARKit already gives this repo camera pixels, LiDAR
-scene depth, and camera pose through the WebXR-shaped profile in
-[LLP 0013](./0013-webxr-lidar-depth-api.spec.md). Those are sufficient to
-accumulate a convincing panoramic 3D capture. A proper textured mesh needs more:
-mesh anchors or depth fusion, texture keyframe selection, UV generation, atlas
-packing, occlusion checks, and seam cleanup. That should be a later milestone.
+The right first version is a camera-colored surfel/point-cloud model, not a
+full textured triangle mesh. ARKit already gives this repo camera pixels,
+LiDAR scene depth, and camera pose through the WebXR-shaped profile in
+[LLP 0013](./0013-webxr-lidar-depth-api.spec.md). The implemented first
+milestone uses WebXR `"depth-sensing"` and `"camera-access"` to accumulate
+sparse RGB-D keyframes and renders the frozen surfel model with WebGPU. A
+proper textured mesh needs more: mesh anchors or depth fusion, texture keyframe
+selection, UV generation, atlas packing, occlusion checks, and seam cleanup.
+That should be a later milestone.
 
 The demo must remain explicitly experimental. It does not make WebXR part of
 the Media Capture subset, and it does not expose LiDAR through
 `navigator.mediaDevices`.
+
+## Implementation status
+
+The current implementation lives in
+[`src/app/(tabs)/(demo)/panoramic-scene-capture.tsx`](<../src/app/(tabs)/(demo)/panoramic-scene-capture.tsx>).
+
+Implemented:
+
+- `scan-live`: starts an explicit user-initiated `immersive-ar` session with
+  required `"depth-sensing"` and `"camera-access"` features.
+- Keyframe accumulation: accepts sparse frames using time, rotation, and
+  translation thresholds, capped by keyframe and surfel counts.
+- Colored surfel reconstruction: samples `XRView.camera` through the repo-local
+  `WebXRCPUCameraBinding` analog of Raw Camera Access, maps normalized view
+  coordinates into the camera image with `normCameraImageFromNormView`, and
+  falls back to depth palette colors when camera pixels are unavailable.
+- `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
+  orbit/pinch interaction, depth testing, and model statistics.
+- Export: writes an ASCII `.ply` model into the app Documents directory and
+  opens the system share sheet so the user can save it to Files.
+
+Not yet implemented:
+
+- Voxel deduplication / weighted fusion.
+- Geometry-grade ARKit intrinsics exposure or a native unprojection helper.
+- Physical-device proof that a captured flat wall has correct metric scale and
+  camera/depth alignment.
+- ARKit mesh-anchor snapshot support.
+- UV-mapped texture atlases or true textured mesh export.
 
 ## Standards positioning
 
