@@ -15,7 +15,6 @@ import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import {
   closeCameraFrame,
-  createBgraCameraFrameSource,
   getCameraFrameByteLength,
   getCameraFrameNumber,
   getCameraFrameTextureFormat,
@@ -36,9 +35,7 @@ import { ImageCapture } from '../../../../modules/standard-camera';
 // `ImageCapture`, and uploads a fresh `grabFrame()` result at a 30 fps target
 // while the cube still renders every animation tick. The frame is uploaded into
 // a `bgra8unorm` GPU texture and sampled by the cube's fragment shader — the
-// same shape an unmodified browser WebGPU demo would take. When no stream is
-// active (camera stopped or simulator with no AVCaptureDevice), the loop falls
-// back to a procedurally-generated test pattern uploaded the same way.
+// same shape an unmodified browser WebGPU demo would take.
 //
 // Spec surface used:
 //   - navigator.mediaDevices.getUserMedia (Media Capture and Streams)
@@ -134,8 +131,6 @@ const CUBE_VERTICES = new Float32Array([
   -1, -1, 1, 0, 0,
 ]);
 
-const SYNTHETIC_SIZE = 256;
-
 export default function CubeOfCamerasScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
@@ -162,10 +157,11 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   }, [cameraFacing]);
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
+      if (facingMode === cameraFacing) return;
       if (facingMode === 'environment' && backFacingDisabled) return;
       applyConstraints({ facingMode });
     },
-    [applyConstraints, backFacingDisabled]
+    [applyConstraints, backFacingDisabled, cameraFacing]
   );
 
   // Defense-in-depth start-on-mount: the provider auto-starts at app launch,
@@ -187,7 +183,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream, cameraStatus, userStopped, externalLocked]);
   const [status, setStatus] = React.useState('initializing');
-  const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
+  const [source, setSource] = React.useState<'pending' | 'camera'>('pending');
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
@@ -199,10 +195,12 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   React.useEffect(() => {
     if (!stream) {
       imageCaptureRef.current = null;
+      setSource('pending');
       // eslint-disable-next-line no-console
       console.log(`CUBE_TRACE stream-cleared`);
       return;
     }
+    setSource('pending');
     const track = stream.getVideoTracks()[0];
     if (!track) {
       imageCaptureRef.current = null;
@@ -285,11 +283,9 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
         const canvasWidth = canvas.width;
         const canvasHeight = canvas.height;
 
-        const depthTexture = device.createTexture({
-          size: { width: canvasWidth, height: canvasHeight },
-          format: 'depth24plus',
-          usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        });
+        let depthTexture: GPUTexture | null = null;
+        let depthWidth = 0;
+        let depthHeight = 0;
 
         const sampler = device.createSampler({
           magFilter: 'linear',
@@ -336,89 +332,106 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           return bindGroup;
         };
 
-        const syntheticPixels = new Uint8Array(SYNTHETIC_SIZE * SYNTHETIC_SIZE * 4);
+        const ensureDepthTexture = (width: number, height: number): GPUTexture => {
+          if (depthTexture && depthWidth === width && depthHeight === height) {
+            return depthTexture;
+          }
+          depthTexture?.destroy();
+          depthTexture = device.createTexture({
+            size: { width, height },
+            format: 'depth24plus',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+          });
+          depthWidth = width;
+          depthHeight = height;
+          return depthTexture;
+        };
+
         const startedAt = Date.now();
         let frames = 0;
         let lastReport = startedAt;
         let lastUpload = 0;
-        let lastReportedSource: 'camera' | 'synthetic' | null = null;
-        let activeSource: 'camera' | 'synthetic' = 'synthetic';
-        let activeWidth = SYNTHETIC_SIZE;
-        let activeHeight = SYNTHETIC_SIZE;
+        let hasReportedCameraSource = false;
+        let activeSource: 'pending' | 'camera' = 'pending';
+        let activeWidth = 0;
+        let activeHeight = 0;
         let lastSeenFrameNumber: number | null = null;
         let newFramesThisSecond = 0;
         let grabsThisSecond = 0;
+        let cameraGrabInFlight = false;
 
         const aspect = canvasWidth / canvasHeight;
         const projection = mat4Perspective((60 * Math.PI) / 180, aspect, 0.1, 100);
         const view = mat4Translate(0, 0, -5);
         const viewProjection = mat4Multiply(projection, view);
 
-        const renderFrame = async (): Promise<void> => {
+        const uploadCameraFrame = (frame: CameraFrameUploadSource): void => {
+          if (cancelled) return;
+          if (!hasReportedCameraSource) {
+            hasReportedCameraSource = true;
+            setSource('camera');
+            // eslint-disable-next-line no-console
+            console.log(
+              `CUBE_TRACE source-change ${JSON.stringify({ source: 'camera', w: frame.width, h: frame.height })}`
+            );
+          }
+
+          const currentBindGroup = ensureTexture(frame.width, frame.height, getCameraFrameTextureFormat(frame));
+          profile.count('cameraUploads');
+          profile.count('uploadedBytes', getCameraFrameByteLength(frame));
+          profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
+          activeSource = 'camera';
+          activeWidth = frame.width;
+          activeHeight = frame.height;
+          bindGroup = currentBindGroup;
+          lastUpload = Date.now();
+        };
+
+        const scheduleCameraUpload = (ic: ImageCapture): void => {
+          if (cameraGrabInFlight) return;
+          cameraGrabInFlight = true;
+          void (async () => {
+            let frame: CameraFrameUploadSource | null = null;
+            try {
+              frame = await profile.timeAsync('grabFrame', () => ic.grabFrame());
+              if (cancelled || imageCaptureRef.current !== ic) return;
+              grabsThisSecond++;
+              const frameNumber = getCameraFrameNumber(frame);
+              if (frameNumber !== null) profile.recordFrameNumber(frameNumber);
+              if (frameNumber !== null && frameNumber !== lastSeenFrameNumber) {
+                newFramesThisSecond++;
+                lastSeenFrameNumber = frameNumber;
+              }
+              uploadCameraFrame(frame);
+              setLastGrabError(null);
+            } catch (e) {
+              if (!cancelled && imageCaptureRef.current === ic) {
+                const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+                setLastGrabError(reason);
+                lastUpload = Date.now();
+              }
+            } finally {
+              if (frame) closeCameraFrame(frame);
+              cameraGrabInFlight = false;
+            }
+          })();
+        };
+
+        const renderFrame = (): void => {
           if (cancelled) return;
           const now = Date.now();
           const elapsed = (now - startedAt) / 1000;
-          const shouldUpload = bindGroup == null || now - lastUpload >= CAMERA_UPLOAD_INTERVAL_MS;
-          let frameToClose: CameraFrameUploadSource | null = null;
+          const shouldUpload = now - lastUpload >= CAMERA_UPLOAD_INTERVAL_MS;
 
           if (shouldUpload) {
             // Pull from the active ImageCapture (set by the stream effect
-            // whenever the context's stream changes). Fall back to synthetic
-            // whenever there's no capture or the camera hasn't produced a
-            // frame yet. Uploads are capped at 30 fps so one expensive
-            // pixel-buffer copy cannot slow every visual animation frame.
+            // whenever the context's stream changes). Camera grabs run
+            // outside the render path so one
+            // expensive browser ImageCapture copy cannot stop animation.
             const ic = imageCaptureRef.current;
-            let frame: CameraFrameUploadSource | null = null;
-            let frameSource: 'camera' | 'synthetic' = 'synthetic';
             if (ic) {
-              try {
-                const bitmap = await profile.timeAsync('grabFrame', () => ic.grabFrame());
-                frame = bitmap;
-                frameSource = 'camera';
-                grabsThisSecond++;
-                const frameNumber = getCameraFrameNumber(bitmap);
-                if (frameNumber !== null) profile.recordFrameNumber(frameNumber);
-                if (frameNumber !== null && frameNumber !== lastSeenFrameNumber) {
-                  newFramesThisSecond++;
-                  lastSeenFrameNumber = frameNumber;
-                }
-              } catch (e) {
-                const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-                setLastGrabError(reason);
-              }
+              scheduleCameraUpload(ic);
             }
-            if (!frame) {
-              fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
-              frame = createBgraCameraFrameSource(SYNTHETIC_SIZE, SYNTHETIC_SIZE, syntheticPixels);
-            }
-            if (cancelled) return;
-
-            if (frameSource !== lastReportedSource) {
-              lastReportedSource = frameSource;
-              setSource(frameSource);
-              // eslint-disable-next-line no-console
-              console.log(
-                `CUBE_TRACE source-change ${JSON.stringify({ source: frameSource, w: frame.width, h: frame.height })}`
-              );
-            }
-
-            const currentBindGroup = ensureTexture(frame.width, frame.height, getCameraFrameTextureFormat(frame));
-            profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
-            profile.count('uploadedBytes', getCameraFrameByteLength(frame));
-            profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
-            activeSource = frameSource;
-            activeWidth = frame.width;
-            activeHeight = frame.height;
-            frameToClose = frame;
-            bindGroup = currentBindGroup;
-            lastUpload = now;
-          }
-
-          if (!bindGroup) {
-            rafRef.current = requestAnimationFrame(() => {
-              void renderFrame();
-            });
-            return;
           }
 
           const model = mat4Multiply(mat4RotateY(elapsed * 0.7), mat4RotateX(elapsed * 0.4));
@@ -428,31 +441,38 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           device.queue.writeBuffer(uniformBuffer, 0, uniformScratch);
 
           const renderStart = nowMs();
+          const presentationTexture = context.getCurrentTexture();
+          const presentationWidth = presentationTexture.width ?? canvasWidth;
+          const presentationHeight = presentationTexture.height ?? canvasHeight;
           const encoder = device.createCommandEncoder();
-          const pass = encoder.beginRenderPass({
-            colorAttachments: [
-              {
-                view: context.getCurrentTexture().createView(),
-                clearValue: { r: 0.04, g: 0.06, b: 0.1, a: 1 },
-                loadOp: 'clear',
-                storeOp: 'store',
-              },
-            ],
-            depthStencilAttachment: {
-              view: depthTexture.createView(),
-              depthClearValue: 1,
-              depthLoadOp: 'clear',
-              depthStoreOp: 'store',
-            },
-          });
-          pass.setPipeline(pipeline);
-          pass.setBindGroup(0, bindGroup);
-          pass.setVertexBuffer(0, vertexBuffer);
-          pass.draw(CUBE_VERTEX_COUNT);
+          const colorAttachment = {
+            view: presentationTexture.createView(),
+            clearValue: { r: 0.04, g: 0.06, b: 0.1, a: 1 },
+            loadOp: 'clear' as const,
+            storeOp: 'store' as const,
+          };
+          const pass = bindGroup
+            ? encoder.beginRenderPass({
+                colorAttachments: [colorAttachment],
+                depthStencilAttachment: {
+                  view: ensureDepthTexture(presentationWidth, presentationHeight).createView(),
+                  depthClearValue: 1,
+                  depthLoadOp: 'clear',
+                  depthStoreOp: 'store',
+                },
+              })
+            : encoder.beginRenderPass({
+                colorAttachments: [colorAttachment],
+              });
+          if (bindGroup) {
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, bindGroup);
+            pass.setVertexBuffer(0, vertexBuffer);
+            pass.draw(CUBE_VERTEX_COUNT);
+          }
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
-          if (frameToClose) closeCameraFrame(frameToClose);
           profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           frames++;
@@ -496,7 +516,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             rafRef.current = null;
           }
           if (cameraTexture) cameraTexture.destroy();
-          depthTexture.destroy();
+          depthTexture?.destroy();
           vertexBuffer.destroy();
           uniformBuffer.destroy();
         };
@@ -524,12 +544,10 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   // button claiming "Stop" against a dead camera.
   const cameraOn = cameraStatus === 'playing';
   const subtitle = !cameraOn
-    ? 'Camera stopped — synthetic frames standing in. Tap Start camera to share the live feed with the Home tab too.'
+    ? 'Camera stopped. Tap Start camera to share the live feed with the Home tab too.'
     : source === 'camera'
       ? 'Live camera frames via getUserMedia → ImageCapture → WebGPU — shared with the Home tab.'
-        : source === 'synthetic'
-        ? 'Stream live but no frames yet (cold start or simulator without an AVCaptureDevice).'
-        : 'Opening the camera…';
+      : 'Opening the camera…';
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
   const canvasWidth = isDesktop
@@ -577,25 +595,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
       />
     </ScrollView>
   );
-}
-
-// Time-modulated test pattern: diagonal stripes whose hue shifts with t and
-// whose phase shifts so the texture is obviously alive frame to frame. The
-// channel order is B, G, R, A so the bytes go into a `bgra8unorm` texture
-// without a swap — matching what the camera path delivers.
-function fillTestPattern(buf: Uint8Array, size: number, t: number): void {
-  const phase = (t * 60) | 0;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      const diag = (x + y + phase) & 0xff;
-      const ring = ((x * x + y * y) >> 4) & 0xff;
-      buf[i + 0] = (255 - diag + (phase >> 1)) & 0xff;
-      buf[i + 1] = (ring + phase) & 0xff;
-      buf[i + 2] = diag;
-      buf[i + 3] = 255;
-    }
-  }
 }
 
 // Column-major 4x4 matrix helpers. WebGPU uniforms expect column-major
