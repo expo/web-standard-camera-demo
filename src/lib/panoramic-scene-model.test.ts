@@ -5,13 +5,19 @@ import {
   buildModel,
   formatFilesLocation,
   invertMatrix4,
+  MAX_KEYFRAMES,
+  MAX_SURFELS,
+  MIN_KEYFRAME_SURFELS,
   sampleCameraColor,
   serializeModelAsPly,
+  shouldAcceptPanoramicKeyframe,
   SURFEL_STRIDE_FLOATS,
   transformPoint,
   unprojectViewSample,
+  type KeyframeSnapshot,
   type PanoramicCameraImage,
   type PanoramicDepthInformation,
+  type Vec3,
 } from './panoramic-scene-model';
 
 const IDENTITY_4X4 = new Float32Array([
@@ -88,6 +94,54 @@ test('appendDepthSurfels converts WebXR-shaped RGB-D frame data into camera-colo
   expect(points[6]).toBeCloseTo(0, 6);
 });
 
+test('shouldAcceptPanoramicKeyframe rejects capped, sparse, and redundant frames', () => {
+  const last = snapshot({ time: 1000 });
+  const base = {
+    candidateSurfels: MIN_KEYFRAME_SURFELS,
+    existingSurfels: 0,
+    forward: [0, 0, -1] as Vec3,
+    keyframes: 1,
+    last,
+    position: [0, 0, 0] as Vec3,
+    time: 1500,
+  };
+
+  expect(shouldAcceptPanoramicKeyframe({ ...base, keyframes: MAX_KEYFRAMES }).reason).toBe('max-keyframes');
+  expect(shouldAcceptPanoramicKeyframe({ ...base, existingSurfels: MAX_SURFELS }).reason).toBe('max-surfels');
+  expect(shouldAcceptPanoramicKeyframe({ ...base, candidateSurfels: MIN_KEYFRAME_SURFELS - 1 }).reason).toBe('too-few-surfels');
+  expect(shouldAcceptPanoramicKeyframe({ ...base, position: [0.2, 0, 0], time: 1100 }).reason).toBe('too-soon');
+  expect(shouldAcceptPanoramicKeyframe({ ...base, position: [0.02, 0, 0] }).reason).toBe('too-similar');
+});
+
+test('shouldAcceptPanoramicKeyframe accepts first, translated, and rotated keyframes', () => {
+  const last = snapshot({ time: 1000 });
+  const base = {
+    candidateSurfels: MIN_KEYFRAME_SURFELS,
+    existingSurfels: 0,
+    keyframes: 1,
+    last,
+    time: 1500,
+  };
+
+  expect(shouldAcceptPanoramicKeyframe({
+    ...base,
+    forward: [0, 0, -1],
+    keyframes: 0,
+    last: null,
+    position: [0, 0, 0],
+  }).accepted).toBe(true);
+  expect(shouldAcceptPanoramicKeyframe({
+    ...base,
+    forward: [0, 0, -1],
+    position: [0.14, 0, 0],
+  }).accepted).toBe(true);
+  expect(shouldAcceptPanoramicKeyframe({
+    ...base,
+    forward: [0.22, 0, -0.98],
+    position: [0, 0, 0],
+  }).accepted).toBe(true);
+});
+
 test('serializeModelAsPly emits vertex colors and normals for Files export', () => {
   const model = buildModel([
     ...surfelSample({ x: 0, y: 0, z: -1, r: 1, g: 0.5, b: 0, weight: 1 }),
@@ -148,6 +202,14 @@ function exactArrayBuffer(view: Uint8Array | Float32Array): ArrayBuffer {
   const copy = new Uint8Array(view.byteLength);
   copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   return copy.buffer;
+}
+
+function snapshot({ forward = [0, 0, -1], position = [0, 0, 0], time }: {
+  forward?: Vec3;
+  position?: Vec3;
+  time: number;
+}): KeyframeSnapshot {
+  return { forward, position, time };
 }
 
 function surfelSample({

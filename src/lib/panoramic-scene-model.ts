@@ -4,6 +4,11 @@ export const SAMPLE_GRID_Y = 34;
 export const MIN_DEPTH_M = 0.35;
 export const MAX_DEPTH_M = 4.8;
 export const VOXEL_SIZE_M = 0.045;
+export const MAX_KEYFRAMES = 36;
+export const KEYFRAME_MIN_INTERVAL_MS = 280;
+export const KEYFRAME_MIN_TRANSLATION_M = 0.1;
+export const KEYFRAME_MIN_ROTATION_DEG = 10;
+export const MIN_KEYFRAME_SURFELS = 96;
 export const SURFEL_STRIDE_FLOATS = 12;
 export const SURFEL_STRIDE_BYTES = SURFEL_STRIDE_FLOATS * 4;
 
@@ -27,6 +32,42 @@ export interface ViewerState {
   distanceScale: number;
   pitch: number;
   yaw: number;
+}
+
+export interface KeyframeSnapshot {
+  forward: Vec3;
+  position: Vec3;
+  time: number;
+}
+
+export type KeyframeRejectionReason =
+  | 'max-keyframes'
+  | 'max-surfels'
+  | 'too-few-surfels'
+  | 'too-soon'
+  | 'too-similar';
+
+export interface KeyframeAcceptanceDecision {
+  accepted: boolean;
+  reason: KeyframeRejectionReason | null;
+  rotationDeg: number;
+  translationM: number;
+}
+
+export interface KeyframeAcceptanceInput {
+  candidateSurfels?: number;
+  existingSurfels: number;
+  forward: Vec3;
+  keyframes: number;
+  last: KeyframeSnapshot | null;
+  maxKeyframes?: number;
+  maxSurfels?: number;
+  minIntervalMs?: number;
+  minRotationDeg?: number;
+  minSurfels?: number;
+  minTranslationM?: number;
+  position: Vec3;
+  time: number;
 }
 
 export interface PanoramicRigidTransform {
@@ -69,6 +110,45 @@ export interface SurfelVoxelAccumulator {
   x: number;
   y: number;
   z: number;
+}
+
+export function shouldAcceptPanoramicKeyframe({
+  candidateSurfels,
+  existingSurfels,
+  forward,
+  keyframes,
+  last,
+  maxKeyframes = MAX_KEYFRAMES,
+  maxSurfels = MAX_SURFELS,
+  minIntervalMs = KEYFRAME_MIN_INTERVAL_MS,
+  minRotationDeg = KEYFRAME_MIN_ROTATION_DEG,
+  minSurfels = MIN_KEYFRAME_SURFELS,
+  minTranslationM = KEYFRAME_MIN_TRANSLATION_M,
+  position,
+  time,
+}: KeyframeAcceptanceInput): KeyframeAcceptanceDecision {
+  if (keyframes >= maxKeyframes) {
+    return { accepted: false, reason: 'max-keyframes', rotationDeg: 0, translationM: 0 };
+  }
+  if (existingSurfels >= maxSurfels) {
+    return { accepted: false, reason: 'max-surfels', rotationDeg: 0, translationM: 0 };
+  }
+  if (candidateSurfels !== undefined && candidateSurfels < minSurfels) {
+    return { accepted: false, reason: 'too-few-surfels', rotationDeg: 0, translationM: 0 };
+  }
+  if (!last) {
+    return { accepted: true, reason: null, rotationDeg: 0, translationM: 0 };
+  }
+
+  const translationM = distance(position, last.position);
+  const rotationDeg = angleDegrees(forward, last.forward);
+  if (time - last.time < minIntervalMs) {
+    return { accepted: false, reason: 'too-soon', rotationDeg, translationM };
+  }
+  if (translationM < minTranslationM && rotationDeg < minRotationDeg) {
+    return { accepted: false, reason: 'too-similar', rotationDeg, translationM };
+  }
+  return { accepted: true, reason: null, rotationDeg, translationM };
 }
 
 export function appendDepthSurfels(

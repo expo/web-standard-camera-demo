@@ -39,6 +39,10 @@ Implemented:
 - Keyframe accumulation: accepts sparse frames using time, rotation, and
   translation thresholds, capped by keyframe and surfel counts, with a simple
   stage-level scan coverage meter.
+- Keyframe quality gate: candidate frames are sampled into a scratch buffer and
+  retained only when they satisfy the time/pose thresholds and contribute a
+  minimum number of valid depth surfels, with deterministic tests for capped,
+  sparse, redundant, translated, and rotated keyframes.
 - Colored surfel reconstruction: samples `XRView.camera` through the repo-local
   `WebXRCPUCameraBinding` analog of Raw Camera Access, maps normalized view
   coordinates into the camera image with `normCameraImageFromNormView`, and

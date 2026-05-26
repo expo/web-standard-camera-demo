@@ -13,23 +13,24 @@ import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import {
-  angleDegrees,
   appendDepthSurfels,
   buildModel,
   clamp,
-  distance,
   extractForward,
   extractPosition,
   formatFilesLocation,
   formatModelInfo,
   formatQualityInfo,
   makeModelViewProjection,
+  MAX_KEYFRAMES,
   MAX_SURFELS,
+  MIN_KEYFRAME_SURFELS,
   performanceNow,
   serializeModelAsPly,
+  shouldAcceptPanoramicKeyframe,
   SURFEL_STRIDE_BYTES,
   type CaptureModel,
-  type Vec3,
+  type KeyframeSnapshot,
   type ViewerState,
 } from '@/lib/panoramic-scene-model';
 import {
@@ -47,10 +48,6 @@ import {
 // or mesh extension. The captured model is a camera-colored surfel cloud
 // rendered with WebGPU.
 
-const MAX_KEYFRAMES = 36;
-const KEYFRAME_MIN_INTERVAL_MS = 280;
-const KEYFRAME_MIN_TRANSLATION_M = 0.1;
-const KEYFRAME_MIN_ROTATION_DEG = 10;
 const QUAD_VERTEX_COUNT = 6;
 
 const CAPTURE_MODEL_SHADER = /* wgsl */ `
@@ -127,12 +124,6 @@ type CaptureStatus =
   | 'captured'
   | 'ending'
   | 'error';
-
-interface KeyframeSnapshot {
-  forward: Vec3;
-  position: Vec3;
-  time: number;
-}
 
 const DEFAULT_VIEWER_STATE: ViewerState = {
   distanceScale: 1,
@@ -796,33 +787,52 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     cameraToWorld: Float32Array,
     time: number
   ): boolean {
-    if (keyframeCountRef.current >= MAX_KEYFRAMES || surfelCountRef.current >= MAX_SURFELS) {
-      return false;
-    }
     const position = extractPosition(cameraToWorld);
     const forward = extractForward(cameraToWorld);
-    const last = keyframeRef.current;
-    if (last) {
-      const elapsed = time - last.time;
-      const translation = distance(position, last.position);
-      const rotationDeg = angleDegrees(forward, last.forward);
-      if (
-        elapsed < KEYFRAME_MIN_INTERVAL_MS ||
-        (translation < KEYFRAME_MIN_TRANSLATION_M && rotationDeg < KEYFRAME_MIN_ROTATION_DEG)
-      ) {
-        return false;
-      }
+    const preSampleDecision = shouldAcceptPanoramicKeyframe({
+      existingSurfels: surfelCountRef.current,
+      forward,
+      keyframes: keyframeCountRef.current,
+      last: keyframeRef.current,
+      position,
+      time,
+    });
+    if (!preSampleDecision.accepted) {
+      return false;
     }
 
+    const candidateStore: number[] = [];
     const added = appendDepthSurfels(
       depth,
       camera,
       projectionMatrix,
       cameraToWorld,
-      pointStoreRef.current,
+      candidateStore,
       surfelCountRef.current
     );
-    if (added.surfelCount <= 0) return false;
+    // @ref LLP 0020#keyframe-policy - A retained keyframe must contribute
+    // enough valid depth samples, not merely pass the pose/time threshold.
+    const sampleDecision = shouldAcceptPanoramicKeyframe({
+      candidateSurfels: added.surfelCount,
+      existingSurfels: surfelCountRef.current,
+      forward,
+      keyframes: keyframeCountRef.current,
+      last: keyframeRef.current,
+      position,
+      time,
+    });
+    if (!sampleDecision.accepted) {
+      if (sampleDecision.reason === 'too-few-surfels' && added.surfelCount > 0) {
+        setFrameInfo(
+          `waiting for fuller depth frame: ${added.surfelCount}/${MIN_KEYFRAME_SURFELS} samples`
+        );
+      }
+      return false;
+    }
+
+    for (const value of candidateStore) {
+      pointStoreRef.current.push(value);
+    }
     keyframeCountRef.current += 1;
     surfelCountRef.current += added.surfelCount;
     keyframeRef.current = { forward, position, time };
