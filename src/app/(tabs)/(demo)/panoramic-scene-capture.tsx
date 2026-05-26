@@ -506,6 +506,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         let surfelBuffer: GPUBuffer | null = null;
         let depthTexture: GPUTexture | null = null;
         let lastModelRevision = -1;
+        let renderedCapturedModelRevision = -1;
         let frames = 0;
         let lastFpsReport = Date.now();
 
@@ -534,8 +535,9 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         const render = (): void => {
           if (cancelled) return;
           const currentModel = modelRef.current;
-          if (modelRevisionRef.current !== lastModelRevision) {
-            lastModelRevision = modelRevisionRef.current;
+          const currentModelRevision = modelRevisionRef.current;
+          if (currentModelRevision !== lastModelRevision) {
+            lastModelRevision = currentModelRevision;
             rebuildSurfelBuffer(currentModel);
           }
 
@@ -572,15 +574,23 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 }
               : undefined,
           });
+          let didDrawCapturedModel = false;
           if (surfelBuffer && currentModel && currentModel.surfelCount > 0) {
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
             pass.setVertexBuffer(0, surfelBuffer);
             pass.draw(QUAD_VERTEX_COUNT, currentModel.surfelCount);
+            didDrawCapturedModel =
+              statusRef.current === 'captured' &&
+              renderedCapturedModelRevision !== currentModelRevision;
           }
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          if (didDrawCapturedModel && currentModel) {
+            renderedCapturedModelRevision = currentModelRevision;
+            logRenderMetrics(currentModel, currentModelRevision, width, height, presentationFormat);
+          }
 
           frames += 1;
           const now = Date.now();
@@ -875,6 +885,27 @@ function logExportMetrics(model: CaptureModel, uri: string, filename: string, by
     keyframes: model.keyframes,
     surfelCount: model.surfelCount,
     uri,
+  }));
+}
+
+function logRenderMetrics(
+  model: CaptureModel,
+  modelRevision: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  presentationFormat: GPUTextureFormat
+): void {
+  console.log('PANORAMIC_RENDER_METRICS', JSON.stringify({
+    buildMs: Number(model.buildMs.toFixed(2)),
+    cameraColorPercent: Number((100 * model.cameraColoredSurfels / Math.max(model.surfelCount, 1)).toFixed(1)),
+    canvasHeight,
+    canvasWidth,
+    keyframes: model.keyframes,
+    modelRevision,
+    normalPercent: Number((100 * model.normalEstimatedSurfels / Math.max(model.surfelCount, 1)).toFixed(1)),
+    presentationFormat,
+    rawSampleCount: model.rawSampleCount,
+    surfelCount: model.surfelCount,
   }));
 }
 
