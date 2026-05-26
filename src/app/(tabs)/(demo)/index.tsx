@@ -50,6 +50,15 @@ export default function DemoCatalogScreen(): React.JSX.Element {
       />
 
       <DemoChoiceCard
+        accentColor="#a78bfa"
+        description="The same LiDAR depth story expressed through a small navigator.xr research profile."
+        detail="navigator.xr -> XRFrame depth/camera bytes -> GPUTextures -> WGSL"
+        href="/lidar-depth-webxr"
+        status="experimental"
+        title="WebXR LiDAR depth"
+      />
+
+      <DemoChoiceCard
         accentColor="#60a5fa"
         description="A spinning WebGPU cube textured with frames from the shared camera stream."
         detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL"

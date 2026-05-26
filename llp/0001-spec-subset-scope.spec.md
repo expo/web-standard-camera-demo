@@ -28,11 +28,12 @@ standard defines depth semantics. See [LLP 0012](./0012-lidar-webgpu-depth-demo.
 The relevant discontinued W3C source slices live in
 [LLP 0018](./0018-mediacapture-depth-spec-slices.spec.md).
 
-WebXR depth sensing is also out of scope for this package. It is the better
-active standards model for AR depth, but implementing it would require an XR
-session/runtime surface rather than an extension of this repo's Media Capture
-subset. [LLP 0013](./0013-webxr-lidar-depth-api.spec.md) specifies what that
-research surface would look like if this repo ever prototypes it.
+WebXR depth sensing is also out of scope for this package's Media Capture
+surface. It is the better active standards model for AR depth, but it requires
+an XR session/runtime surface rather than an extension of this repo's
+`navigator.mediaDevices` subset. [LLP 0013](./0013-webxr-lidar-depth-api.spec.md)
+specifies and tracks the separate research implementation used by the WebXR
+LiDAR demo route.
 
 ### Audio is in scope (as of 2026-05-22)
 

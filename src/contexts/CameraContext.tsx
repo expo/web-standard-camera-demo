@@ -3,6 +3,7 @@ import * as React from 'react';
 
 import {
   NativeStandardCamera,
+  setWebXRDepthCameraLockHandlers,
   type NativeLiDARDepthCapabilities,
   type NativeLiDARDepthSessionEvent,
 } from '../../modules/standard-camera';
@@ -310,6 +311,15 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       unlockExternal();
     }
   }, [unlockExternal]);
+
+  React.useEffect(() => {
+    // @ref LLP 0013#xr-request-session — WebXR research sessions use the same
+    // camera handoff path as the native LiDAR sidecar before ARKit starts.
+    setWebXRDepthCameraLockHandlers({ lockExternal, unlockExternal });
+    return () => {
+      setWebXRDepthCameraLockHandlers(null);
+    };
+  }, [lockExternal, unlockExternal]);
 
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {

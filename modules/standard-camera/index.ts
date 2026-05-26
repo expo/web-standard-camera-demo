@@ -23,6 +23,35 @@ export { MediaStream } from './src/MediaStream';
 export { MediaStreamTrack } from './src/MediaStreamTrack';
 export { Video } from './src/HTMLVideoElement';
 export type { HTMLVideoElement, VideoProps } from './src/HTMLVideoElement';
+export {
+  WebXRCPUDepthInformation,
+  WebXRCPUCameraImage,
+  WebXRCamera,
+  WebXRFrame,
+  WebXRReferenceSpace,
+  WebXRRigidTransform,
+  WebXRSession,
+  WebXRSystem,
+  WebXRView,
+  WebXRViewerPose,
+  installWebXRDepthProfile,
+  runWithWebXRUserActivation,
+  setWebXRDepthCameraLockHandlers,
+} from './src/WebXRDepthProfile';
+export type {
+  WebXRCameraAccessStateInit,
+  WebXRCameraFormat,
+  WebXRCameraUsage,
+  WebXRDepthDataFormat,
+  WebXRDepthStateInit,
+  WebXRDepthType,
+  WebXRDepthUsage,
+  WebXRFeatureDescriptor,
+  WebXRFrameRequestCallback,
+  WebXRReferenceSpaceType,
+  WebXRSessionInit,
+  WebXRSessionMode,
+} from './src/WebXRDepthProfile';
 export type {
   MediaStreamConstraints,
   MediaTrackConstraints,

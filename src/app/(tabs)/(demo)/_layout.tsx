@@ -132,6 +132,13 @@ export default function DemoStackLayout(): React.JSX.Element {
           unstable_headerRightItems: lidarHeaderRightItems,
         }}
       />
+      <Stack.Screen
+        name="lidar-depth-webxr"
+        options={{
+          title: 'WebXR LiDAR',
+          ...DARK_DEMO_HEADER_OPTIONS,
+        }}
+      />
     </Stack>
   );
 }

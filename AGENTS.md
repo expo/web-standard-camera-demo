@@ -37,3 +37,7 @@ bun run test:ios
 ```
 
 This boots an iOS 26 simulator, installs the app, deep-links to the test runner, parses results from the simulator log, and shuts the simulator down. Do not mark a spec change "done" until the runner is green.
+
+## Findings
+
+- WebGPU camera/depth demos: avoid per-frame JS pixel swizzles or format conversions. In the LiDAR demos, converting 960x720 BGRA preview frames to RGBA in JS cost about 140ms per upload on an iPhone 15 Pro and dropped rendering to about 6fps. Prefer matching the WebGPU texture format to the native buffer format (for example `bgra8unorm`) and verify with physical-device `WEBGPU_DEMO_PROFILE` logs before optimizing shader code.

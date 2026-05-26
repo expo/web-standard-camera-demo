@@ -1,25 +1,30 @@
 import { Button as UIButton, Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
 import { buttonStyle, controlSize, disabled, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
+import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
+import type { SFSymbol } from 'sf-symbols-typescript';
 
 import { useCamera } from '@/contexts/CameraContext';
-import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
+import { createWebGpuPerfProbe, nowMs as perfNowMs } from '@/lib/webgpu-perf';
 import {
-  NativeStandardCamera,
-  type NativeLiDARDepthFrame,
+  installWebXRDepthProfile,
+  runWithWebXRUserActivation,
+  type WebXRCPUDepthInformation,
+  type WebXRCPUCameraImage,
+  type WebXRFrame,
+  type WebXRSession,
 } from '../../../../modules/standard-camera';
 
-// @ref LLP 0012#demo-lidar-depth-field — Native ARKit camera and LiDAR depth
-// frames are uploaded into WebGPU textures; WGSL fuses that native mobile
-// sensor stream into web-rendered camera, depth, and focus views.
+// @ref LLP 0013#application-shape - This route is the WebXR-shaped variant of
+// the LiDAR demo: app code talks to `navigator.xr`, receives XR frames, and
+// uploads CPU-visible camera/depth buffers into WebGPU.
 
 const FULLSCREEN_VERTEX_COUNT = 6;
-const FRAME_UPLOAD_INTERVAL_MS = 33;
 const DEFAULT_OCCLUSION_DEPTH_M = 1.25;
 const MIN_OCCLUSION_DEPTH_M = 0.45;
 const MAX_OCCLUSION_DEPTH_M = 3.5;
@@ -32,7 +37,7 @@ const VIEW_MODES = [
   { label: 'Camera', value: 0 },
 ] as const;
 
-const DEPTH_SHADER = /* wgsl */ `
+const WEBXR_DEPTH_SHADER = /* wgsl */ `
 struct Uniforms {
   depthWidth: f32,
   depthHeight: f32,
@@ -283,83 +288,54 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 }
 `;
 
-export default function LiDARDepthScreen(): React.JSX.Element {
+export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { adapter, device } = useDevice();
-  const { lidarStatus, lidarCapabilities, lidarError, startLiDAR, stopLiDAR } = useCamera();
+  const { lidarStatus, lidarError } = useCamera();
   const { autorun } = useLocalSearchParams<{ autorun?: string }>();
   const { width: windowWidth } = useWindowDimensions();
-  // Start idle and wait for an explicit Start tap. The mount no longer
-  // auto-launches ARKit because acquiring the AVCaptureDevice is a heavy,
-  // exclusive action that should be the user's choice — and starting on
-  // mount used to tear down the standard camera unannounced, leaving every
-  // other demo stranded in a "Start" state the user never asked for.
+  const sessionRef = React.useRef<WebXRSession | null>(null);
+  const didAutorunRef = React.useRef(false);
+  const [session, setSession] = React.useState<WebXRSession | null>(null);
   const [status, setStatus] = React.useState('idle');
-  const [frameInfo, setFrameInfo] = React.useState('waiting for depth');
-  const [depthRange, setDepthRange] = React.useState('range pending');
-  const [centerDepth, setCenterDepth] = React.useState('pending');
-  const [fps, setFps] = React.useState('0.0');
   const [error, setError] = React.useState<string | null>(null);
+  const [support, setSupport] = React.useState('checking WebXR depth support');
+  const [frameInfo, setFrameInfo] = React.useState('waiting for XR frame');
+  const [cameraInfo, setCameraInfo] = React.useState('waiting for camera');
+  const [centerDepth, setCenterDepth] = React.useState('pending');
+  const [depthRange, setDepthRange] = React.useState('range pending');
+  const [fps, setFps] = React.useState('0.0');
   const [foregroundPercent, setForegroundPercent] = React.useState(0);
   const [maskInfo, setMaskInfo] = React.useState('mask pending');
   const [targetDepth, setTargetDepth] = React.useState(DEFAULT_OCCLUSION_DEPTH_M);
-  const [cameraInfo, setCameraInfo] = React.useState('waiting for preview');
   const [lastCenterDepthMeters, setLastCenterDepthMeters] = React.useState<number | null>(null);
   const [viewMode, setViewMode] = React.useState(2);
   const lastCenterDepthRef = React.useRef<number | null>(null);
-  const didAutorunRef = React.useRef(false);
   const targetDepthRef = React.useRef(targetDepth);
   const viewModeRef = React.useRef(viewMode);
 
   const stageWidth = Math.min(Math.max(288, windowWidth - 32), 420);
   const stageHeight = Math.round(stageWidth * 4 / 3);
 
-  const resetLiDARReadouts = React.useCallback((nextStatus: string): void => {
+  const resetXRReadouts = React.useCallback((nextStatus: string): void => {
     setStatus(nextStatus);
-    setFrameInfo('waiting for depth');
+    setFrameInfo('waiting for XR frame');
     setDepthRange('range pending');
     setCenterDepth('pending');
     setFps('0.0');
     setForegroundPercent(0);
     setMaskInfo('mask pending');
-    setCameraInfo('waiting for preview');
+    setCameraInfo('waiting for camera');
     setLastCenterDepthMeters(null);
     lastCenterDepthRef.current = null;
   }, []);
 
-  // @ref LLP 0012#validation — Normal users opt into ARKit with Start; the
-  // autorun query param gives device validation a non-interactive launch path.
   React.useEffect(() => {
-    if (autorun !== '1' || didAutorunRef.current) return;
-    didAutorunRef.current = true;
-    void startLiDAR();
-  }, [autorun, startLiDAR]);
-
-  // Blur/unmount cleanup: ARKit always gets torn down and the context lock
-  // released. Expo Router can keep route components mounted after navigation,
-  // so tying cleanup to focus prevents hidden LiDAR sessions from continuing.
-  // We deliberately do not auto-start ARKit on mount — see the
-  // `useState('idle')` rationale.
-  useFocusEffect(React.useCallback(() => {
-    return () => {
-      void stopLiDAR();
-    };
-  }, [stopLiDAR]));
-
-  React.useEffect(() => {
-    if (lidarStatus === 'stopping') {
-      resetLiDARReadouts('stopped');
-    } else if (lidarStatus === 'stopped') {
-      resetLiDARReadouts('stopped');
-      setError(null);
-    } else if (lidarStatus === 'unsupported') {
-      resetLiDARReadouts('unsupported');
-    } else if (lidarStatus === 'error') {
-      resetLiDARReadouts('error');
-    } else if (lidarStatus === 'interrupted') {
-      resetLiDARReadouts('interrupted');
-    }
-  }, [lidarStatus, resetLiDARReadouts]);
+    installWebXRDepthProfile();
+    void navigator.xr?.isSessionSupported('immersive-ar').then((supported) => {
+      setSupport(supported ? 'immersive-ar + depth-sensing available' : 'WebXR LiDAR depth unsupported here');
+    });
+  }, []);
 
   React.useEffect(() => {
     targetDepthRef.current = targetDepth;
@@ -369,17 +345,98 @@ export default function LiDARDepthScreen(): React.JSX.Element {
     viewModeRef.current = viewMode;
   }, [viewMode]);
 
+  React.useEffect(() => {
+    return () => {
+      void sessionRef.current?.end();
+      sessionRef.current = null;
+    };
+  }, []);
+
+  const startSession = React.useCallback(async (): Promise<void> => {
+    if (sessionRef.current) return;
+    installWebXRDepthProfile();
+    setError(null);
+    setStatus('requesting XR session');
+    try {
+      const xr = navigator.xr;
+      if (!xr) throw new Error('navigator.xr was not installed');
+      const supported = await xr.isSessionSupported('immersive-ar');
+      if (!supported) {
+        setSupport('WebXR LiDAR depth unsupported here');
+        resetXRReadouts('unsupported');
+        return;
+      }
+      const nextSession = await runWithWebXRUserActivation(() =>
+        xr.requestSession('immersive-ar', {
+          requiredFeatures: ['depth-sensing', 'camera-access'],
+          depthSensing: {
+            usagePreference: ['cpu-optimized'],
+            dataFormatPreference: ['float32'],
+            depthTypeRequest: ['smooth', 'raw'],
+            matchDepthView: true,
+          },
+          cameraAccess: {
+            usagePreference: ['cpu-optimized'],
+            formatPreference: ['bgra8unorm', 'rgba8unorm'],
+            matchCameraView: true,
+          },
+        })
+      );
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+      setStatus(`XRSession running (${nextSession.depthType ?? 'no depth'})`);
+      nextSession.addEventListener('end', () => {
+        if (sessionRef.current === nextSession) {
+          sessionRef.current = null;
+          setSession(null);
+          setError(null);
+          resetXRReadouts('ended');
+        }
+      });
+    } catch (e) {
+      sessionRef.current = null;
+      setSession(null);
+      setStatus('error');
+      setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+    }
+  }, [resetXRReadouts]);
+
+  const stopSession = React.useCallback(async (): Promise<void> => {
+    const current = sessionRef.current;
+    if (!current) return;
+    setStatus('ending');
+    try {
+      await current.end();
+    } catch (e) {
+      setStatus('error');
+      setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (autorun !== '1' || didAutorunRef.current) return;
+    didAutorunRef.current = true;
+    void startSession();
+  }, [autorun, startSession]);
+
   useFocusEffect(
     React.useCallback(() => {
-    if (!device) return undefined;
+      return () => {
+        void sessionRef.current?.end();
+      };
+    }, [])
+  );
+
+  React.useEffect(() => {
+    if (!device || !session) return;
     let cancelled = false;
     let cleanup: (() => void) | null = null;
+    let xrRafId: number | null = null;
 
-    const startRender = (): void => {
+    const setup = async (): Promise<void> => {
       try {
-        const profile = createWebGpuPerfProbe('lidar-depth', {
-          uploadIntervalMs: FRAME_UPLOAD_INTERVAL_MS,
-        });
+        const referenceSpace = await session.requestReferenceSpace('viewer');
+        if (cancelled) return;
         const context = ref.current?.getContext('webgpu');
         if (!context) {
           throw new Error('getContext("webgpu") returned null');
@@ -387,112 +444,46 @@ export default function LiDARDepthScreen(): React.JSX.Element {
 
         const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
         context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
-
-        device.pushErrorScope('validation');
-        const shaderModule = device.createShaderModule({ code: DEPTH_SHADER });
-        void shaderModule.getCompilationInfo().then((info) => {
-          if (info.messages.length === 0 || !__DEV__) return;
-          // eslint-disable-next-line no-console
-          console.log(
-            `LIDAR_DEPTH_SHADER ${JSON.stringify(
-              info.messages.map((message) => ({
-                line: message.lineNum,
-                message: message.message,
-                type: message.type,
-              }))
-            )}`
-          );
+        const profile = createWebGpuPerfProbe('lidar-depth-webxr', {
+          cameraFormat: session.cameraFormat,
+          depthType: session.depthType ?? 'none',
         });
+
+        const shaderModule = device.createShaderModule({ code: WEBXR_DEPTH_SHADER });
         const bindGroupLayout = device.createBindGroupLayout({
           entries: [
-            {
-              binding: 0,
-              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-              buffer: { type: 'uniform' },
-            },
-            {
-              binding: 1,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
-            },
-            {
-              binding: 2,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'float', viewDimension: '2d' },
-            },
-            {
-              binding: 3,
-              visibility: GPUShaderStage.FRAGMENT,
-              sampler: { type: 'filtering' },
-            },
+            { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+            { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+            { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+            { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
           ],
         });
-        const pipelineLayout = device.createPipelineLayout({
-          bindGroupLayouts: [bindGroupLayout],
-        });
         const pipeline = device.createRenderPipeline({
-          layout: pipelineLayout,
+          layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
           vertex: { module: shaderModule, entryPoint: 'vs_main' },
-          fragment: {
-            module: shaderModule,
-            entryPoint: 'fs_main',
-            targets: [
-              {
-                format: presentationFormat,
-                blend: {
-                  color: {
-                    srcFactor: 'src-alpha',
-                    dstFactor: 'one-minus-src-alpha',
-                    operation: 'add',
-                  },
-                  alpha: {
-                    srcFactor: 'one',
-                    dstFactor: 'one-minus-src-alpha',
-                    operation: 'add',
-                  },
-                },
-              },
-            ],
-          },
+          fragment: { module: shaderModule, entryPoint: 'fs_main', targets: [{ format: presentationFormat }] },
           primitive: { topology: 'triangle-list' },
         });
-        void device.popErrorScope().then((error) => {
-          if (!error) return;
-          const message = error.message;
-          setError(message);
-          if (__DEV__) {
-            // eslint-disable-next-line no-console
-            console.log(`LIDAR_DEPTH_WEBGPU_ERROR ${message}`);
-          }
-        });
-
         const uniformBuffer = device.createBuffer({
           size: 48,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
-        const cameraSampler = device.createSampler({
-          magFilter: 'linear',
-          minFilter: 'linear',
-        });
+        const cameraSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
 
         let depthTexture: GPUTexture | null = null;
         let cameraTexture: GPUTexture | null = null;
         let bindGroup: GPUBindGroup | null = null;
         let depthWidth = 0;
         let depthHeight = 0;
-        let colorWidth = 0;
-        let colorHeight = 0;
-        let minDepth = 0.2;
-        let maxDepth = 4.0;
-        let centerDepthMeters = 0;
-        let lastUpload = 0;
-        let lastFrameNumber = 0;
-        let lastLoggedFrameNumber = 0;
+        let cameraWidth = 0;
+        let cameraHeight = 0;
+        let cameraFormat: GPUTextureFormat = 'bgra8unorm';
+        let minDepth = MIN_OCCLUSION_DEPTH_M;
+        let maxDepth = MAX_OCCLUSION_DEPTH_M;
+        let frameNumber = 0;
         let frames = 0;
-        let lastStatsReport = Date.now();
         let lastFpsReport = Date.now();
-        let rafId: number | null = null;
-        let reportedLiveFrame = false;
+        let lastStatsReport = Date.now();
         const startedAt = Date.now();
 
         const rebuildBindGroup = (): void => {
@@ -521,16 +512,17 @@ export default function LiDARDepthScreen(): React.JSX.Element {
           rebuildBindGroup();
         };
 
-        const ensureCameraTexture = (width: number, height: number): void => {
-          if (cameraTexture && width === colorWidth && height === colorHeight) return;
+        const ensureCameraTexture = (width: number, height: number, format: GPUTextureFormat): void => {
+          if (cameraTexture && width === cameraWidth && height === cameraHeight && format === cameraFormat) return;
           cameraTexture?.destroy();
           cameraTexture = device.createTexture({
             size: { width, height },
-            format: 'bgra8unorm',
+            format,
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
           });
-          colorWidth = width;
-          colorHeight = height;
+          cameraWidth = width;
+          cameraHeight = height;
+          cameraFormat = format;
           rebuildBindGroup();
         };
 
@@ -541,160 +533,122 @@ export default function LiDARDepthScreen(): React.JSX.Element {
           { bytesPerRow: 256, rowsPerImage: 1 },
           { width: 1, height: 1 }
         );
-        ensureCameraTexture(1, 1);
+        ensureCameraTexture(1, 1, 'bgra8unorm');
         device.queue.writeTexture(
           { texture: cameraTexture! },
-          new Uint8Array([31, 36, 48, 255]),
+          new Uint8Array([18, 10, 8, 255]),
           { bytesPerRow: 256, rowsPerImage: 1 },
           { width: 1, height: 1 }
         );
 
-        const uploadFrame = (frame: NativeLiDARDepthFrame): void => {
-          ensureDepthTexture(frame.width, frame.height);
-          const depthUpload = profile.time('makeDepthUpload', () => makeDepthUpload(frame));
-          profile.count('uploadedBytes', depthUpload.data.byteLength);
+        const uploadDepth = (depth: WebXRCPUDepthInformation): DepthUploadStats => {
+          ensureDepthTexture(depth.width, depth.height);
+          const bytes = profile.time('readDepthData', () => new Uint8Array(depth.data));
+          const upload = profile.time('makeDepthUpload', () =>
+            makePaddedUpload(depth.width * 4, depth.height, bytes)
+          );
+          profile.count('depthUploadedBytes', upload.data.byteLength);
           profile.time('writeDepthTexture', () =>
             device.queue.writeTexture(
               { texture: depthTexture! },
-              depthUpload.data,
-              { bytesPerRow: depthUpload.bytesPerRow, rowsPerImage: frame.height },
-              { width: frame.width, height: frame.height }
+              upload.data,
+              { bytesPerRow: upload.bytesPerRow, rowsPerImage: depth.height },
+              { width: depth.width, height: depth.height }
             )
           );
-          const colorFrame =
-            frame.colorData && frame.colorWidth && frame.colorHeight
-              ? {
-                  data: frame.colorData,
-                  height: frame.colorHeight,
-                  width: frame.colorWidth,
-                }
-              : {
-                  data: new Uint8Array([0, 0, 0, 255]),
-                  height: 1,
-                  width: 1,
-                };
-          ensureCameraTexture(colorFrame.width, colorFrame.height);
-          const colorUpload = profile.time('makeColorUpload', () =>
-            makeColorUpload(colorFrame.width, colorFrame.height, colorFrame.data)
-          );
-          profile.count('uploadedBytes', colorUpload.data.byteLength);
-          profile.time('writeColorTexture', () =>
-            device.queue.writeTexture(
-              { texture: cameraTexture! },
-              colorUpload.data,
-              { bytesPerRow: colorUpload.bytesPerRow, rowsPerImage: colorFrame.height },
-              { width: colorFrame.width, height: colorFrame.height }
-            )
-          );
-          profile.count('nativeUploads');
-          lastFrameNumber = frame.frameNumber;
-          minDepth = frame.minDepth > 0 ? frame.minDepth : 0.2;
-          maxDepth = frame.maxDepth > minDepth ? frame.maxDepth : minDepth + 1.0;
-          centerDepthMeters = profile.time('sampleCenterDepth', () => sampleCenterDepth(frame));
+          const stats = sampleDepthStats(depth.width, depth.height, bytes, targetDepthRef.current);
+          return {
+            center: depth.getDepthInMeters(0.5, 0.5),
+            ...stats,
+          };
         };
 
-        const renderFrame = (): void => {
-          if (cancelled) return;
-          const now = Date.now();
-          const latest =
-            now - lastUpload >= FRAME_UPLOAD_INTERVAL_MS
-              ? profile.time('getLatestLiDARDepthFrame', () => NativeStandardCamera.getLatestLiDARDepthFrame())
-              : null;
+        const uploadCamera = (camera: WebXRCPUCameraImage): void => {
+          ensureCameraTexture(camera.width, camera.height, camera.format);
+          const bytes = profile.time('readCameraData', () => new Uint8Array(camera.data));
+          const upload = profile.time('makeCameraUpload', () =>
+            makePaddedUpload(camera.width * 4, camera.height, bytes)
+          );
+          profile.count('cameraUploadedBytes', upload.data.byteLength);
+          profile.time('writeCameraTexture', () =>
+            device.queue.writeTexture(
+              { texture: cameraTexture! },
+              upload.data,
+              { bytesPerRow: upload.bytesPerRow, rowsPerImage: camera.height },
+              { width: camera.width, height: camera.height }
+            )
+          );
+        };
 
-          if (latest && latest.frameNumber !== lastFrameNumber) {
-            uploadFrame(latest);
-            lastUpload = now;
-            if (__DEV__ && latest.frameNumber - lastLoggedFrameNumber >= 60) {
-              lastLoggedFrameNumber = latest.frameNumber;
-              // eslint-disable-next-line no-console
-              console.log(
-                `LIDAR_DEPTH_FRAME ${JSON.stringify({
-                  frameNumber: latest.frameNumber,
-                  height: latest.height,
-                  colorHeight: latest.colorHeight,
-                  colorWidth: latest.colorWidth,
-                  maxDepth: latest.maxDepth,
-                  meanDepth: latest.meanDepth,
-                  minDepth: latest.minDepth,
-                  width: latest.width,
-                })}`
-              );
-            }
-            if (now - lastStatsReport >= 500) {
-              const maskStats = sampleOcclusionStats(latest, targetDepthRef.current);
-              setFrameInfo(`${latest.width}x${latest.height} #${latest.frameNumber}`);
-              setDepthRange(
-                `${latest.minDepth.toFixed(2)}m-${latest.maxDepth.toFixed(2)}m mean ${latest.meanDepth.toFixed(2)}m`
-              );
-              setCameraInfo(
-                latest.colorWidth && latest.colorHeight
-                  ? `${latest.colorWidth}x${latest.colorHeight} ARKit`
-                  : 'preview unavailable'
-              );
-              if (centerDepthMeters > 0) {
-                lastCenterDepthRef.current = centerDepthMeters;
-                setLastCenterDepthMeters(centerDepthMeters);
-                setCenterDepth(`${centerDepthMeters.toFixed(2)}m`);
+        const renderFrame = (_time: DOMHighResTimeStamp, frame: WebXRFrame): void => {
+          if (cancelled) return;
+          const pose = frame.getViewerPose(referenceSpace);
+          const view = pose?.views[0];
+          if (!view) {
+            xrRafId = session.requestAnimationFrame(renderFrame);
+            return;
+          }
+
+          // @ref LLP 0013#xr-depth-information
+          // @ref LLP 0016#depth-interpretation
+          const depth = frame.getDepthInformation(view);
+          // @ref LLP 0013#xr-camera-image
+          // @ref LLP 0017#native-camera-alignment
+          const camera = frame.getCameraImage(view);
+
+          if (depth && camera) {
+            const depthStats = uploadDepth(depth);
+            uploadCamera(camera);
+            profile.count('xrFrames');
+            frameNumber += 1;
+            minDepth = depthStats.min;
+            maxDepth = depthStats.max;
+            const statsNow = Date.now();
+            if (statsNow - lastStatsReport >= 500) {
+              setFrameInfo(`${depth.width}x${depth.height} XR #${frameNumber}`);
+              setCameraInfo(`${camera.width}x${camera.height} ${camera.format}`);
+              if (depthStats.center > 0) {
+                lastCenterDepthRef.current = depthStats.center;
+                setLastCenterDepthMeters(depthStats.center);
+                setCenterDepth(`${depthStats.center.toFixed(2)}m`);
               } else {
                 lastCenterDepthRef.current = null;
                 setLastCenterDepthMeters(null);
                 setCenterDepth('no return');
               }
-              setForegroundPercent(Math.round(maskStats.foregroundRatio * 100));
-              setMaskInfo(
-                `${formatPercent(maskStats.foregroundRatio)} closer · ${formatPercent(maskStats.targetRatio)} at target`
+              setDepthRange(
+                `${minDepth.toFixed(2)}m-${maxDepth.toFixed(2)}m mean ${depthStats.mean.toFixed(2)}m`
               );
-              if (!reportedLiveFrame) {
-                if (__DEV__) {
-                  // @ref LLP 0012#validation — The physical-device check looks
-                  // for one structured live frame log before manual inspection.
-                  // eslint-disable-next-line no-console
-                  console.log(
-                    `LIDAR_DEPTH_LIVE ${JSON.stringify({
-                      centerDepthMeters,
-                      colorHeight: latest.colorHeight,
-                      colorWidth: latest.colorWidth,
-                      foregroundRatio: maskStats.foregroundRatio,
-                      frameNumber: latest.frameNumber,
-                      height: latest.height,
-                      maxDepth: latest.maxDepth,
-                      meanDepth: latest.meanDepth,
-                      minDepth: latest.minDepth,
-                      width: latest.width,
-                    })}`
-                  );
-                }
-                setStatus(`live - ${adapter?.info?.vendor ?? 'unknown adapter'}`);
-                reportedLiveFrame = true;
-              }
-              lastStatsReport = now;
+              setForegroundPercent(Math.round(depthStats.foregroundRatio * 100));
+              setMaskInfo(
+                `${formatPercent(depthStats.foregroundRatio)} closer / ${formatPercent(depthStats.targetRatio)} at target`
+              );
+              setStatus(`live - ${adapter?.info?.vendor ?? 'unknown adapter'}`);
+              lastStatsReport = statsNow;
             }
           }
 
-          const elapsed = (now - startedAt) / 1000;
+          const elapsed = (Date.now() - startedAt) / 1000;
           device.queue.writeBuffer(
             uniformBuffer,
             0,
-            // @ref LLP 0012#demo-lidar-depth-field — The shader samples the
-            // ARKit camera texture in the same orientation as the paired depth
-            // map, then uses LiDAR depth to drive the web-rendered depth cues.
             new Float32Array([
               depthWidth,
               depthHeight,
-              colorWidth,
-              colorHeight,
+              cameraWidth,
+              cameraHeight,
               minDepth,
               maxDepth,
               elapsed,
               stageWidth / stageHeight,
-              lastFrameNumber,
+              frameNumber,
               targetDepthRef.current,
-              colorWidth > 1 ? (colorWidth > colorHeight ? 1 : 0) : depthWidth > depthHeight ? 1 : 0,
+              cameraWidth > 1 ? (cameraWidth > cameraHeight ? 1 : 0) : depthWidth > depthHeight ? 1 : 0,
               viewModeRef.current,
             ])
           );
 
-          const renderStart = nowMs();
+          const renderStart = perfNowMs();
           const encoder = device.createCommandEncoder();
           const pass = encoder.beginRenderPass({
             colorAttachments: [
@@ -714,34 +668,34 @@ export default function LiDARDepthScreen(): React.JSX.Element {
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
-          profile.duration('renderSubmitPresent', nowMs() - renderStart);
+          profile.duration('renderSubmitPresent', perfNowMs() - renderStart);
 
           frames += 1;
           profile.count('renderFrames');
-          if (now - lastFpsReport >= 1000) {
-            const fpsValue = frames / ((now - lastFpsReport) / 1000);
+          const fpsNow = Date.now();
+          if (fpsNow - lastFpsReport >= 1000) {
+            const fpsValue = frames / ((fpsNow - lastFpsReport) / 1000);
             setFps(fpsValue.toFixed(1));
             profile.report({
-              colorHeight,
-              colorWidth,
+              cameraFormat,
+              cameraHeight,
+              cameraWidth,
               depthHeight,
               depthWidth,
               fps: Number(fpsValue.toFixed(1)),
-              frameNumber: lastFrameNumber,
+              frameNumber,
             });
             frames = 0;
-            lastFpsReport = now;
+            lastFpsReport = fpsNow;
           }
 
-          rafId = requestAnimationFrame(renderFrame);
+          xrRafId = session.requestAnimationFrame(renderFrame);
         };
 
-        setStatus(`ready - ${adapter?.info?.vendor ?? 'unknown adapter'}`);
-        rafId = requestAnimationFrame(renderFrame);
-
+        xrRafId = session.requestAnimationFrame(renderFrame);
         cleanup = (): void => {
-          if (rafId !== null) {
-            cancelAnimationFrame(rafId);
+          if (xrRafId !== null) {
+            session.cancelAnimationFrame(xrRafId);
           }
           depthTexture?.destroy();
           cameraTexture?.destroy();
@@ -753,285 +707,273 @@ export default function LiDARDepthScreen(): React.JSX.Element {
       }
     };
 
-    const timer = setTimeout(startRender, 50);
+    void setup();
     return () => {
       cancelled = true;
-      clearTimeout(timer);
       cleanup?.();
     };
-  }, [adapter, device, ref, stageHeight, stageWidth])
+  }, [adapter, device, ref, session, stageHeight, stageWidth]);
+
+  const running = session !== null;
+  const xrLive = running && status.startsWith('live');
+  const transitioning = status === 'requesting XR session' || status === 'ending';
+  const unsupported = status === 'unsupported' || support === 'WebXR LiDAR depth unsupported here';
+
+  // @ref LLP 0013#xr-request-session - WebXR session start must come from an
+  // explicit user tap. Use the patched native-stack header item here too so
+  // this route starts from the same place as the custom LiDAR demo.
+  const xrHeaderRightItems = React.useCallback(
+    (): NativeStackHeaderItem[] => {
+      const iconName: SFSymbol = running ? 'stop.fill' : 'play.fill';
+      const label = running ? 'Stop WebXR' : 'Start WebXR';
+      return [
+        {
+          type: 'button' as const,
+          label,
+          accessibilityLabel: label,
+          disabled: transitioning || (!running && unsupported),
+          icon: {
+            type: 'sfSymbol' as const,
+            name: iconName,
+          },
+          identifier: 'webxr-lidar-start-stop',
+          onPress: running ? () => void stopSession() : () => void startSession(),
+          tintColor: running ? '#ff453a' : '#f8fafc',
+          variant: 'plain' as const,
+        },
+      ];
+    },
+    [running, startSession, stopSession, transitioning, unsupported]
   );
 
   const displayStatus = (() => {
     if (status === 'error') return 'error';
-    if (lidarStatus === 'starting') return 'starting LiDAR';
-    if (lidarStatus === 'running') return status.startsWith('live') ? status : 'running';
-    if (lidarStatus === 'interrupted') return 'interrupted LiDAR';
-    if (lidarStatus === 'stopping') return 'stopping LiDAR';
-    if (lidarStatus === 'stopped') return 'stopped';
-    if (lidarStatus === 'unsupported') return 'unsupported';
-    if (lidarStatus === 'error') return 'error';
+    if (status === 'requesting XR session') return 'starting WebXR';
+    if (status === 'ending') return 'stopping WebXR';
+    if (xrLive) return status;
+    if (running) return status;
     return status;
   })();
-  const displayError = lidarError ?? error;
-  const supportLine = lidarCapabilities
-    ? lidarCapabilities.supported
-      ? `scene depth ${lidarCapabilities.smoothedSceneDepth ? 'smoothed' : 'raw'}`
-      : lidarCapabilities.reason ?? 'unsupported'
-    : 'checking support';
+  const displayError = error ?? lidarError;
   const badgeState = (() => {
-    if (lidarStatus === 'error' || status === 'error') {
-      return { label: 'LiDAR error', style: styles.badgeWarn };
+    if (status === 'error' || lidarStatus === 'error') {
+      return { label: 'XR error', style: styles.badgeWarn };
     }
-    if (lidarStatus === 'unsupported' || lidarCapabilities?.supported === false) {
-      return { label: 'LiDAR unsupported', style: styles.badgeWarn };
+    if (unsupported) {
+      return { label: 'XR unsupported', style: styles.badgeWarn };
     }
-    if (lidarStatus === 'running' && status.startsWith('live')) {
-      return { label: 'LiDAR live', style: styles.badgeLive };
+    if (xrLive) {
+      return { label: 'XR live', style: styles.badgeLive };
     }
-    if (lidarStatus === 'starting') {
-      return { label: 'LiDAR starting', style: styles.badgeWarn };
+    if (status === 'requesting XR session') {
+      return { label: 'XR starting', style: styles.badgeWarn };
     }
-    if (lidarStatus === 'interrupted') {
-      return { label: 'LiDAR interrupted', style: styles.badgeWarn };
+    if (status === 'ending') {
+      return { label: 'XR stopping', style: styles.badgeWarn };
     }
-    if (lidarStatus === 'stopping') {
-      return { label: 'LiDAR stopping', style: styles.badgeWarn };
+    if (support === 'immersive-ar + depth-sensing available') {
+      return { label: 'XR ready', style: styles.badgeWarn };
     }
-    if (lidarCapabilities?.supported) {
-      return { label: 'LiDAR ready', style: styles.badgeWarn };
-    }
-    return { label: 'LiDAR', style: styles.badgeWarn };
+    return { label: 'XR', style: styles.badgeWarn };
   })();
-  const canPinCenterDepth =
-    lastCenterDepthMeters !== null && lidarStatus === 'running' && status.startsWith('live');
+  const canPinCenterDepth = lastCenterDepthMeters !== null && xrLive;
   const pinCenterDepth = (): void => {
     const center = lastCenterDepthRef.current;
     if (!center || !Number.isFinite(center)) return;
     setTargetDepth(clampDepth(center));
   };
-  // Resolve the segmented Picker selection to one of the discrete preset
-  // depths when targetDepth matches one. After Pin center, targetDepth may
-  // be an arbitrary value with no matching segment — in that case selection
-  // stays undefined and the segmented control shows nothing highlighted.
   const planeSelection = OCCLUSION_DEPTHS_M.find((depth) => Math.abs(targetDepth - depth) < 0.01);
-
-  // The session has settled into a running ARKit feed once status crosses
-  // into "running" or "live ...". Everything else (initializing, starting,
-  // stopped, error, unsupported) means the user can ask to start again.
-  const lidarRunning = lidarStatus === 'running' && status.startsWith('live');
-  const showStoppedPlaceholder = Device.isDevice && !lidarRunning;
+  const showStoppedPlaceholder = Device.isDevice && !xrLive;
 
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.content}
-      contentInsetAdjustmentBehavior="automatic">
-      <View style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
-        <Canvas ref={ref} style={styles.canvas} />
-        <View pointerEvents="none" style={styles.reticle}>
-          <View style={styles.reticleHorizontal} />
-          <View style={styles.reticleVertical} />
-        </View>
-        {showStoppedPlaceholder ? (
-          <View pointerEvents="none" style={styles.stoppedOverlay}>
-            <SymbolView
-              name="video.slash.fill"
-              size={56}
-              weight="semibold"
-              tintColor="#94a3b8"
-            />
+    <>
+      <Stack.Screen options={{ unstable_headerRightItems: xrHeaderRightItems }} />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        contentInsetAdjustmentBehavior="automatic">
+        <View style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
+          <Canvas ref={ref} style={styles.canvas} />
+          <View pointerEvents="none" style={styles.reticle}>
+            <View style={styles.reticleHorizontal} />
+            <View style={styles.reticleVertical} />
           </View>
-        ) : null}
-        <View pointerEvents="none" style={styles.stageReadout}>
-          <Text style={styles.stageReadoutLabel}>CENTER</Text>
-          <Text style={styles.stageReadoutValue}>{centerDepth}</Text>
-        </View>
-        <View pointerEvents="none" style={styles.stageModePill}>
-          <Text style={styles.stageModeLabel}>TARGET</Text>
-          <Text style={styles.stageModeValue}>{targetDepth.toFixed(2)}m</Text>
-        </View>
-        {viewMode === 2 ? (
-          <View pointerEvents="none" style={styles.fusionLabels}>
-            <Text style={styles.fusionLabel}>Camera</Text>
-            <Text style={styles.fusionLabel}>LiDAR depth</Text>
+          {showStoppedPlaceholder ? (
+            <View pointerEvents="none" style={styles.stoppedOverlay}>
+              <SymbolView
+                name="video.slash.fill"
+                size={56}
+                weight="semibold"
+                tintColor="#94a3b8"
+              />
+            </View>
+          ) : null}
+          <View pointerEvents="none" style={styles.stageReadout}>
+            <Text style={styles.stageReadoutLabel}>CENTER</Text>
+            <Text style={styles.stageReadoutValue}>{centerDepth}</Text>
           </View>
-        ) : null}
-        <View pointerEvents="none" style={styles.maskReadout}>
-          <View style={styles.maskReadoutHeader}>
-            <Text style={styles.maskReadoutLabel}>CLOSER THAN TARGET</Text>
-            <Text style={styles.maskReadoutValue}>{foregroundPercent}%</Text>
+          <View pointerEvents="none" style={styles.stageModePill}>
+            <Text style={styles.stageModeLabel}>TARGET</Text>
+            <Text style={styles.stageModeValue}>{targetDepth.toFixed(2)}m</Text>
           </View>
-          <View style={styles.maskBarTrack}>
-            <View style={[styles.maskBarFill, { width: `${Math.min(100, foregroundPercent)}%` }]} />
+          {viewMode === 2 ? (
+            <View pointerEvents="none" style={styles.fusionLabels}>
+              <Text style={styles.fusionLabel}>Camera</Text>
+              <Text style={styles.fusionLabel}>LiDAR depth</Text>
+            </View>
+          ) : null}
+          <View pointerEvents="none" style={styles.maskReadout}>
+            <View style={styles.maskReadoutHeader}>
+              <Text style={styles.maskReadoutLabel}>CLOSER THAN TARGET</Text>
+              <Text style={styles.maskReadoutValue}>{foregroundPercent}%</Text>
+            </View>
+            <View style={styles.maskBarTrack}>
+              <View
+                style={[styles.maskBarFill, { width: `${Math.min(100, foregroundPercent)}%` }]}
+              />
+            </View>
           </View>
         </View>
-      </View>
 
-      <View style={styles.controls}>
-        <View style={styles.titleBlock}>
-          <Text style={styles.title}>LiDAR Depth Studio</Text>
-          <Text style={styles.subtitle}>ARKit camera and scene depth rendered through WebGPU</Text>
-        </View>
+        <View style={styles.controls}>
+          <View style={styles.titleBlock}>
+            <Text style={styles.title}>WebXR LiDAR Depth Studio</Text>
+            <Text style={styles.subtitle}>
+              navigator.xr camera and scene depth rendered through WebGPU
+            </Text>
+          </View>
 
-        <View style={styles.statusRow}>
-          <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
-          <Text style={styles.statusText}>{displayStatus}</Text>
-        </View>
+          <View style={styles.statusRow}>
+            <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
+            <Text style={styles.statusText}>{displayStatus}</Text>
+          </View>
 
-        <Text style={styles.metric}>{supportLine}</Text>
-        <Text style={styles.metric}>camera: {cameraInfo}</Text>
-        <Text style={styles.metric}>depth: {frameInfo}</Text>
-        <Text style={styles.metric}>center: {centerDepth}</Text>
-        <Text style={styles.metric}>target: {maskInfo}</Text>
-        <Text style={styles.metric}>range: {depthRange}</Text>
-        <Text style={styles.metric}>webgpu: {fps} fps</Text>
-        {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
+          <Text style={styles.metric}>{support}</Text>
+          <Text style={styles.metric}>camera: {cameraInfo}</Text>
+          <Text style={styles.metric}>depth: {frameInfo}</Text>
+          <Text style={styles.metric}>center: {centerDepth}</Text>
+          <Text style={styles.metric}>target: {maskInfo}</Text>
+          <Text style={styles.metric}>range: {depthRange}</Text>
+          <Text style={styles.metric}>webgpu: {fps} fps</Text>
+          {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
 
-        <View style={styles.depthControl}>
-          <Text style={styles.depthControlLabel}>View</Text>
-          <Host style={styles.pickerHost}>
-            <Picker
-              modifiers={[pickerStyle('segmented')]}
-              label="View"
-              selection={viewMode}
-              onSelectionChange={(value) => setViewMode(value as number)}>
-              {VIEW_MODES.map((mode) => (
-                <UIText key={mode.value} modifiers={[tag(mode.value)]}>
-                  {mode.label}
-                </UIText>
-              ))}
-            </Picker>
-          </Host>
-        </View>
+          <View style={styles.depthControl}>
+            <Text style={styles.depthControlLabel}>View</Text>
+            <Host style={styles.pickerHost}>
+              <Picker
+                modifiers={[pickerStyle('segmented')]}
+                label="View"
+                selection={viewMode}
+                onSelectionChange={(value) => setViewMode(value as number)}>
+                {VIEW_MODES.map((mode) => (
+                  <UIText key={mode.value} modifiers={[tag(mode.value)]}>
+                    {mode.label}
+                  </UIText>
+                ))}
+              </Picker>
+            </Host>
+          </View>
 
-        <View style={styles.depthControl}>
-          <Text style={styles.depthControlLabel}>Target distance</Text>
-          <Host style={styles.pickerHost}>
-            <Picker
-              modifiers={[pickerStyle('segmented')]}
-              label="Target distance"
-              selection={planeSelection}
-              onSelectionChange={(value) => setTargetDepth(value as number)}>
-              {OCCLUSION_DEPTHS_M.map((depth) => (
-                <UIText key={depth} modifiers={[tag(depth)]}>
-                  {depth.toFixed(depth % 1 === 0 ? 0 : 2)}m
-                </UIText>
-              ))}
-            </Picker>
-          </Host>
-        </View>
+          <View style={styles.depthControl}>
+            <Text style={styles.depthControlLabel}>Target distance</Text>
+            <Host style={styles.pickerHost}>
+              <Picker
+                modifiers={[pickerStyle('segmented')]}
+                label="Target distance"
+                selection={planeSelection}
+                onSelectionChange={(value) => setTargetDepth(value as number)}>
+                {OCCLUSION_DEPTHS_M.map((depth) => (
+                  <UIText key={depth} modifiers={[tag(depth)]}>
+                    {depth.toFixed(depth % 1 === 0 ? 0 : 2)}m
+                  </UIText>
+                ))}
+              </Picker>
+            </Host>
+          </View>
 
-        <View style={styles.buttonRow}>
-          <Host matchContents>
-            <UIButton
-              modifiers={[buttonStyle('bordered'), controlSize('large'), disabled(!canPinCenterDepth)]}
-              systemImage="scope"
-              label="Pin center"
-              onPress={pinCenterDepth}
-            />
-          </Host>
+          <View style={styles.buttonRow}>
+            <Host matchContents>
+              <UIButton
+                modifiers={[
+                  buttonStyle('bordered'),
+                  controlSize('large'),
+                  disabled(!canPinCenterDepth),
+                ]}
+                systemImage="scope"
+                label="Pin center"
+                onPress={pinCenterDepth}
+              />
+            </Host>
+          </View>
         </View>
-        </View>
-    </ScrollView>
+      </ScrollView>
+    </>
   );
 }
 
-function makeDepthUpload(frame: NativeLiDARDepthFrame): { bytesPerRow: number; data: Uint8Array } {
-  const srcRowBytes = frame.width * 4;
-  const bytesPerRow = Math.ceil(srcRowBytes / 256) * 256;
-  if (bytesPerRow === srcRowBytes) {
-    return { bytesPerRow, data: frame.depthData };
-  }
-
-  const padded = new Uint8Array(bytesPerRow * frame.height);
-  for (let y = 0; y < frame.height; y += 1) {
-    padded.set(
-      frame.depthData.subarray(y * srcRowBytes, (y + 1) * srcRowBytes),
-      y * bytesPerRow
-    );
-  }
-  return { bytesPerRow, data: padded };
+interface DepthUploadStats {
+  center: number;
+  foregroundRatio: number;
+  min: number;
+  max: number;
+  mean: number;
+  targetRatio: number;
 }
 
-function makeColorUpload(
-  width: number,
+function makePaddedUpload(
+  srcRowBytes: number,
   height: number,
   data: Uint8Array
 ): { bytesPerRow: number; data: Uint8Array } {
-  const srcRowBytes = width * 4;
   const bytesPerRow = Math.ceil(srcRowBytes / 256) * 256;
   if (bytesPerRow === srcRowBytes) {
     return { bytesPerRow, data };
   }
-
   const padded = new Uint8Array(bytesPerRow * height);
   for (let y = 0; y < height; y += 1) {
-    const srcRow = y * srcRowBytes;
-    const dstRow = y * bytesPerRow;
-    padded.set(data.subarray(srcRow, srcRow + srcRowBytes), dstRow);
+    padded.set(data.subarray(y * srcRowBytes, (y + 1) * srcRowBytes), y * bytesPerRow);
   }
   return { bytesPerRow, data: padded };
 }
 
-function sampleCenterDepth(frame: NativeLiDARDepthFrame): number {
-  const values = new Float32Array(
-    frame.depthData.buffer,
-    frame.depthData.byteOffset,
-    Math.min(frame.width * frame.height, Math.floor(frame.depthData.byteLength / 4))
-  );
-  const cx = Math.floor(frame.width / 2);
-  const cy = Math.floor(frame.height / 2);
+function sampleDepthStats(
+  width: number,
+  height: number,
+  data: Uint8Array,
+  targetDepth: number
+): Omit<DepthUploadStats, 'center'> {
+  const values = new Float32Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 4));
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
   let sum = 0;
-  let count = 0;
-  for (let y = Math.max(0, cy - 2); y <= Math.min(frame.height - 1, cy + 2); y += 1) {
-    for (let x = Math.max(0, cx - 2); x <= Math.min(frame.width - 1, cx + 2); x += 1) {
-      const depth = values[y * frame.width + x] ?? 0;
-      if (Number.isFinite(depth) && depth > 0) {
-        sum += depth;
-        count += 1;
-      }
-    }
-  }
-  return count > 0 ? sum / count : 0;
-}
-
-interface OcclusionStats {
-  foregroundRatio: number;
-  targetRatio: number;
-}
-
-// @ref LLP 0012#demo-lidar-depth-field — This CPU-side readout samples the same
-// tight Float32 depth frame that WebGPU consumes, so the UI can prove the native
-// LiDAR target-distance mask is live while the shader uses it for depth cues.
-function sampleOcclusionStats(frame: NativeLiDARDepthFrame, targetDepth: number): OcclusionStats {
-  const values = new Float32Array(
-    frame.depthData.buffer,
-    frame.depthData.byteOffset,
-    Math.min(frame.width * frame.height, Math.floor(frame.depthData.byteLength / 4))
-  );
-  const x0 = Math.floor(frame.width * 0.33);
-  const x1 = Math.max(x0 + 1, Math.floor(frame.width * 0.67));
-  const y0 = Math.floor(frame.height * 0.22);
-  const y1 = Math.max(y0 + 1, Math.floor(frame.height * 0.78));
-  const stepX = Math.max(1, Math.floor((x1 - x0) / 36));
-  const stepY = Math.max(1, Math.floor((y1 - y0) / 48));
   let foreground = 0;
   let targetPlane = 0;
   let valid = 0;
-
-  for (let y = y0; y < y1; y += stepY) {
-    for (let x = x0; x < x1; x += stepX) {
-      const depth = values[y * frame.width + x] ?? 0;
-      if (!Number.isFinite(depth) || depth <= 0) continue;
-      valid += 1;
-      if (depth < targetDepth - 0.035) foreground += 1;
-      if (Math.abs(depth - targetDepth) <= 0.12) targetPlane += 1;
-    }
+  const step = Math.max(1, Math.floor((width * height) / 4096));
+  for (let i = 0; i < values.length; i += step) {
+    const depth = values[i] ?? 0;
+    if (!Number.isFinite(depth) || depth <= 0) continue;
+    valid += 1;
+    sum += depth;
+    min = Math.min(min, depth);
+    max = Math.max(max, depth);
+    if (depth < targetDepth - 0.035) foreground += 1;
+    if (Math.abs(depth - targetDepth) <= 0.12) targetPlane += 1;
   }
-
+  if (!Number.isFinite(min)) {
+    return {
+      foregroundRatio: 0,
+      max: MAX_OCCLUSION_DEPTH_M,
+      mean: DEFAULT_OCCLUSION_DEPTH_M,
+      min: MIN_OCCLUSION_DEPTH_M,
+      targetRatio: 0,
+    };
+  }
   return {
     foregroundRatio: valid > 0 ? foreground / valid : 0,
+    max: Math.max(max, min + 0.25),
+    mean: valid > 0 ? sum / valid : DEFAULT_OCCLUSION_DEPTH_M,
+    min,
     targetRatio: valid > 0 ? targetPlane / valid : 0,
   };
 }

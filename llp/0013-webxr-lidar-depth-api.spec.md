@@ -1,7 +1,7 @@
 # LLP 0013: WebXR-shaped LiDAR depth API
 
 **Type:** Spec
-**Status:** Proposed / Research
+**Status:** Active / Research implementation
 **Systems:** demo, webxr-lidar-api, standard-camera-native-extension
 **Author:** James Ide
 **Date:** 2026-05-25
@@ -13,8 +13,9 @@ This LLP specifies what a WebXR-based API would look like if this repo chose to
 expose the LiDAR Depth Studio demo through `navigator.xr` instead of the current
 demo-only native sidecar.
 
-This is not a commitment to implement WebXR. It is a concrete research spec so
-we can evaluate the API shape honestly. The API borrows from:
+This is not a commitment to implement full WebXR. It is a concrete research
+spec and implementation track so we can evaluate the API shape honestly. The
+API borrows from:
 
 - WebXR Device API: `navigator.xr`, `XRSession`, `XRFrame`, `XRView`,
   `XRReferenceSpace`, and `XRSession.requestAnimationFrame()`
@@ -121,7 +122,7 @@ async function startLiDARDepthStudio(device: GPUDevice): Promise<XRSession> {
     },
     cameraAccess: {
       usagePreference: ["cpu-optimized"],
-      formatPreference: ["rgba8unorm", "bgra8unorm"],
+      formatPreference: ["bgra8unorm", "rgba8unorm"],
       matchCameraView: true,
     },
   });
@@ -329,8 +330,10 @@ capability check.
 8. Select a camera configuration:
    - `usagePreference` MUST include `"cpu-optimized"`.
    - `formatPreference` MAY include `"rgba8unorm"` or `"bgra8unorm"`.
-   - The implementation SHOULD return `"rgba8unorm"` to avoid requiring JS to
-     swizzle BGRA before WebGPU upload.
+   - The implementation SHOULD select the first supported format from
+     `formatPreference`; this demo requests `"bgra8unorm"` first because ARKit
+     preview bytes are already BGRA and WebGPU can sample a `bgra8unorm`
+     texture directly.
    - `matchCameraView` MUST be treated as `true`; `false` is unsupported.
 9. Request native camera permission. If permission is denied or restricted,
    reject with `NotAllowedError`.
@@ -483,10 +486,10 @@ ray length.
   normalized camera-image coordinates. It MAY be identity only if the returned
   image is already view-aligned.
 
-The implementation SHOULD return `"rgba8unorm"` when feasible because the
-current WebGPU renderer can upload it directly. If native returns
-`"bgra8unorm"`, JS must swizzle before writing to an `rgba8unorm` texture unless
-the selected WebGPU backend supports direct BGRA upload.
+The implementation SHOULD return the selected camera format without an extra
+copy when feasible. The current WebGPU renderer creates a `bgra8unorm` texture
+when the XR camera image format is `"bgra8unorm"`, avoiding the per-frame
+BGRA-to-RGBA swizzle that dominated physical-device profiling.
 
 ## WebGPU Upload
 
@@ -607,14 +610,38 @@ Minimum tests for an implementation:
 17. `end()` stops ARKit, fires `end`, and releases the camera for
     `getUserMedia`.
 
+## Implementation Status
+
+The first research implementation is present as:
+
+- `modules/standard-camera/src/WebXRDepthProfile.ts`
+- `src/app/(tabs)/(demo)/lidar-depth-webxr.tsx`
+
+The implementation is a JavaScript WebXR-shaped profile over the existing
+native LiDAR sidecar from LLP 0012. It installs `navigator.xr` only when the
+WebXR profile installer is called, then implements the supported profile from
+this LLP: `"immersive-ar"`, `"viewer"`, `"depth-sensing"`, `"camera-access"`,
+CPU `float32` depth, CPU camera bytes, one `XRView` with `eye === "none"`, and
+an XR animation-frame loop.
+
+React Native has no browser `navigator.userActivation`. The route bridges this
+with a repo-local `runWithWebXRUserActivation()` helper that must wrap the
+`requestSession()` call from a button press. This is not a WebXR API surface; it
+is the native-app equivalent of the transient activation gate required by
+`requestSession()`.
+
+The research route intentionally still uploads CPU-visible `ArrayBuffer` data
+through ordinary WebGPU queue writes. It does not implement `XRWebGLBinding`,
+`XRWebGLDepthInformation`, `XRWebGPUBinding`, or zero-copy XR textures.
+
 ## Implementation Recommendation
 
-Do not implement this as the production path for LLP 0012 yet.
+Do not make this the production path for LLP 0012 yet.
 
-If we want a WebXR-shaped demo, implement it behind a separate research flag and
-keep the current native sidecar as the stable LiDAR route. The first useful
-increment would be to add WebXR-compatible metadata to the existing sidecar
-payload:
+The WebXR-shaped demo is implemented as a separate research route and should
+stay there until the project explicitly decides to become an XR runtime. The
+next useful increment would be to add more WebXR-compatible metadata to the
+native sidecar payload:
 
 - `depthType`
 - `depthUsage`

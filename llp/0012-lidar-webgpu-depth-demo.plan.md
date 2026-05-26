@@ -233,9 +233,10 @@ So the implementation choices are:
   WebGPU pipeline without additional WebGPU/WebXR binding work.
 
 Recommendation for this demo: keep the native sidecar as the production path,
-borrow WebXR naming/metadata where it improves clarity, and do not expose
-`navigator.xr` unless the repo explicitly starts a separate XR-runtime research
-track.
+borrow WebXR naming/metadata where it improves clarity, and expose
+`navigator.xr` only in a separate XR-runtime research track. That research
+track now exists as a WebXR LiDAR variant of this demo; it must remain labeled
+experimental and must not change the default `getUserMedia` story.
 
 Additional primary source:
 
@@ -246,6 +247,14 @@ The scoped WebXR source slices live in [LLP 0014](./0014-webxr-device-api-spec-s
 [LLP 0015](./0015-webxr-ar-module-spec-slices.spec.md),
 [LLP 0016](./0016-webxr-depth-sensing-spec-slices.spec.md), and
 [LLP 0017](./0017-webxr-raw-camera-access-spec-slices.spec.md).
+
+Implementation files:
+
+- `modules/standard-camera/src/WebXRDepthProfile.ts` implements the
+  WebXR-shaped research profile over the native LiDAR sidecar.
+- `src/app/(tabs)/(demo)/lidar-depth-webxr.tsx` is the variant route that uses
+  `navigator.xr` instead of calling `NativeStandardCamera.getLatestLiDARDepthFrame()`
+  directly.
 
 For this app, the right connection is therefore: keep the W3C camera API clean
 for ordinary RGB capture, expose LiDAR as an explicit iOS native extension, and
@@ -318,12 +327,31 @@ ARFrame.capturedImage + ARFrame.sceneDepth.depthMap
    ↓
 StandardCamera native extension: 720p BGRA preview bytes + tight Float32 depth bytes
    ↓
-JS swizzles preview bytes into WebGPU rgba8unorm + r32float textures
+JS uploads BGRA preview bytes into a bgra8unorm texture + Float32 depth bytes into r32float
    ↓
 WGSL fragment shader samples RGB + depth → comparison, depth, and focus views
    ↓
 GPUCanvasContext.present()
 ```
+
+The route targets 30 fps uploads and renders every animation frame with the
+latest uploaded ARKit frame. In development builds it emits
+`WEBGPU_DEMO_PROFILE` records through the same system-log path as the LLP 0010
+camera demos, including `getLatestLiDARDepthFrame()`, depth/color upload
+preparation, `writeTexture()`, and render submit/present timings.
+
+Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
+frames at 60Hz, while the original WebGPU route rendered only about 6fps because
+JS spent roughly 140ms per upload swizzling the 960x720 BGRA preview into RGBA.
+The route therefore uploads the native BGRA preview directly into a WebGPU
+`bgra8unorm` texture; depth upload and both `writeTexture()` calls were
+sub-millisecond in the same trace.
+
+Like the LLP 0010 routes, the WebGPU render loop is route-focus scoped with
+Expo Router's `useFocusEffect` so a previous hidden demo screen cannot continue
+submitting GPU work behind the active route. The LiDAR session itself is also
+stopped on route blur because Expo Router may keep the screen component mounted
+after navigation.
 
 ## Native extension shape
 
@@ -381,13 +409,12 @@ LiDAR session as an external camera owner: starting LiDAR stops and locks the
 standard stream, while stopping LiDAR releases that lock and lets the standard
 camera resume only if the user had not explicitly stopped it.
 
-Physical LiDAR validation is still pending. The route can be launched with
-`?autorun=1` for non-interactive validation; the first live native frame logs a
-`LIDAR_DEPTH_LIVE` record with frame number, camera/depth dimensions, depth
-range, center depth, and closer-than-target ratio. The remaining proof is to run
-this route on a LiDAR-capable iPhone and confirm that frame numbers rise, the
-WebGPU canvas visibly reacts to near/far geometry, and Pin center changes the
-selected target distance from a live ARKit depth sample.
+Physical LiDAR validation can be launched with `?autorun=1`; the first live
+native frame logs a `LIDAR_DEPTH_LIVE` record with frame number, camera/depth
+dimensions, depth range, center depth, and closer-than-target ratio. Validation
+on an iPhone 15 Pro confirmed rising ARKit frame numbers and isolated the
+remaining performance-sensitive path to JS-side preview-buffer handling rather
+than WebGPU submission or depth texture upload.
 
 ## Validation
 
