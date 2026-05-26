@@ -311,12 +311,16 @@ depth and occlusion visualization in real time.
 3. The screen shows the live ARKit camera image as the preview background.
 4. WebGPU renders a split Compare viewport: live camera on the left and the
    native LiDAR depth texture on the right. Depth mode expands the depth field,
-   and Focus mode uses the same depth texture for depth-of-field.
-5. A small status strip reports support, camera frame size, depth frame size,
+   and Boundary mode uses the same depth texture to draw the selected target
+   distance as a stable contour over the camera image.
+5. The View and Target Distance controls sit directly under the preview so the
+   user can switch render modes and target planes without scrolling through
+   telemetry.
+6. A small status strip reports support, camera frame size, depth frame size,
    frame count, center depth, selected target distance, observed depth range,
    and a closer-than-target percentage sampled from the same native depth
    texture that drives WebGPU depth cues.
-6. The selected focus/target distance can be pinned to the current center-depth
+7. The selected focus/target distance can be pinned to the current center-depth
    sample, so native LiDAR measurement places the WebGPU effect at the surface
    under the reticle instead of relying only on fixed presets.
 
@@ -331,7 +335,7 @@ StandardCamera native extension: BGRA preview bytes + tight Float32 depth bytes
    ↓
 JS uploads BGRA preview bytes into a bgra8unorm texture + Float32 depth bytes into r32float
    ↓
-WGSL fragment shader samples RGB + depth → comparison, depth, and focus views
+WGSL fragment shader samples RGB + depth → comparison, depth, and boundary views
    ↓
 GPUCanvasContext.present()
 ```
@@ -348,6 +352,25 @@ JS spent roughly 140ms per upload swizzling BGRA preview bytes into RGBA. The
 route therefore uploads the native BGRA preview directly into a WebGPU
 `bgra8unorm` texture; depth upload and both `writeTexture()` calls were
 sub-millisecond in the same trace.
+
+Boundary mode favors measurement clarity over cinematic depth-of-field. It keeps
+the camera image crisp, detects where neighboring LiDAR samples cross the
+selected target distance, and draws that target-distance isoline with a bright
+core plus a thin high-contrast halo. Depth mode uses a higher-contrast palette
+with bright neutral quarter-meter contour markers and yellow one-meter contour
+markers for measurement. Depth and Compare reuse the same yellow
+depth-discontinuity rim used by Boundary mode, but do not apply any depth-texel
+boundary mask so the outline does not become crosshatched. Compare's depth side
+uses the same depth-map renderer at reduced strength so measurement and outline
+tuning stays consistent between views. Boundary mode keeps high-contrast edge
+strokes from local depth discontinuities rather than a broad low-opacity
+foreground fill, because the ARKit scene-depth map is low resolution and soft
+outlines read as blur instead of geometry.
+
+The WGSL shader avoids local identifiers named `target`. The WebGPU compiler on
+device treated `target` as reserved, which failed shader parsing and presented as
+the demo's magenta error color. Use names such as `targetMask` or
+`targetLineMask` for target-distance masks.
 
 Like the LLP 0010 routes, the WebGPU render loop is route-focus scoped with
 Expo Router's `useFocusEffect` so a previous hidden demo screen cannot continue
@@ -422,8 +445,8 @@ A useful first version is complete when:
 3. It runs on a LiDAR-capable physical device and reports rising frame numbers.
 4. The WebGPU canvas shows the live camera preview, visibly changes when the
    phone points at near vs far geometry, the Compare viewport shows the native
-   depth texture beside the camera view, and Focus mode blurs out-of-target
-   geometry from the same native depth texture.
+   depth texture beside the camera view, and Boundary mode draws a crisp target
+   distance contour from the same native depth texture.
 5. The closer-than-target readout rises when a real object enters the selected
    target distance, proving the native LiDAR depth frame is active even when
    the camera image alone would look unchanged.
@@ -435,6 +458,7 @@ A useful first version is complete when:
 ## Future directions
 
 - Occlusion demo: web-rendered objects disappear behind real geometry.
-- Depth bokeh: blur far surfaces in WebGPU using the native depth texture.
+- Depth bokeh: optional experiment only; the default demo favors target-distance
+  contours because blur hides the LiDAR signal.
 - Measurement overlay: sample depth under crosshair and show approximate range.
 - Mesh mode: estimate normals from the depth map and relight the scene in WGSL.

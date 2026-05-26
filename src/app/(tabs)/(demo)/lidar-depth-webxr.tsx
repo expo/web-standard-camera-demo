@@ -34,7 +34,7 @@ const OCCLUSION_DEPTHS_M = [0.8, 1.25, 2.0];
 const COMPARE_DEPTH_SPLIT = 0.5;
 const VIEW_MODES = [
   { label: 'Compare', value: 2 },
-  { label: 'Focus', value: 3 },
+  { label: 'Boundary', value: 3 },
   { label: 'Depth', value: 1 },
   { label: 'Camera', value: 0 },
 ] as const;
@@ -134,39 +134,30 @@ fn sampleDepth(depthUv: vec2f) -> f32 {
   return mixDepthValue(top, bottom, f.y);
 }
 
-fn palette(depth01: f32) -> vec3f {
-  let near = vec3f(1.0, 0.36, 0.12);
-  let mid = vec3f(0.20, 0.92, 0.78);
-  let far = vec3f(0.18, 0.24, 0.74);
-  let a = smoothstep(0.0, 0.58, depth01);
-  let b = smoothstep(0.38, 1.0, depth01);
-  return mix(mix(near, mid, a), far, b);
+fn clearDepthPalette(depth01: f32) -> vec3f {
+  let near = vec3f(0.95, 0.12, 0.08);
+  let mid = vec3f(0.02, 0.88, 0.74);
+  let far = vec3f(0.03, 0.08, 0.56);
+  let shaped = pow(clamp(depth01, 0.0, 1.0), 0.72);
+  let a = smoothstep(0.0, 0.54, shaped);
+  let b = smoothstep(0.44, 1.0, shaped);
+  var color = mix(mix(near, mid, a), far, b);
+  return mix(vec3f(0.5), color, 1.28);
 }
 
-fn depthRelief(depth: f32, depthUv: vec2f) -> vec3f {
-  let nearDepth = max(u.minDepth, 0.05);
-  let farDepth = max(max(u.maxDepth, u.targetDepth + 0.9), nearDepth + 0.75);
-  let depth01 = clamp((depth - nearDepth) / (farDepth - nearDepth), 0.0, 1.0);
-
+fn depthJump(depth: f32, depthUv: vec2f) -> f32 {
   let texelStep = 1.0 / vec2f(max(u.depthWidth, 1.0), max(u.depthHeight, 1.0));
   let dL = sampleDepth(clamp(depthUv + vec2f(-texelStep.x, 0.0), vec2f(0.0), vec2f(1.0)));
   let dR = sampleDepth(clamp(depthUv + vec2f( texelStep.x, 0.0), vec2f(0.0), vec2f(1.0)));
   let dU = sampleDepth(clamp(depthUv + vec2f(0.0, -texelStep.y), vec2f(0.0), vec2f(1.0)));
   let dD = sampleDepth(clamp(depthUv + vec2f(0.0,  texelStep.y), vec2f(0.0), vec2f(1.0)));
-  let normal = normalize(vec3f((dL - dR) * 2.8, (dU - dD) * 2.8, 1.0));
-  let light = clamp(dot(normal, normalize(vec3f(-0.45, -0.55, 1.0))), 0.0, 1.0);
-
-  let phase = fract(depth * 2.8);
-  let contourDistance = min(phase, 1.0 - phase);
-  let contour = 1.0 - smoothstep(0.0, 0.038, contourDistance);
-  var color = palette(depth01) * (0.48 + light * 0.58);
-  color += contour * vec3f(0.95, 0.98, 0.90) * 0.22;
-  return color;
-}
-
-fn targetDepthBand(depth: f32, mask: f32) -> f32 {
-  let distanceToPlane = abs(depth - u.targetDepth);
-  return (1.0 - smoothstep(0.0, 0.12, distanceToPlane)) * mask;
+  let axisJump = max(max(abs(depth - dL), abs(depth - dR)), max(abs(depth - dU), abs(depth - dD)));
+  let dNW = sampleDepth(clamp(depthUv + vec2f(-texelStep.x, -texelStep.y), vec2f(0.0), vec2f(1.0)));
+  let dNE = sampleDepth(clamp(depthUv + vec2f( texelStep.x, -texelStep.y), vec2f(0.0), vec2f(1.0)));
+  let dSW = sampleDepth(clamp(depthUv + vec2f(-texelStep.x,  texelStep.y), vec2f(0.0), vec2f(1.0)));
+  let dSE = sampleDepth(clamp(depthUv + vec2f( texelStep.x,  texelStep.y), vec2f(0.0), vec2f(1.0)));
+  let diagonalJump = max(max(abs(depth - dNW), abs(depth - dNE)), max(abs(depth - dSW), abs(depth - dSE)));
+  return max(axisJump, diagonalJump * 0.88);
 }
 
 fn foregroundDepth(depth: f32) -> f32 {
@@ -174,67 +165,102 @@ fn foregroundDepth(depth: f32) -> f32 {
 }
 
 fn depthDiscontinuity(depth: f32, depthUv: vec2f) -> f32 {
+  let edge = smoothstep(0.045, 0.14, depthJump(depth, depthUv));
+  return edge * edge;
+}
+
+fn distanceMarker(depth: f32, interval: f32, coreWidth: f32, falloffWidth: f32) -> vec2f {
+  let distanceToMarker = abs(fract(depth / interval + 0.5) - 0.5) * interval;
+  let core = 1.0 - smoothstep(0.0, coreWidth, distanceToMarker);
+  let halo = 1.0 - smoothstep(coreWidth, falloffWidth, distanceToMarker);
+  return vec2f(core, halo);
+}
+
+fn distanceMarkers(depth: f32) -> vec4f {
+  let quarterMeter = distanceMarker(depth, 0.25, 0.003, 0.012);
+  let meter = distanceMarker(depth, 1.0, 0.005, 0.022);
+  let minorCore = max(quarterMeter.x - meter.y, 0.0);
+  let minorHalo = max(quarterMeter.y - meter.y * 0.82, 0.0);
+  return vec4f(minorCore, minorHalo, meter.x, meter.y);
+}
+
+fn foregroundRimFromEdge(depth: f32, edge: f32) -> f32 {
+  let fg = foregroundDepth(depth);
+  let foregroundEdge = edge * smoothstep(0.42, 0.88, fg);
+  let thinFill = fg * 0.006;
+  return max(foregroundEdge, thinFill);
+}
+
+fn foregroundRim(depth: f32, depthUv: vec2f) -> f32 {
+  return foregroundRimFromEdge(depth, depthDiscontinuity(depth, depthUv));
+}
+
+fn targetLine(depth: f32) -> vec2f {
+  let distanceToTarget = abs(depth - u.targetDepth);
+  let core = 1.0 - smoothstep(0.004, 0.02, distanceToTarget);
+  let halo = 1.0 - smoothstep(0.026, 0.085, distanceToTarget);
+  return vec2f(core, halo);
+}
+
+fn boundaryOutline(depth: f32, depthUv: vec2f) -> vec2f {
+  let edge = depthDiscontinuity(depth, depthUv);
+  let rim = foregroundRimFromEdge(depth, edge);
+  return vec2f(edge, rim);
+}
+
+fn boundaryView(camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
+  var color = camera;
+  let boundaryMask = boundaryOutline(depth, depthUv);
+  let targetMask = targetLine(depth);
+  let closer = foregroundDepth(depth);
+  let farther = smoothstep(u.targetDepth + 0.04, u.targetDepth + 0.48, depth);
+
+  color = mix(color, color * 0.86 + vec3f(0.08, 0.04, 0.0), closer * 0.12);
+  color = mix(color, color * 0.78 + vec3f(0.0, 0.05, 0.08), farther * 0.14);
+  color = mix(color, color * 0.48, boundaryMask.x * 0.16);
+  color = mix(color, vec3f(1.0, 0.82, 0.10), boundaryMask.y * 0.50);
+  color = mix(color, vec3f(0.02, 0.18, 0.16), targetMask.y * 0.24);
+  color += targetMask.y * vec3f(0.02, 0.28, 0.23);
+  color = mix(color, vec3f(0.84, 1.0, 0.92), targetMask.x * 0.82);
+  return color;
+}
+
+fn depthMapView(depth: f32, depthUv: vec2f, markerStrength: f32) -> vec3f {
+  let boundaryMask = boundaryOutline(depth, depthUv);
+  let targetMask = targetLine(depth);
+  let markers = distanceMarkers(depth);
+  let nearDepth = max(u.minDepth, 0.05);
+  let farDepth = max(max(u.maxDepth, u.targetDepth + 0.75), nearDepth + 0.65);
+  let depth01 = clamp((depth - nearDepth) / (farDepth - nearDepth), 0.0, 1.0);
   let texelStep = 1.0 / vec2f(max(u.depthWidth, 1.0), max(u.depthHeight, 1.0));
   let dL = sampleDepth(clamp(depthUv + vec2f(-texelStep.x, 0.0), vec2f(0.0), vec2f(1.0)));
   let dR = sampleDepth(clamp(depthUv + vec2f( texelStep.x, 0.0), vec2f(0.0), vec2f(1.0)));
   let dU = sampleDepth(clamp(depthUv + vec2f(0.0, -texelStep.y), vec2f(0.0), vec2f(1.0)));
   let dD = sampleDepth(clamp(depthUv + vec2f(0.0,  texelStep.y), vec2f(0.0), vec2f(1.0)));
-  let jump = max(max(abs(depth - dL), abs(depth - dR)), max(abs(depth - dU), abs(depth - dD)));
-  return smoothstep(0.035, 0.16, jump);
-}
+  let normal = normalize(vec3f((dL - dR) * 7.0, (dU - dD) * 7.0, 1.0));
+  let light = clamp(dot(normal, normalize(vec3f(-0.42, -0.58, 1.0))), 0.0, 1.0);
 
-fn foregroundRim(depth: f32, depthUv: vec2f) -> f32 {
-  let fg = foregroundDepth(depth);
-  let edge = depthDiscontinuity(depth, depthUv);
-  return max(edge * fg, fg * 0.08);
-}
-
-fn sampleCamera(colorUv: vec2f, offset: vec2f, radius: f32) -> vec3f {
-  let maxCoord = vec2i(max(i32(u.colorWidth) - 1, 0), max(i32(u.colorHeight) - 1, 0));
-  let coord = clamp(
-    vec2i(colorUv * vec2f(u.colorWidth, u.colorHeight) + offset * radius),
-    vec2i(0),
-    maxCoord
-  );
-  return textureLoad(cameraTex, coord, 0).rgb;
-}
-
-fn depthFocus(camera: vec3f, colorUv: vec2f, screenUv: vec2f, depth: f32, depthUv: vec2f) -> vec3f {
-  let distanceToTarget = abs(depth - u.targetDepth);
-  let focusBand = 1.0 - smoothstep(0.035, 0.24, distanceToTarget);
-  let blurStrength = smoothstep(0.10, 0.82, distanceToTarget);
-  let blurRadius = mix(1.0, 8.0, blurStrength);
-  let diagonalRadius = blurRadius * 0.72;
-
-  var blurred = sampleCamera(colorUv, vec2f(0.0, 0.0), blurRadius) * 0.18;
-  blurred += sampleCamera(colorUv, vec2f( 1.0,  0.0), blurRadius) * 0.10;
-  blurred += sampleCamera(colorUv, vec2f(-1.0,  0.0), blurRadius) * 0.10;
-  blurred += sampleCamera(colorUv, vec2f( 0.0,  1.0), blurRadius) * 0.10;
-  blurred += sampleCamera(colorUv, vec2f( 0.0, -1.0), blurRadius) * 0.10;
-  blurred += sampleCamera(colorUv, vec2f( 1.0,  1.0), diagonalRadius) * 0.08;
-  blurred += sampleCamera(colorUv, vec2f(-1.0,  1.0), diagonalRadius) * 0.08;
-  blurred += sampleCamera(colorUv, vec2f( 1.0, -1.0), diagonalRadius) * 0.08;
-  blurred += sampleCamera(colorUv, vec2f(-1.0, -1.0), diagonalRadius) * 0.08;
-  blurred += sampleCamera(colorUv, vec2f( 2.0,  0.7), diagonalRadius) * 0.05;
-  blurred += sampleCamera(colorUv, vec2f(-2.0, -0.7), diagonalRadius) * 0.05;
-
-  var color = mix(camera, blurred, blurStrength * 0.88);
-  let rim = foregroundRim(depth, depthUv);
-  let targetBand = targetDepthBand(depth, 1.0);
-  color = mix(color, camera * 1.08 + vec3f(0.08, 0.05, 0.0), targetBand * 0.34);
-  color += focusBand * vec3f(0.02, 0.08, 0.07);
-  color = mix(color, vec3f(1.0, 0.67, 0.18), rim * 0.28);
+  var color = clearDepthPalette(depth01) * (0.44 + light * 0.72);
+  let markerShadow = clamp((markers.y * 0.28 + markers.w * 0.54) * markerStrength, 0.0, 1.0);
+  let minorLine = clamp((markers.x * 0.62 + markers.y * 0.16) * markerStrength, 0.0, 1.0);
+  let majorLine = clamp((markers.z * 0.92 + markers.w * 0.32) * markerStrength, 0.0, 1.0);
+  color = mix(color, color * 0.22, markerShadow);
+  color = mix(color, vec3f(0.92, 1.0, 0.98), minorLine);
+  color = mix(color, vec3f(1.0, 0.82, 0.10), majorLine);
+  color = mix(color, color * 0.48, boundaryMask.x * 0.12 * markerStrength);
+  color = mix(color, vec3f(1.0, 0.82, 0.10), boundaryMask.y * 0.42 * markerStrength);
+  color = mix(color, vec3f(0.02, 0.20, 0.18), targetMask.y * 0.24);
+  color = mix(color, vec3f(0.82, 1.0, 0.92), targetMask.x * 0.84);
   return color;
 }
 
-fn compareView(screenUv: vec2f, camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
-  let targetBand = targetDepthBand(depth, 1.0);
-  let rim = foregroundRim(depth, depthUv);
-  let relief = depthRelief(depth, depthUv);
+fn depthView(depth: f32, depthUv: vec2f) -> vec3f {
+  return depthMapView(depth, depthUv, 1.0);
+}
 
+fn compareView(screenUv: vec2f, camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
   let cameraSide = camera;
-  var depthSide = mix(relief, vec3f(1.0, 0.80, 0.24), targetBand * 0.24);
-  depthSide = mix(depthSide, vec3f(1.0, 0.56, 0.16), rim * 0.18);
+  let depthSide = depthMapView(depth, depthUv, 0.92);
 
   let splitX = ${COMPARE_DEPTH_SPLIT.toFixed(2)};
   let isDepthSide = step(splitX, screenUv.x);
@@ -273,15 +299,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     return vec4f(camera, 1.0);
   }
 
-  let relief = depthRelief(depth, depthUv);
   var color = camera;
   if (u.mode > 2.5) {
-    color = depthFocus(camera, colorUv, in.uv, depth, depthUv);
+    color = boundaryView(camera, depth, depthUv);
   } else if (u.mode > 1.5) {
     color = compareView(in.uv, camera, depth, depthUv);
   } else if (u.mode > 0.5) {
-    let rim = foregroundRim(depth, depthUv);
-    color = mix(relief, vec3f(1.0, 0.68, 0.18), rim * 0.54);
+    color = depthView(depth, depthUv);
   }
 
   let vignette = smoothstep(1.28, 0.28, length((in.uv - 0.5) * vec2f(u.canvasAspect, 1.0)));
@@ -295,7 +319,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const { adapter, device } = useDevice();
   const { lidarStatus, lidarError } = useCamera();
   const { autorun } = useLocalSearchParams<{ autorun?: string }>();
-  const { width: windowWidth } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const sessionRef = React.useRef<WebXRSession | null>(null);
   const didAutorunRef = React.useRef(false);
   const [session, setSession] = React.useState<WebXRSession | null>(null);
@@ -317,8 +341,11 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const targetDepthRef = React.useRef(targetDepth);
   const viewModeRef = React.useRef(viewMode);
 
-  const stageWidth = Math.min(Math.max(288, windowWidth - 32), 420);
-  const stageHeight = Math.round(stageWidth * 4 / 3);
+  const isDesktop = windowWidth >= 1040;
+  const stageWidth = isDesktop
+    ? Math.max(360, Math.min(windowWidth - 64, 960, Math.max(360, windowHeight - 260) * 4 / 3))
+    : Math.min(Math.max(288, windowWidth - 32), 420);
+  const stageHeight = Math.round(isDesktop ? stageWidth * 3 / 4 : stageWidth * 4 / 3);
 
   const resetXRReadouts = React.useCallback((nextStatus: string): void => {
     setStatus(nextStatus);
@@ -449,6 +476,18 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
         });
 
         const shaderModule = device.createShaderModule({ code: WEBXR_DEPTH_SHADER });
+        void shaderModule.getCompilationInfo?.()
+          .then((info: GPUCompilationInfo) => {
+            const errors = info.messages.filter((message) => message.type === 'error');
+            if (errors.length > 0) {
+              setError(
+                errors
+                  .map((message) => `WGSL ${message.lineNum}:${message.linePos} ${message.message}`)
+                  .join('\n')
+              );
+            }
+          })
+          .catch(() => undefined);
         const bindGroupLayout = device.createBindGroupLayout({
           entries: [
             { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
@@ -873,28 +912,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
           </View>
         </View>
 
-        <View style={styles.controls}>
-          <View style={styles.titleBlock}>
-            <Text style={styles.title}>WebXR LiDAR Depth Studio</Text>
-            <Text style={styles.subtitle}>
-              navigator.xr camera and scene depth rendered through WebGPU
-            </Text>
-          </View>
-
-          <View style={styles.statusRow}>
-            <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
-            <Text style={styles.statusText}>{displayStatus}</Text>
-          </View>
-
-          <Text style={styles.metric}>{support}</Text>
-          <Text style={styles.metric}>camera: {cameraInfo}</Text>
-          <Text style={styles.metric}>depth: {frameInfo}</Text>
-          <Text style={styles.metric}>center: {centerDepth}</Text>
-          <Text style={styles.metric}>target: {maskInfo}</Text>
-          <Text style={styles.metric}>range: {depthRange}</Text>
-          <Text style={styles.metric}>webgpu: {fps} fps</Text>
-          {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
-
+        <View style={[styles.quickControls, { width: stageWidth }]}>
           <View style={styles.depthControl}>
             <Text style={styles.depthControlLabel}>View</Text>
             <Host style={styles.pickerHost}>
@@ -928,6 +946,29 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
               </Picker>
             </Host>
           </View>
+        </View>
+
+        <View style={styles.controls}>
+          <View style={styles.titleBlock}>
+            <Text style={styles.title}>WebXR LiDAR Depth Studio</Text>
+            <Text style={styles.subtitle}>
+              navigator.xr camera and scene depth rendered through WebGPU
+            </Text>
+          </View>
+
+          <View style={styles.statusRow}>
+            <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
+            <Text style={styles.statusText}>{displayStatus}</Text>
+          </View>
+
+          <Text style={styles.metric}>{support}</Text>
+          <Text style={styles.metric}>camera: {cameraInfo}</Text>
+          <Text style={styles.metric}>depth: {frameInfo}</Text>
+          <Text style={styles.metric}>center: {centerDepth}</Text>
+          <Text style={styles.metric}>target: {maskInfo}</Text>
+          <Text style={styles.metric}>range: {depthRange}</Text>
+          <Text style={styles.metric}>webgpu: {fps} fps</Text>
+          {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
         </View>
       </ScrollView>
     </>
@@ -1045,6 +1086,9 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     gap: 8,
     paddingHorizontal: 16,
+  },
+  quickControls: {
+    gap: 8,
   },
   titleBlock: {
     gap: 3,
