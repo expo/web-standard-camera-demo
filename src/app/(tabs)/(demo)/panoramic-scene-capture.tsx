@@ -14,7 +14,9 @@ import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import {
   installWebXRDepthProfile,
   runWithWebXRUserActivation,
+  WebXRCPUCameraBinding,
   type WebXRCPUDepthInformation,
+  type WebXRCPUCameraImage,
   type WebXRFrame,
   type WebXRSession,
 } from '../../../../modules/standard-camera';
@@ -110,6 +112,8 @@ type CaptureStatus =
 interface CaptureModel {
   boundsMax: Vec3;
   boundsMin: Vec3;
+  cameraColoredSurfels: number;
+  colorSource: 'camera' | 'depth' | 'mixed';
   keyframes: number;
   surfelCount: number;
   surfels: Float32Array;
@@ -145,6 +149,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const pointStoreRef = React.useRef<number[]>([]);
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
+  const cameraColoredSurfelCountRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
   const statusRef = React.useRef<CaptureStatus>('checking');
@@ -155,7 +160,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const pinchDistanceStartRef = React.useRef<number | null>(null);
   const [session, setSession] = React.useState<WebXRSession | null>(null);
   const [status, setStatus] = React.useState<CaptureStatus>('checking');
-  const [support, setSupport] = React.useState('checking WebXR depth support');
+  const [support, setSupport] = React.useState('checking WebXR camera/depth support');
   const [error, setError] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<CaptureModel | null>(null);
   const [viewer, setViewer] = React.useState<ViewerState>(DEFAULT_VIEWER_STATE);
@@ -187,17 +192,17 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     installWebXRDepthProfile();
     const xr = navigator.xr;
     if (!xr) {
-      setSupport('WebXR depth unavailable here');
+      setSupport('WebXR camera/depth unavailable here');
       setStatus('unsupported');
       return;
     }
     void xr.isSessionSupported('immersive-ar')
       .then((supported) => {
-        setSupport(supported ? 'immersive-ar depth available' : 'WebXR depth unavailable here');
+        setSupport(supported ? 'immersive-ar camera/depth available' : 'WebXR camera/depth unavailable here');
         setStatus(supported ? 'idle' : 'unsupported');
       })
       .catch((e) => {
-        setSupport('WebXR depth check failed');
+        setSupport('WebXR camera/depth check failed');
         setStatus('error');
         setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
       });
@@ -225,6 +230,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     pointStoreRef.current = [];
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
+    cameraColoredSurfelCountRef.current = 0;
     surfelCountRef.current = 0;
     viewerRef.current = DEFAULT_VIEWER_STATE;
     publishModel(null);
@@ -248,24 +254,29 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     try {
       const xr = navigator.xr;
       if (!xr) {
-        setSupport('WebXR depth unavailable here');
+        setSupport('WebXR camera/depth unavailable here');
         setStatus('unsupported');
         return;
       }
       const supported = await xr.isSessionSupported('immersive-ar');
       if (!supported) {
-        setSupport('WebXR depth unavailable here');
+        setSupport('WebXR camera/depth unavailable here');
         setStatus('unsupported');
         return;
       }
       const nextSession = await runWithWebXRUserActivation(() =>
         xr.requestSession('immersive-ar', {
-          requiredFeatures: ['depth-sensing'],
+          requiredFeatures: ['depth-sensing', 'camera-access'],
           depthSensing: {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
             depthTypeRequest: ['smooth', 'raw'],
             matchDepthView: true,
+          },
+          cameraAccess: {
+            usagePreference: ['cpu-optimized'],
+            formatPreference: ['bgra8unorm', 'rgba8unorm'],
+            matchCameraView: true,
           },
         })
       );
@@ -308,7 +319,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   async function captureModel(): Promise<void> {
-    const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
+    const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current, cameraColoredSurfelCountRef.current);
     if (!nextModel || nextModel.surfelCount === 0) {
       setError('No valid depth samples have been captured yet.');
       return;
@@ -654,7 +665,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 <View style={styles.titleBlock}>
                   <Text style={styles.title}>Panoramic Scene Capture</Text>
                   <Text style={styles.subtitle}>
-                    WebXR depth keyframes fused into a WebGPU surfel model
+                    WebXR camera/depth keyframes fused into a WebGPU surfel model
                   </Text>
                 </View>
                 <View style={styles.statusRow}>
@@ -699,6 +710,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   async function startXRLoop(nextSession: WebXRSession): Promise<void> {
     const referenceSpace = await nextSession.requestReferenceSpace('viewer');
+    const cameraBinding = new WebXRCPUCameraBinding(nextSession);
     const onFrame = (_time: DOMHighResTimeStamp, frame: WebXRFrame): void => {
       const pose = frame.getViewerPose(referenceSpace);
       const view = pose?.views[0];
@@ -708,9 +720,24 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       }
       const depth = frame.getDepthInformation(view);
       if (depth) {
-        const accepted = maybeCaptureKeyframe(depth, view.projectionMatrix, view.transform.matrix, frame.predictedDisplayTime);
+        // @ref LLP 0017#xr-webgl-get-camera-image — This route uses the
+        // repo-local CPU binding analog to sample camera colors into surfels;
+        // no native camera side API is called outside the WebXR-shaped frame.
+        const xrCamera = view.camera;
+        const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
+        const accepted = maybeCaptureKeyframe(
+          depth,
+          camera,
+          view.projectionMatrix,
+          view.transform.matrix,
+          frame.predictedDisplayTime
+        );
         if (accepted) {
-          const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
+          const nextModel = buildModel(
+            pointStoreRef.current,
+            keyframeCountRef.current,
+            cameraColoredSurfelCountRef.current
+          );
           if (nextModel) {
             publishModel(nextModel);
             setModelInfo(formatModelInfo(nextModel));
@@ -733,6 +760,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   function maybeCaptureKeyframe(
     depth: WebXRCPUDepthInformation,
+    camera: WebXRCPUCameraImage | null,
     projectionMatrix: Float32Array,
     cameraToWorld: Float32Array,
     time: number
@@ -757,17 +785,19 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
     const added = appendDepthSurfels(
       depth,
+      camera,
       projectionMatrix,
       cameraToWorld,
       pointStoreRef.current,
       surfelCountRef.current
     );
-    if (added <= 0) return false;
+    if (added.surfelCount <= 0) return false;
     keyframeCountRef.current += 1;
-    surfelCountRef.current += added;
+    surfelCountRef.current += added.surfelCount;
+    cameraColoredSurfelCountRef.current += added.cameraColoredSurfels;
     keyframeRef.current = { forward, position, time };
     setFrameInfo(
-      `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - surfels: ${surfelCountRef.current}/${MAX_SURFELS}`
+      `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - surfels: ${surfelCountRef.current}/${MAX_SURFELS} - camera color: ${added.cameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
     );
     return true;
   }
@@ -803,16 +833,20 @@ function CommandButton({
 
 function appendDepthSurfels(
   depth: WebXRCPUDepthInformation,
+  camera: WebXRCPUCameraImage | null,
   projectionMatrix: Float32Array,
   cameraToWorld: Float32Array,
   store: number[],
   existingSurfels: number
-): number {
+): { cameraColoredSurfels: number; surfelCount: number } {
   const inverseProjection = invertMatrix4(projectionMatrix);
-  if (!inverseProjection) return 0;
+  if (!inverseProjection) return { cameraColoredSurfels: 0, surfelCount: 0 };
   const values = new Float32Array(depth.data);
   const depthTransform = depth.normDepthBufferFromNormView.matrix;
+  const cameraBytes = camera ? new Uint8Array(camera.data) : null;
+  const cameraTransform = camera?.normCameraImageFromNormView.matrix ?? null;
   let added = 0;
+  let cameraColoredSurfels = 0;
   for (let gy = 0; gy < SAMPLE_GRID_Y && added + existingSurfels < MAX_SURFELS; gy += 1) {
     const viewY = (gy + 0.5) / SAMPLE_GRID_Y;
     for (let gx = 0; gx < SAMPLE_GRID_X && added + existingSurfels < MAX_SURFELS; gx += 1) {
@@ -827,16 +861,20 @@ function appendDepthSurfels(
       }
       const cameraPoint = unprojectViewSample(inverseProjection, viewX, viewY, depthMeters);
       const world = transformPoint(cameraToWorld, cameraPoint);
-      const color = depthPalette(depthMeters);
+      const sampledColor = camera && cameraBytes && cameraTransform
+        ? sampleCameraColor(camera, cameraBytes, cameraTransform, viewX, viewY)
+        : null;
+      const color = sampledColor ?? depthPalette(depthMeters);
+      if (sampledColor) cameraColoredSurfels += 1;
       const radius = Math.max(0.6, 2.4 - depthMeters * 0.26);
       store.push(world[0], world[1], world[2], radius, color[0], color[1], color[2], 1);
       added += 1;
     }
   }
-  return added;
+  return { cameraColoredSurfels, surfelCount: added };
 }
 
-function buildModel(points: number[], keyframes: number): CaptureModel | null {
+function buildModel(points: number[], keyframes: number, cameraColoredSurfels: number): CaptureModel | null {
   const surfelCount = Math.floor(points.length / SURFEL_STRIDE_FLOATS);
   if (surfelCount <= 0) return null;
   const surfels = new Float32Array(points);
@@ -850,7 +888,12 @@ function buildModel(points: number[], keyframes: number): CaptureModel | null {
     boundsMax[1] = Math.max(boundsMax[1], surfels[i + 1] ?? 0);
     boundsMax[2] = Math.max(boundsMax[2], surfels[i + 2] ?? 0);
   }
-  return { boundsMax, boundsMin, keyframes, surfelCount, surfels };
+  const colorSource = cameraColoredSurfels <= 0
+    ? 'depth'
+    : cameraColoredSurfels >= surfelCount
+      ? 'camera'
+      : 'mixed';
+  return { boundsMax, boundsMin, cameraColoredSurfels, colorSource, keyframes, surfelCount, surfels };
 }
 
 function formatModelInfo(model: CaptureModel): string {
@@ -859,7 +902,7 @@ function formatModelInfo(model: CaptureModel): string {
     model.boundsMax[1] - model.boundsMin[1],
     model.boundsMax[2] - model.boundsMin[2],
   ];
-  return `model: ${model.keyframes} keyframes - ${model.surfelCount} surfels - ${size
+  return `model: ${model.keyframes} keyframes - ${model.surfelCount} surfels - ${model.colorSource} color - ${size
     .map((value) => `${Math.max(0, value).toFixed(1)}m`)
     .join(' x ')}`;
 }
@@ -869,6 +912,8 @@ function serializeModelAsPly(model: CaptureModel): string {
     'ply',
     'format ascii 1.0',
     'comment standard-camera-app panoramic WebXR depth capture',
+    `comment color_source ${model.colorSource}`,
+    `comment camera_colored_surfels ${model.cameraColoredSurfels}`,
     `element vertex ${model.surfelCount}`,
     'property float x',
     'property float y',
@@ -903,6 +948,34 @@ function plyNumber(value: number): string {
 function colorByte(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(Math.min(1, Math.max(0, value)) * 255);
+}
+
+function sampleCameraColor(
+  camera: WebXRCPUCameraImage,
+  bytes: Uint8Array,
+  normCameraImageFromNormView: Float32Array,
+  viewX: number,
+  viewY: number
+): Vec3 | null {
+  const cameraPoint = transformNormalizedPoint(normCameraImageFromNormView, viewX, viewY);
+  if (!Number.isFinite(cameraPoint.x) || !Number.isFinite(cameraPoint.y)) return null;
+  if (cameraPoint.x < 0 || cameraPoint.x > 1 || cameraPoint.y < 0 || cameraPoint.y > 1) return null;
+  const px = Math.round(cameraPoint.x * Math.max(0, camera.width - 1));
+  const py = Math.round(cameraPoint.y * Math.max(0, camera.height - 1));
+  const offset = (py * camera.width + px) * 4;
+  if (offset < 0 || offset + 2 >= bytes.length) return null;
+  if (camera.format === 'bgra8unorm') {
+    return [
+      (bytes[offset + 2] ?? 0) / 255,
+      (bytes[offset + 1] ?? 0) / 255,
+      (bytes[offset] ?? 0) / 255,
+    ];
+  }
+  return [
+    (bytes[offset] ?? 0) / 255,
+    (bytes[offset + 1] ?? 0) / 255,
+    (bytes[offset + 2] ?? 0) / 255,
+  ];
 }
 
 function touchDistance(touches: readonly { pageX: number; pageY: number }[]): number | null {
