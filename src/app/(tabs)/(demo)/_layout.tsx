@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import * as React from 'react';
+import { Platform } from 'react-native';
 import type { SFSymbol } from 'sf-symbols-typescript';
 
 import { useCamera } from '@/contexts/CameraContext';
@@ -71,8 +72,13 @@ export default function DemoStackLayout(): React.JSX.Element {
       screenOptions={{
         headerLargeTitle: true,
         headerShadowVisible: false,
+        // Web shows the page title inside the AppTabs floating header; the
+        // demo subscreens render their own dark overlays for chrome on web,
+        // so the per-screen Stack header is hidden on web only.
+        headerShown: Platform.OS !== 'web',
       }}>
       <Stack.Screen name="index" options={{ title: 'Demos' }} />
+      <Stack.Screen name="demos" options={{ title: 'Demos' }} />
       <Stack.Screen
         name="cube"
         options={{
