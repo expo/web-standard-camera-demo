@@ -383,6 +383,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       const savedSize = file.exists ? file.size : ply.length;
       const filesLocation = formatFilesLocation(filename, savedSize);
       setSaveInfo(filesLocation);
+      logExportMetrics(model, file.uri, filename, savedSize);
       const available = await Sharing.isAvailableAsync();
       if (!available) {
         return;
@@ -1215,6 +1216,17 @@ function logCaptureMetrics(model: CaptureModel): void {
     rawSampleCount: model.rawSampleCount,
     surfelCount: model.surfelCount,
     voxelSizeMeters: model.voxelSizeMeters,
+  }));
+}
+
+function logExportMetrics(model: CaptureModel, uri: string, filename: string, bytes: number): void {
+  console.log('PANORAMIC_EXPORT_METRICS', JSON.stringify({
+    bytes,
+    filename,
+    filesVisiblePath: `standard-camera-app/${filename}`,
+    keyframes: model.keyframes,
+    surfelCount: model.surfelCount,
+    uri,
   }));
 }
 

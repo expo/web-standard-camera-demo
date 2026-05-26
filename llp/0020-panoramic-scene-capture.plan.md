@@ -52,6 +52,8 @@ Implemented:
 - Capture telemetry: model view reports fusion, camera-color, normal-estimate,
   and build-time metrics, and final Capture logs a
   `PANORAMIC_CAPTURE_METRICS` JSON line for physical-device validation.
+- Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
+  Files-visible path, file URI, byte count, keyframe count, and surfel count.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
 - Export: writes an ASCII `.ply` model into the app Documents directory before
@@ -536,6 +538,8 @@ Manual/device validation:
 - WebGPU frame rate remains usable with the max retained surfel count
 - final Capture emits `PANORAMIC_CAPTURE_METRICS` with nonzero keyframes,
   surfels, camera color percentage, normal percentage, and bounds
+- final Save emits `PANORAMIC_EXPORT_METRICS` with a nonzero byte count and
+  Files-visible `.ply` path
 
 Before requesting review for implementation, run:
 
