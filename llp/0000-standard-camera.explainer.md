@@ -6,7 +6,7 @@
 **Role:** Root
 **Author:** James Ide
 **Date:** 2026-05-19 (audio added 2026-05-22)
-**Related:** 0001, 0005, 0006, 0007, 0009, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020
+**Related:** 0001, 0005, 0006, 0007, 0009, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021
 
 ## Summary
 
@@ -113,7 +113,8 @@ See [LLP 0005](./0005-ios-native-mapping.decision.md) for the details of the iOS
 │   ├── 0017-webxr-raw-camera-access-spec-slices.spec.md
 │   ├── 0018-mediacapture-depth-spec-slices.spec.md
 │   ├── 0019-expo-web-testing-flow.guide.md
-│   └── 0020-panoramic-scene-capture.plan.md
+│   ├── 0020-panoramic-scene-capture.plan.md
+│   └── 0021-web-facing-mode-policy.decision.md
 ├── modules/
 │   └── standard-camera/               local Expo module
 └── scripts/
