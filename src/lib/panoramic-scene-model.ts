@@ -121,6 +121,11 @@ export interface SurfelVoxelAccumulator {
   z: number;
 }
 
+export interface SurfelFusionAccumulator {
+  rawSampleCount: number;
+  voxels: Map<string, SurfelVoxelAccumulator>;
+}
+
 export function shouldAcceptPanoramicKeyframe({
   candidateSurfels,
   existingSurfels,
@@ -340,8 +345,21 @@ function surfelSampleWeight(depthMeters: number): number {
 // world-space cell are fused into one weighted surfel instead of appended as
 // duplicate points.
 export function fuseSurfels(points: number[]): SurfelVoxelAccumulator[] {
-  const voxels = new Map<string, SurfelVoxelAccumulator>();
+  const fusion = createSurfelFusionAccumulator();
+  appendSurfelsToFusion(fusion, points);
+  return [...fusion.voxels.values()];
+}
+
+export function createSurfelFusionAccumulator(): SurfelFusionAccumulator {
+  return {
+    rawSampleCount: 0,
+    voxels: new Map<string, SurfelVoxelAccumulator>(),
+  };
+}
+
+export function appendSurfelsToFusion(fusion: SurfelFusionAccumulator, points: number[]): void {
   for (let i = 0; i + SURFEL_STRIDE_FLOATS <= points.length; i += SURFEL_STRIDE_FLOATS) {
+    fusion.rawSampleCount += 1;
     const x = points[i] ?? 0;
     const y = points[i + 1] ?? 0;
     const z = points[i + 2] ?? 0;
@@ -349,7 +367,7 @@ export function fuseSurfels(points: number[]): SurfelVoxelAccumulator[] {
     const rawWeight = points[i + 7] ?? 1;
     const weight = Math.max(Math.abs(rawWeight), 1e-4);
     const key = voxelKey(x, y, z);
-    let voxel = voxels.get(key);
+    let voxel = fusion.voxels.get(key);
     if (!voxel) {
       voxel = {
         cameraB: 0,
@@ -372,11 +390,10 @@ export function fuseSurfels(points: number[]): SurfelVoxelAccumulator[] {
         y: 0,
         z: 0,
       };
-      voxels.set(key, voxel);
+      fusion.voxels.set(key, voxel);
     }
     addSampleToVoxel(voxel, points, i, weight, rawWeight > 0);
   }
-  return [...voxels.values()];
 }
 
 function addSampleToVoxel(
@@ -426,10 +443,16 @@ function voxelKey(x: number, y: number, z: number): string {
 }
 
 export function buildModel(points: number[], keyframes: number): CaptureModel | null {
+  const fusion = createSurfelFusionAccumulator();
+  appendSurfelsToFusion(fusion, points);
+  return buildModelFromFusion(fusion, keyframes);
+}
+
+export function buildModelFromFusion(fusion: SurfelFusionAccumulator, keyframes: number): CaptureModel | null {
   const buildStart = performanceNow();
-  const rawSampleCount = Math.floor(points.length / SURFEL_STRIDE_FLOATS);
+  const rawSampleCount = fusion.rawSampleCount;
   if (rawSampleCount <= 0) return null;
-  const fused = fuseSurfels(points);
+  const fused = [...fusion.voxels.values()];
   const surfelCount = fused.length;
   if (surfelCount <= 0) return null;
   const surfels = new Float32Array(surfelCount * SURFEL_STRIDE_FLOATS);

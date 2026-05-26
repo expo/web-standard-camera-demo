@@ -2,7 +2,10 @@ import { expect, test } from 'bun:test';
 
 import {
   appendDepthSurfels,
+  appendSurfelsToFusion,
   buildModel,
+  buildModelFromFusion,
+  createSurfelFusionAccumulator,
   formatFilesLocation,
   invertMatrix4,
   MAX_KEYFRAMES,
@@ -79,6 +82,30 @@ test('buildModel fuses same-voxel surfels and prefers camera colors over fallbac
   expect(model?.surfels[4]).toBeCloseTo(0.5, 6);
   expect(model?.surfels[5]).toBeCloseTo(0, 6);
   expect(model?.surfels[6]).toBeCloseTo(0.5, 6);
+});
+
+test('incremental surfel fusion matches full model rebuild output', () => {
+  const first = [
+    ...surfelSample({ x: 0, y: 0, z: -1, r: 1, g: 0, b: 0, weight: 1 }),
+    ...surfelSample({ x: 0.2, y: 0, z: -1, r: 0, g: 1, b: 0, weight: 1 }),
+  ];
+  const second = [
+    ...surfelSample({ x: 0.01, y: 0.01, z: -1.01, r: 0, g: 0, b: 1, weight: 1 }),
+  ];
+  const all = [...first, ...second];
+  const fusion = createSurfelFusionAccumulator();
+
+  appendSurfelsToFusion(fusion, first);
+  appendSurfelsToFusion(fusion, second);
+
+  const incremental = buildModelFromFusion(fusion, 2);
+  const rebuilt = buildModel(all, 2);
+
+  expect(incremental).not.toBeNull();
+  expect(rebuilt).not.toBeNull();
+  expect(incremental?.rawSampleCount).toBe(rebuilt?.rawSampleCount);
+  expect(incremental?.surfelCount).toBe(rebuilt?.surfelCount);
+  expect(Array.from(incremental?.surfels ?? [])).toEqual(Array.from(rebuilt?.surfels ?? []));
 });
 
 test('appendDepthSurfels converts WebXR-shaped RGB-D frame data into camera-colored samples', () => {

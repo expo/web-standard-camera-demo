@@ -60,6 +60,11 @@ Implemented:
 - Capture telemetry: model view reports fusion, camera-color, normal-estimate,
   and build-time metrics, and final Capture logs a
   `PANORAMIC_CAPTURE_METRICS` JSON line for physical-device validation.
+- Scan-loop profiling: accepted keyframes log `PANORAMIC_KEYFRAME_PROFILE`;
+  scan mode maintains an incremental voxel-fusion map and no longer rebuilds
+  the full voxel-fused model after every retained keyframe, so live capture
+  work stays proportional to the new keyframe instead of the entire accumulated
+  point history.
 - Render telemetry: after the captured model reaches a WebGPU draw with a
   nonempty surfel buffer, the viewer logs `PANORAMIC_RENDER_METRICS` with the
   canvas size, presentation format, model revision, keyframe count, surfel

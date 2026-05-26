@@ -244,7 +244,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestProjectionMatrix = webXRIdentityMatrix
     latestViewTransform = webXRIdentityMatrix
     latestNormDepthBufferFromNormView = webXRIdentityMatrix
-    latestNormCameraImageFromNormView = webXRIdentityMatrix
+    latestNormCapturedImageFromNormView = .identity
     lastErrorReason = nil
     state = .starting
     pendingStart = PendingLiDARStart(sessionId: currentSessionId, resolve: resolve, reject: reject)

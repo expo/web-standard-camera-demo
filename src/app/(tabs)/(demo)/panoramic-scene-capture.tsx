@@ -25,8 +25,10 @@ import { useCamera } from '@/contexts/CameraContext';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import {
   appendDepthSurfels,
-  buildModel,
+  appendSurfelsToFusion,
+  buildModelFromFusion,
   clamp,
+  createSurfelFusionAccumulator,
   extractForward,
   extractPosition,
   formatFilesLocation,
@@ -44,6 +46,7 @@ import {
   SURFEL_STRIDE_BYTES,
   type CaptureModel,
   type KeyframeSnapshot,
+  type SurfelFusionAccumulator,
   type ViewerState,
 } from '@/lib/panoramic-scene-model';
 import {
@@ -176,7 +179,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const sessionRef = React.useRef<WebXRSession | null>(null);
   const xrRafRef = React.useRef<number | null>(null);
-  const pointStoreRef = React.useRef<number[]>([]);
+  const fusionRef = React.useRef<SurfelFusionAccumulator>(createSurfelFusionAccumulator());
   const coverageSectorsRef = React.useRef<Set<string>>(new Set());
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
@@ -265,7 +268,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   );
 
   function resetCapture(): void {
-    pointStoreRef.current = [];
+    fusionRef.current = createSurfelFusionAccumulator();
     coverageSectorsRef.current = new Set();
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
@@ -368,7 +371,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   async function captureModel(): Promise<void> {
-    const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
+    const nextModel = buildModelFromFusion(fusionRef.current, keyframeCountRef.current);
     if (!nextModel || nextModel.surfelCount === 0) {
       setError('No valid depth samples have been captured yet.');
       return;
@@ -841,21 +844,23 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         // @ref LLP 0017#xr-webgl-get-camera-image — This route uses the
         // repo-local CPU binding analog to sample camera colors into surfels;
         // no native camera side API is called outside the WebXR-shaped frame.
-        const xrCamera = view.camera;
-        const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
         const accepted = maybeCaptureKeyframe(
           depth,
-          camera,
+          () => {
+            const xrCamera = view.camera;
+            return xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
+          },
           view.projectionMatrix,
           view.transform.matrix,
           frame.predictedDisplayTime
         );
         if (accepted) {
-          const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
-          if (nextModel) {
-            publishModel(nextModel);
-            setModelInfo(formatModelInfo(nextModel));
-          }
+          // @ref LLP 0020#performance-constraints - Do not rebuild the full
+          // voxel-fused model while scanning; that made each accepted keyframe
+          // slower as retained samples grew. Capture seals and builds once.
+          setModelInfo(
+            `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - ${surfelCountRef.current}/${MAX_SURFELS} samples retained - model builds on Capture`
+          );
         }
       }
       xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
@@ -875,7 +880,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   function maybeCaptureKeyframe(
     depth: WebXRCPUDepthInformation,
-    camera: WebXRCPUCameraImage | null,
+    getCameraImage: () => WebXRCPUCameraImage | null,
     projectionMatrix: Float32Array,
     cameraToWorld: Float32Array,
     time: number
@@ -895,14 +900,16 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
 
     const candidateStore: number[] = [];
+    const appendStart = performanceNow();
     const added = appendDepthSurfels(
       depth,
-      camera,
+      getCameraImage(),
       projectionMatrix,
       cameraToWorld,
       candidateStore,
       surfelCountRef.current
     );
+    const appendMs = performanceNow() - appendStart;
     // @ref LLP 0020#keyframe-policy - A retained keyframe must contribute
     // enough valid depth samples, not merely pass the pose/time threshold.
     const sampleDecision = shouldAcceptPanoramicKeyframe({
@@ -923,17 +930,26 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       return false;
     }
 
-    for (const value of candidateStore) {
-      pointStoreRef.current.push(value);
-    }
+    appendSurfelsToFusion(fusionRef.current, candidateStore);
     keyframeCountRef.current += 1;
     surfelCountRef.current += added.surfelCount;
     keyframeRef.current = { forward, position, time };
     coverageSectorsRef.current.add(panoramicCoverageKey(forward));
+    setLiveSurfelCount(surfelCountRef.current);
     setCoveragePercent(panoramicCoveragePercent(coverageSectorsRef.current));
+    setQualityInfo(
+      `scan profile: append ${appendMs.toFixed(1)}ms - camera ${added.cameraColoredSurfels}/${added.surfelCount}`
+    );
     setFrameInfo(
       `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - samples: ${surfelCountRef.current}/${MAX_SURFELS} - camera color: ${added.cameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
     );
+    logKeyframeProfile({
+      appendMs,
+      cameraColoredSurfels: added.cameraColoredSurfels,
+      keyframes: keyframeCountRef.current,
+      retainedSamples: surfelCountRef.current,
+      surfelCount: added.surfelCount,
+    });
     return true;
   }
 }
@@ -1022,6 +1038,28 @@ function logRenderMetrics(
     rawSampleCount: model.rawSampleCount,
     surfelCount: model.surfelCount,
     viewMode: MODEL_VIEW_MODES.find((mode) => mode.value === modelViewMode)?.label ?? modelViewMode,
+  }));
+}
+
+function logKeyframeProfile({
+  appendMs,
+  cameraColoredSurfels,
+  keyframes,
+  retainedSamples,
+  surfelCount,
+}: {
+  appendMs: number;
+  cameraColoredSurfels: number;
+  keyframes: number;
+  retainedSamples: number;
+  surfelCount: number;
+}): void {
+  console.log('PANORAMIC_KEYFRAME_PROFILE', JSON.stringify({
+    appendMs: Number(appendMs.toFixed(2)),
+    cameraColorPercent: Number((100 * cameraColoredSurfels / Math.max(surfelCount, 1)).toFixed(1)),
+    keyframes,
+    retainedSamples,
+    surfelCount,
   }));
 }
 
