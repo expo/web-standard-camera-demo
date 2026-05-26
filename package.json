@@ -43,6 +43,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "test:web": "bun run scripts/test-web.ts",
     "test:ios": "bun run scripts/test-ios.ts"
   },
   "private": true,

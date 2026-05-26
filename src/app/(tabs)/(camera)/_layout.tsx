@@ -106,7 +106,6 @@ export default function CameraStackLayout(): React.JSX.Element {
           unstable_headerRightItems: headerRightItems,
         }}
       />
-      <Stack.Screen name="webgpu-spike" options={{ title: 'WebGPU spike' }} />
     </Stack>
   );
 }

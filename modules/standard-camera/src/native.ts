@@ -1,6 +1,7 @@
-// @ref LLP 0005 — native module bridge; JS-side handles to SharedObjects
+// @ref LLP 0005 — Platform backend contract for the web-shaped camera API.
+// iOS implements this contract in native.ios.ts via the StandardCamera Expo
+// module. Web builds should use the browser's own APIs and avoid this backend.
 
-import { requireNativeModule } from 'expo';
 import type { EventSubscription } from 'expo-modules-core';
 
 import type {
@@ -134,7 +135,7 @@ export interface NativeMediaStream {
   __simulateInterruptionForTesting(reasonCode: number, ended: boolean): void;
 }
 
-interface NativeStandardCameraModule {
+export interface NativeStandardCameraModule {
   // Constructor handles (no public constructors, but the class object is exposed).
   MediaStream: { new (): never };
   MediaStreamTrack: { new (): never };
@@ -235,4 +236,30 @@ export interface NativeLiDARDepthFrame {
   readonly meanDepth: number;
 }
 
-export default requireNativeModule<NativeStandardCameraModule>('StandardCamera');
+function unavailable(method: string): never {
+  throw new Error(`${method} requires the iOS StandardCamera native backend`);
+}
+
+const unavailableConstructor = function UnavailableNativeConstructor(): never {
+  return unavailable('StandardCamera constructor');
+} as unknown as { new (): never };
+
+const unavailableBackend: NativeStandardCameraModule = {
+  MediaStream: unavailableConstructor,
+  MediaStreamTrack: unavailableConstructor,
+  getUserMediaAsync: () => unavailable('StandardCamera.getUserMediaAsync'),
+  enumerateDevicesAsync: () => unavailable('StandardCamera.enumerateDevicesAsync'),
+  getSupportedConstraints: () => unavailable('StandardCamera.getSupportedConstraints'),
+  createMediaStream: () => unavailable('StandardCamera.createMediaStream'),
+  __systemLogForTesting: () => unavailable('StandardCamera.__systemLogForTesting'),
+  getDiagnostics: () => unavailable('StandardCamera.getDiagnostics'),
+  getLiDARDepthCapabilities: () => unavailable('StandardCamera.getLiDARDepthCapabilities'),
+  startLiDARDepthAsync: () => unavailable('StandardCamera.startLiDARDepthAsync'),
+  startLiDARDepthWithTypeAsync: () => unavailable('StandardCamera.startLiDARDepthWithTypeAsync'),
+  stopLiDARDepthAsync: () => unavailable('StandardCamera.stopLiDARDepthAsync'),
+  stopLiDARDepth: () => unavailable('StandardCamera.stopLiDARDepth'),
+  getLatestWebXRLiDARDepthFrame: () => unavailable('StandardCamera.getLatestWebXRLiDARDepthFrame'),
+  addListener: () => unavailable('StandardCamera.addListener'),
+};
+
+export default unavailableBackend;

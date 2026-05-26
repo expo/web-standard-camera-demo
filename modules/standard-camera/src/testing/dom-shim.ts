@@ -16,6 +16,8 @@ declare global {
   // eslint-disable-next-line no-var
   var test_driver: TestDriver;
   // eslint-disable-next-line no-var
+  var assert_implements_optional: (condition: unknown, description?: string) => void;
+  // eslint-disable-next-line no-var
   var get_host_info: () => Record<string, string>;
   // eslint-disable-next-line no-var
   var EventWatcher: new (t: unknown, target: EventTarget, events: string[]) => {
@@ -25,7 +27,7 @@ declare global {
 }
 
 interface TestDriver {
-  bless(_name: string): Promise<void>;
+  bless<T>(_name: string, _action?: () => T | Promise<T>): Promise<T | void>;
   set_permission(_descriptor: PermissionDescriptor, _state: PermissionState): Promise<void>;
   click(_element: unknown): Promise<void>;
 }
@@ -63,6 +65,8 @@ class StubElement extends EventTarget {
   permissionsPolicy: { features(): string[] } = { features: () => ['camera', 'microphone'] };
 
   // Event-handler attributes we see in WPT — wired through EventTarget.
+  onclick: ((e: Event) => void) | null = null;
+  onload: ((e: Event) => void) | null = null;
   onloadstart: ((e: Event) => void) | null = null;
   onloadeddata: ((e: Event) => void) | null = null;
   onloadedmetadata: ((e: Event) => void) | null = null;
@@ -96,6 +100,9 @@ class StubElement extends EventTarget {
   appendChild<T extends StubElement>(child: T): T {
     this.children.push(child);
     child.parentElement = this;
+    if (child.tagName === 'IFRAME') {
+      setTimeout(() => child.dispatchEvent(new Event('load')), 0);
+    }
     return child;
   }
 
@@ -114,6 +121,19 @@ class StubElement extends EventTarget {
 
   querySelector(_sel: string): null { return null; }
   querySelectorAll(_sel: string): StubElement[] { return []; }
+
+  override dispatchEvent(event: Event): boolean {
+    const ok = super.dispatchEvent(event);
+    const handler = (this as unknown as Record<string, unknown>)[`on${event.type}`];
+    if (typeof handler === 'function') {
+      (handler as (e: Event) => void).call(this, event);
+    }
+    return ok;
+  }
+
+  click(): void {
+    this.dispatchEvent(new Event('click'));
+  }
 
   play(): Promise<void> {
     this.paused = false;
@@ -196,14 +216,64 @@ class StubIframeElement extends StubElement {
 // so WPT bodies can capture the reference at module load yet still see the
 // real element once the runner installs it via `installTestGlobals(...)`.
 const liveProxyCache = new Map<string, object>();
+
+function reportHarnessError(error: unknown): void {
+  const capture = (globalThis as unknown as {
+    __standardCameraCaptureTestError?: (e: unknown) => void;
+  }).__standardCameraCaptureTestError;
+  if (typeof capture === 'function') {
+    capture(error);
+  } else {
+    throw error;
+  }
+}
+
+function wrapEventHandler<T extends (...args: any[]) => unknown>(handler: T): T {
+  return function wrappedEventHandler(this: unknown, ...args: unknown[]) {
+    try {
+      return handler.apply(this, args);
+    } catch (e) {
+      reportHarnessError(e);
+      return undefined;
+    }
+  } as T;
+}
+
 function liveProxy(name: 'video' | 'audio'): object {
   const cached = liveProxyCache.get(name);
   if (cached) return cached;
+  const listenerWrappers = new WeakMap<EventListenerObject | EventListener, EventListener>();
   const target: Record<string, unknown> = {};
   const proxy = new Proxy(target, {
     get(_t, prop) {
       const live = (globalThis as unknown as Record<string, unknown>)[name];
       if (live == null) return undefined;
+      if (prop === 'addEventListener') {
+        return (
+          type: string,
+          listener: EventListenerObject | EventListener | null,
+          options?: boolean | AddEventListenerOptions
+        ): void => {
+          if (!listener) return;
+          const wrapped: EventListener =
+            typeof listener === 'function'
+              ? wrapEventHandler(listener as EventListener)
+              : wrapEventHandler((event: Event) => listener.handleEvent(event));
+          listenerWrappers.set(listener, wrapped);
+          (live as EventTarget).addEventListener(type, wrapped, options);
+        };
+      }
+      if (prop === 'removeEventListener') {
+        return (
+          type: string,
+          listener: EventListenerObject | EventListener | null,
+          options?: boolean | EventListenerOptions
+        ): void => {
+          if (!listener) return;
+          const wrapped = listenerWrappers.get(listener) ?? listener;
+          (live as EventTarget).removeEventListener(type, wrapped as EventListener, options);
+        };
+      }
       const value = (live as Record<string | symbol, unknown>)[prop as string | symbol];
       // Bind methods so `this` is the live element, not the proxy.
       return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(live) : value;
@@ -211,7 +281,11 @@ function liveProxy(name: 'video' | 'audio'): object {
     set(_t, prop, value) {
       const live = (globalThis as unknown as Record<string, unknown>)[name];
       if (live == null) return false;
-      (live as Record<string | symbol, unknown>)[prop as string | symbol] = value;
+      const key = prop as string | symbol;
+      (live as Record<string | symbol, unknown>)[key] =
+        typeof key === 'string' && key.startsWith('on') && typeof value === 'function'
+          ? wrapEventHandler(value as (...args: unknown[]) => unknown)
+          : value;
       return true;
     },
     has(_t, prop) {
@@ -222,6 +296,46 @@ function liveProxy(name: 'video' | 'audio'): object {
   });
   liveProxyCache.set(name, proxy);
   return proxy;
+}
+
+const elementStubCache = new Map<string, StubElement>();
+
+function fallbackElementForId(id: string): StubElement | null {
+  if (id === 'vid' || id === 'video' || /^vid\d*$/.test(id)) {
+    return liveProxy('video') as unknown as StubElement;
+  }
+  if (id === 'aud' || id === 'audio' || /^aud\d*$/.test(id)) {
+    return liveProxy('audio') as unknown as StubElement;
+  }
+  if (id === 'button' || id === 'target' || id === 'test-div' || id === 'workerCode') {
+    let element = elementStubCache.get(id);
+    if (!element) {
+      element = new StubElement(id === 'button' ? 'button' : id === 'workerCode' ? 'script' : 'div');
+      element.id = id;
+      if (id === 'workerCode') {
+        element.textContent = `
+self.onmessage = (e) => {
+  self.postMessage({
+    result: e.data instanceof MediaStreamTrack ? 'Success' : 'Failure',
+    error: e.data instanceof MediaStreamTrack ? undefined : 'message was not a MediaStreamTrack'
+  });
+};
+`;
+      }
+      elementStubCache.set(id, element);
+    }
+    return element;
+  }
+  return null;
+}
+
+function fallbackElementForSelector(selector: string): StubElement | null {
+  const trimmed = selector.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'video') return liveProxy('video') as unknown as StubElement;
+  if (lower === 'audio') return liveProxy('audio') as unknown as StubElement;
+  if (trimmed.startsWith('#')) return fallbackElementForId(trimmed.slice(1));
+  return null;
 }
 
 class StubDocument {
@@ -246,22 +360,7 @@ class StubDocument {
     // stable live-binding proxy whose every property access delegates to the
     // current `globalThis.video` (or `globalThis.audio`) — so captures stay
     // valid once the runner actually starts.
-    if (id === 'vid' || id === 'video') {
-      return liveProxy('video') as unknown as StubElement;
-    }
-    if (id === 'aud' || id === 'audio') {
-      return liveProxy('audio') as unknown as StubElement;
-    }
-    // Some tests use `vid2`/`vid3`/etc. We hand them the same live video proxy
-    // — there's only one underlying element, but tests usually only operate
-    // on one at a time so collisions are rare. Better than null.
-    if (/^vid\d*$/.test(id)) {
-      return liveProxy('video') as unknown as StubElement;
-    }
-    if (/^aud\d*$/.test(id)) {
-      return liveProxy('audio') as unknown as StubElement;
-    }
-    return null;
+    return fallbackElementForId(id);
   }
 
   // Hand back the live video/audio element for the common WPT
@@ -270,20 +369,110 @@ class StubDocument {
   // the same live-binding proxies so tests like MediaStream-MediaElement-preload-none
   // (which uses `querySelector` rather than `getElementById`) can run.
   querySelector(sel: string): StubElement | null {
-    const s = sel.toLowerCase().trim();
-    if (s === 'video') return liveProxy('video') as unknown as StubElement;
-    if (s === 'audio') return liveProxy('audio') as unknown as StubElement;
-    return null;
+    return fallbackElementForSelector(sel);
   }
   querySelectorAll(_sel: string): StubElement[] { return []; }
 }
 
 const docStub = new StubDocument() as unknown as Document;
 const driverStub: TestDriver = {
-  bless: async () => undefined,
+  bless: async (_name, action) => (action ? action() : undefined),
   set_permission: async () => undefined,
-  click: async () => undefined,
+  click: async (element) => {
+    const target = element as
+      | {
+          click?: () => void;
+          dispatchEvent?: (event: Event) => boolean;
+          onclick?: ((event: Event) => void) | null;
+        }
+      | null
+      | undefined;
+    if (!target) return;
+    if (typeof target.click === 'function') {
+      target.click();
+      return;
+    }
+    const event = new Event('click');
+    if (typeof target.dispatchEvent === 'function') {
+      target.dispatchEvent(event);
+      return;
+    }
+    if (typeof target.onclick === 'function') {
+      target.onclick(event);
+    }
+  },
 };
+
+function installBrowserDocumentShims(documentRef: Document, g: Record<string, unknown>): void {
+  const browserElementCache = new Map<string, Element>();
+  const browserFallbackForId = (id: string): HTMLElement | null => {
+    if (id === 'vid' || id === 'video' || /^vid\d*$/.test(id)) {
+      return liveProxy('video') as unknown as HTMLElement;
+    }
+    if (id === 'aud' || id === 'audio' || /^aud\d*$/.test(id)) {
+      return liveProxy('audio') as unknown as HTMLElement;
+    }
+    if (id !== 'button' && id !== 'target' && id !== 'test-div' && id !== 'workerCode') {
+      return null;
+    }
+    let element = browserElementCache.get(id) as HTMLElement | undefined;
+    if (!element) {
+      element = documentRef.createElement(id === 'button' ? 'button' : id === 'workerCode' ? 'script' : 'div');
+      element.id = id;
+      if (id === 'workerCode') {
+        element.textContent = `
+self.onmessage = (e) => {
+  self.postMessage({
+    result: e.data instanceof MediaStreamTrack ? 'Success' : 'Failure',
+    error: e.data instanceof MediaStreamTrack ? undefined : 'message was not a MediaStreamTrack'
+  });
+};
+`;
+      }
+      element.setAttribute('data-standard-camera-test-fixture', 'true');
+      element.style.display = 'none';
+      documentRef.body?.appendChild(element);
+      browserElementCache.set(id, element);
+    }
+    return element;
+  };
+
+  const doc = documentRef as unknown as {
+    __standardCameraDomShimInstalled?: boolean;
+    getElementById: Document['getElementById'];
+    querySelector: Document['querySelector'];
+    permissionsPolicy?: { features(): string[] };
+  };
+  if (doc.__standardCameraDomShimInstalled) return;
+  doc.__standardCameraDomShimInstalled = true;
+
+  const getElementById = doc.getElementById.bind(documentRef);
+  doc.getElementById = ((id: string) => getElementById(id) ?? browserFallbackForId(id)) as Document['getElementById'];
+
+  const querySelector = doc.querySelector.bind(documentRef);
+  doc.querySelector = ((selector: string) => {
+    const found = querySelector(selector);
+    if (found) return found;
+    const trimmed = selector.trim();
+    if (trimmed.startsWith('#')) return browserFallbackForId(trimmed.slice(1));
+    return fallbackElementForSelector(selector);
+  }) as Document['querySelector'];
+
+  if (!doc.permissionsPolicy) {
+    Object.defineProperty(documentRef, 'permissionsPolicy', {
+      configurable: true,
+      enumerable: true,
+      value: { features: (): string[] => ['camera', 'microphone'] },
+    });
+  }
+
+  if (!('button' in g)) {
+    Object.defineProperty(g, 'button', {
+      configurable: true,
+      get: () => documentRef.getElementById('button') ?? fallbackElementForId('button'),
+    });
+  }
+}
 
 let installed = false;
 export function installDomShim(): void {
@@ -295,6 +484,17 @@ export function installDomShim(): void {
   if (!g.document) g.document = docStub;
   if (!g.window) g.window = globalThis;
   if (!g.test_driver) g.test_driver = driverStub;
+  if (!g.assert_implements_optional) {
+    g.assert_implements_optional = (condition: unknown, description?: string): void => {
+      if (!condition) {
+        throw new Error(description ?? 'optional feature is not implemented');
+      }
+    };
+  }
+
+  if (g.document && g.document !== docStub) {
+    installBrowserDocumentShims(g.document as Document, g);
+  }
 
   // `window.postMessage(data)` + `window.onmessage` is the common WPT idiom
   // for queueing a task. Several tests do:
@@ -368,20 +568,27 @@ export function installDomShim(): void {
     };
   }
 
-  // Make sure `globalThis.DOMException` points at our internal class so
-  // `e instanceof DOMException` checks work in WPT bodies. RN 0.85 ships its
-  // own built-in DOMException, but our `getUserMedia`/native-rewrap path
-  // throws *our* DOMException subclass — if WPT tests check against the RN
-  // global the instanceof fails. So we unconditionally overwrite the global
-  // here to make both halves agree.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const DOMExceptionCls = require('../DOMException').DOMException as new (
+  // Make sure `globalThis.DOMException` points at our internal class on
+  // React Native so `e instanceof DOMException` checks work in WPT bodies. In
+  // a browser, keep the browser-owned constructor: the web runner exercises
+  // native browser APIs directly, and replacing DOMException would make real
+  // browser errors fail instanceof checks.
+  const hasBrowserDocument = typeof document !== 'undefined' && typeof document.createElement === 'function';
+  let SharedDOMException = g.DOMException as new (
     message: string,
     name: string,
     constraint?: string
   ) => Error;
-  g.DOMException = DOMExceptionCls;
-  const SharedDOMException = g.DOMException as typeof DOMExceptionCls;
+  if (!hasBrowserDocument || !SharedDOMException) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const DOMExceptionCls = require('../DOMException').DOMException as new (
+      message: string,
+      name: string,
+      constraint?: string
+    ) => Error;
+    g.DOMException = DOMExceptionCls;
+    SharedDOMException = DOMExceptionCls;
+  }
 
   if (!g.OverconstrainedError) {
     // Per spec, `OverconstrainedError` IS a `DOMException` with name

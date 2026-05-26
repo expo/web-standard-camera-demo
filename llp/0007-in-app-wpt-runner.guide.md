@@ -71,9 +71,11 @@ table in `testharness.ts`:
   `gUM({video})` and `gUM({audio})`).
 - `'out-of-scope'` — permanently inapplicable in React Native: cross-origin
   iframes, postMessage transfer, Permissions Policy headers, SecureContext,
-  `getDisplayMedia`, canvas / WebAudio frame inspection. The runner skips
-  these with the rationale from the table as the message — readers can
-  distinguish "browser-only" from "feature outside our scope".
+  `getDisplayMedia`, canvas / WebAudio frame inspection. New out-of-scope
+  WPT files should not be imported into the active suite. The classification
+  remains in the harness for older ports and for any temporary diagnostic run;
+  if such a test is registered, the runner skips it with the rationale from
+  the table as the message.
 
 The runner derives the environment from two `gUM` probes — `{video:true}`
 and `{audio:true}` — issued at run start, before any test bodies execute.

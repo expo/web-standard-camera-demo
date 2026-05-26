@@ -1,13 +1,21 @@
-import { Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
-import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
 import { useFocusEffect } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
+import { Host, Picker, SymbolView, Text as UIText, pickerStyle, tag } from '@/components/demo-platform-controls';
+import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
+import {
+  closeCameraFrame,
+  createBgraCameraFrameSource,
+  getCameraFrameByteLength,
+  getCameraFrameNumber,
+  getCameraFrameTextureFormat,
+  type CameraFrameUploadSource,
+  uploadCameraFrameToTexture,
+} from '@/lib/camera-frame-upload';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -148,12 +156,6 @@ const LABELS = [
   { color: '#4ade80', name: 'Bright scene' },
 ] as const;
 
-interface Frame {
-  data: Uint8Array;
-  height: number;
-  width: number;
-}
-
 interface FrameDimensions {
   height: number;
   width: number;
@@ -213,6 +215,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const frameSizeRef = React.useRef('pending');
   const predictionRef = React.useRef(prediction);
   const preserveCameraPreviewUntilRef = React.useRef(0);
+  const previewRotatesRef = React.useRef(false);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   const didRetryRelaxedCameraRef = React.useRef(false);
@@ -400,13 +403,14 @@ export default function NeuralLensScreen(): React.JSX.Element {
         let computeBindGroup: GPUBindGroup | null = null;
         let texWidth = 0;
         let texHeight = 0;
+        let texFormat: GPUTextureFormat | null = null;
 
-        const ensureTexture = (width: number, height: number): void => {
-          if (cameraTexture && texWidth === width && texHeight === height) return;
+        const ensureTexture = (width: number, height: number, format: GPUTextureFormat): void => {
+          if (cameraTexture && texWidth === width && texHeight === height && texFormat === format) return;
           if (cameraTexture) cameraTexture.destroy();
           cameraTexture = device.createTexture({
             size: { width, height },
-            format: 'bgra8unorm',
+            format,
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
           });
           const view = cameraTexture.createView();
@@ -428,6 +432,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
           });
           texWidth = width;
           texHeight = height;
+          texFormat = format;
         };
 
         const syntheticPixels = new Uint8Array(SYNTHETIC_SIZE * SYNTHETIC_SIZE * 4);
@@ -482,21 +487,21 @@ export default function NeuralLensScreen(): React.JSX.Element {
           const now = Date.now();
           const elapsed = (now - startedAt) / 1000;
           const shouldUpload = renderBindGroup == null || now - lastUpload >= FRAME_UPLOAD_INTERVAL_MS;
+          let frameToClose: CameraFrameUploadSource | null = null;
 
           if (shouldUpload) {
-            let frame: Frame | null = null;
+            let frame: CameraFrameUploadSource | null = null;
             let frameSource: 'camera' | 'synthetic' = 'synthetic';
             const imageCapture = imageCaptureRef.current;
 
             if (imageCapture) {
               try {
                 const bitmap = await profile.timeAsync('grabFrame', () => imageCapture.grabFrame());
-                frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
+                frame = bitmap;
                 frameSource = 'camera';
                 preserveCameraPreviewUntilRef.current = 0;
-                lastSeenFrameNumber = bitmap._frameNumber;
-                profile.recordFrameNumber(bitmap._frameNumber);
-                bitmap.close();
+                lastSeenFrameNumber = getCameraFrameNumber(bitmap);
+                if (lastSeenFrameNumber !== null) profile.recordFrameNumber(lastSeenFrameNumber);
                 setGrabError(null);
               } catch (e) {
                 setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -516,7 +521,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
               now - startedAt >= SYNTHETIC_FALLBACK_DELAY_MS
             ) {
               fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
-              frame = { data: syntheticPixels, height: SYNTHETIC_SIZE, width: SYNTHETIC_SIZE };
+              frame = createBgraCameraFrameSource(SYNTHETIC_SIZE, SYNTHETIC_SIZE, syntheticPixels);
             } else if (!frame) {
               lastUpload = now;
               profile.count('uploadSkips');
@@ -541,17 +546,11 @@ export default function NeuralLensScreen(): React.JSX.Element {
               }
 
               setFrameInfo(frame.width, frame.height);
-              ensureTexture(frame.width, frame.height);
+              ensureTexture(frame.width, frame.height, getCameraFrameTextureFormat(frame));
               profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
-              profile.count('uploadedBytes', frame.data.byteLength);
-              profile.time('writeTexture', () =>
-                device.queue.writeTexture(
-                  { texture: cameraTexture! },
-                  frame.data,
-                  { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-                  { width: frame.width, height: frame.height }
-                )
-              );
+              profile.count('uploadedBytes', getCameraFrameByteLength(frame));
+              profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
+              frameToClose = frame;
               lastUpload = now;
             }
           }
@@ -571,7 +570,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
               elapsed,
               currentPrediction.labelIndex,
               currentPrediction.confidence,
-              texWidth > texHeight ? 1 : 0,
+              previewRotatesRef.current && texWidth > texHeight ? 1 : 0,
             ])
           );
 
@@ -593,6 +592,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          if (frameToClose) closeCameraFrame(frameToClose);
           profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           if (now - lastInference >= INFERENCE_INTERVAL_MS) {
@@ -655,14 +655,19 @@ export default function NeuralLensScreen(): React.JSX.Element {
   }, [adapter, device, ref, setFrameInfo, setGrabError])
   );
 
-  const targetPreviewAspect = DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
+  const isDesktop = windowWidth >= 1040;
+  const isWebDesktop = Platform.OS === 'web' && isDesktop;
+  previewRotatesRef.current = !isDesktop;
+  const targetPreviewAspect = isDesktop ? 4 / 3 : DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
   const previewAspect = frameDimensions
-    ? frameDimensions.width > frameDimensions.height
-      ? frameDimensions.height / frameDimensions.width
-      : frameDimensions.width / frameDimensions.height
+    ? isDesktop
+      ? frameDimensions.width / frameDimensions.height
+      : frameDimensions.width > frameDimensions.height
+        ? frameDimensions.height / frameDimensions.width
+        : frameDimensions.width / frameDimensions.height
     : targetPreviewAspect;
-  const previewMaxHeight = Math.max(300, windowHeight - 500);
-  const previewMaxWidth = Math.max(240, windowWidth - 32);
+  const previewMaxHeight = Math.max(300, windowHeight - (isWebDesktop ? 180 : 500));
+  const previewMaxWidth = Math.max(240, isWebDesktop ? windowWidth - 456 : windowWidth - 32);
   const previewStageWidth = Math.max(240, Math.min(previewMaxWidth, previewMaxHeight * targetPreviewAspect));
   const previewStageHeight = previewStageWidth / targetPreviewAspect;
   const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
@@ -699,84 +704,93 @@ export default function NeuralLensScreen(): React.JSX.Element {
         style={styles.scroll}
         contentContainerStyle={styles.content}
         contentInsetAdjustmentBehavior="automatic">
-        <View style={[styles.previewStage, { height: previewStageHeight, width: previewStageWidth }]}>
-          <Canvas ref={ref} style={[styles.canvas, { height: previewHeight, width: previewWidth }]} />
-          {showStoppedPlaceholder ? (
-            <View pointerEvents="none" style={styles.stoppedOverlay}>
-              <SymbolView
-                name="video.slash.fill"
-                size={56}
-                weight="semibold"
-                tintColor="#94a3b8"
-              />
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.controls}>
-          <Host style={styles.pickerHost}>
-            <Picker
-              modifiers={[pickerStyle('segmented')]}
-              label="Camera"
-              selection={cameraFacing}
-              onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
-              <UIText modifiers={[tag('environment')]}>Back</UIText>
-              <UIText modifiers={[tag('user')]}>Front</UIText>
-            </Picker>
-          </Host>
-        </View>
-
-        <View style={styles.predictionPanel}>
-          <Text style={[styles.predictionLabel, { color: activeLabel.color }]}>{activeLabel.name}</Text>
-          <Text style={styles.predictionMeta}>{Math.round(prediction.confidence * 100)}% confidence</Text>
-          <View style={styles.captureStatus}>
-            <Text
-              style={[
-                styles.captureBadge,
-                source === 'camera' ? styles.captureBadgeLive : styles.captureBadgeFallback,
-              ]}>
-              {sourceLabel}
-            </Text>
-            <Text style={styles.captureText}>camera: {cameraSettingsLine}</Text>
-            <Text style={styles.captureText}>request: {captureProfileLabel}</Text>
-            <Text style={styles.captureText}>
-              uploaded: {frameSize} · iOS frames: {lastFrameNumber ?? 'pending'}
-            </Text>
-          </View>
-          <View style={styles.bars}>
-            {LABELS.map((label, index) => (
-              <View key={label.name} style={styles.barRow}>
-                <Text style={styles.barLabel}>{label.name}</Text>
-                <View style={styles.barTrack}>
-                  <View
-                    style={[
-                      styles.barFill,
-                      {
-                        backgroundColor: label.color,
-                        width: `${Math.round((prediction.probabilities[index] ?? 0) * 100)}%`,
-                      },
-                    ]}
+        <DemoPageFrame
+          action="standard-camera"
+          preview={
+            <View style={[styles.previewStage, { height: previewStageHeight, width: previewStageWidth }]}>
+              <Canvas ref={ref} style={[styles.canvas, { height: previewHeight, width: previewWidth }]} />
+              {showStoppedPlaceholder ? (
+                <View pointerEvents="none" style={styles.stoppedOverlay}>
+                  <SymbolView
+                    name="video.slash.fill"
+                    size={56}
+                    weight="semibold"
+                    tintColor="#94a3b8"
                   />
                 </View>
+              ) : null}
+            </View>
+          }
+          controls={
+            <>
+              <View style={styles.controls}>
+                <Host style={styles.pickerHost}>
+                  <Picker
+                    modifiers={[pickerStyle('segmented')]}
+                    label="Camera"
+                    selection={cameraFacing}
+                    onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
+                    <UIText modifiers={[tag('environment')]}>Back</UIText>
+                    <UIText modifiers={[tag('user')]}>Front</UIText>
+                  </Picker>
+                </Host>
               </View>
-            ))}
-          </View>
-        </View>
 
-        <View style={styles.hud}>
-          <Text style={styles.hudText}>Neural lens · {status}</Text>
-          <Text style={styles.hudSub}>render: {fps} fps · source: {source} · uploaded: {frameSize}</Text>
-          <Text style={styles.hudSub}>
-            features: brightness {prediction.features.brightness.toFixed(2)} · contrast{' '}
-            {prediction.features.contrast.toFixed(2)} · edge {prediction.features.edge.toFixed(2)}
-          </Text>
-          {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
-          {lastGrabError && source !== 'camera' ? (
-            <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
-          ) : null}
-          {inferenceError ? <Text style={styles.hudError}>inference: {inferenceError}</Text> : null}
-          {error ? <Text style={styles.hudError}>{error}</Text> : null}
-        </View>
+              <View style={styles.predictionPanel}>
+                <Text style={[styles.predictionLabel, { color: activeLabel.color }]}>{activeLabel.name}</Text>
+                <Text style={styles.predictionMeta}>{Math.round(prediction.confidence * 100)}% confidence</Text>
+                <View style={styles.captureStatus}>
+                  <Text
+                    style={[
+                      styles.captureBadge,
+                      source === 'camera' ? styles.captureBadgeLive : styles.captureBadgeFallback,
+                    ]}>
+                    {sourceLabel}
+                  </Text>
+                  <Text style={styles.captureText}>camera: {cameraSettingsLine}</Text>
+                  <Text style={styles.captureText}>request: {captureProfileLabel}</Text>
+                  <Text style={styles.captureText}>
+                    uploaded: {frameSize} · iOS frames: {lastFrameNumber ?? 'pending'}
+                  </Text>
+                </View>
+                <View style={styles.bars}>
+                  {LABELS.map((label, index) => (
+                    <View key={label.name} style={styles.barRow}>
+                      <Text style={styles.barLabel}>{label.name}</Text>
+                      <View style={styles.barTrack}>
+                        <View
+                          style={[
+                            styles.barFill,
+                            {
+                              backgroundColor: label.color,
+                              width: `${Math.round((prediction.probabilities[index] ?? 0) * 100)}%`,
+                            },
+                          ]}
+                        />
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            </>
+          }
+          hud={
+            <View style={styles.hud}>
+              <Text style={styles.hudText}>Neural lens · {status}</Text>
+              <Text style={styles.hudSub}>render: {fps} fps · source: {source} · uploaded: {frameSize}</Text>
+              <Text style={styles.hudSub}>
+                features: brightness {prediction.features.brightness.toFixed(2)} · contrast{' '}
+                {prediction.features.contrast.toFixed(2)} · edge {prediction.features.edge.toFixed(2)}
+              </Text>
+              {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
+              {lastGrabError && source !== 'camera' ? (
+                <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
+              ) : null}
+              {inferenceError ? <Text style={styles.hudError}>inference: {inferenceError}</Text> : null}
+              {error ? <Text style={styles.hudError}>{error}</Text> : null}
+            </View>
+          }
+        />
       </ScrollView>
     </>
   );

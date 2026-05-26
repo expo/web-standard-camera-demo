@@ -1,9 +1,19 @@
 import * as React from 'react';
 import { useFocusEffect } from 'expo-router';
-import { Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
+import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
+import {
+  closeCameraFrame,
+  createBgraCameraFrameSource,
+  getCameraFrameByteLength,
+  getCameraFrameNumber,
+  getCameraFrameTextureFormat,
+  type CameraFrameUploadSource,
+  uploadCameraFrameToTexture,
+} from '@/lib/camera-frame-upload';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -109,16 +119,11 @@ const CUBE_VERTICES = new Float32Array([
 
 const SYNTHETIC_SIZE = 256;
 
-interface Frame {
-  width: number;
-  height: number;
-  data: Uint8Array;
-}
-
 export default function CubeOfCamerasScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
   const { stream, status: cameraStatus, error: cameraError, userStopped, externalLocked, start } = useCamera();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
 
   // Defense-in-depth start-on-mount: the provider auto-starts at app launch,
   // but Fast Refresh can strand that effect. Honor an explicit user Stop so
@@ -261,15 +266,16 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
         let bindGroup: GPUBindGroup | null = null;
         let texWidth = 0;
         let texHeight = 0;
+        let texFormat: GPUTextureFormat | null = null;
 
-        const ensureTexture = (width: number, height: number): GPUBindGroup => {
-          if (cameraTexture && texWidth === width && texHeight === height) {
+        const ensureTexture = (width: number, height: number, format: GPUTextureFormat): GPUBindGroup => {
+          if (cameraTexture && texWidth === width && texHeight === height && texFormat === format) {
             return bindGroup!;
           }
           if (cameraTexture) cameraTexture.destroy();
           cameraTexture = device.createTexture({
             size: { width, height },
-            format: 'bgra8unorm',
+            format,
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
           });
           bindGroup = device.createBindGroup({
@@ -282,6 +288,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           });
           texWidth = width;
           texHeight = height;
+          texFormat = format;
           return bindGroup;
         };
 
@@ -308,6 +315,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           const now = Date.now();
           const elapsed = (now - startedAt) / 1000;
           const shouldUpload = bindGroup == null || now - lastUpload >= CAMERA_UPLOAD_INTERVAL_MS;
+          let frameToClose: CameraFrameUploadSource | null = null;
 
           if (shouldUpload) {
             // Pull from the active ImageCapture (set by the stream effect
@@ -316,20 +324,20 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             // frame yet. Uploads are capped at 30 fps so one expensive
             // pixel-buffer copy cannot slow every visual animation frame.
             const ic = imageCaptureRef.current;
-            let frame: Frame | null = null;
+            let frame: CameraFrameUploadSource | null = null;
             let frameSource: 'camera' | 'synthetic' = 'synthetic';
             if (ic) {
               try {
                 const bitmap = await profile.timeAsync('grabFrame', () => ic.grabFrame());
-                frame = { width: bitmap.width, height: bitmap.height, data: bitmap._data };
+                frame = bitmap;
                 frameSource = 'camera';
                 grabsThisSecond++;
-                profile.recordFrameNumber(bitmap._frameNumber);
-                if (bitmap._frameNumber !== lastSeenFrameNumber) {
+                const frameNumber = getCameraFrameNumber(bitmap);
+                if (frameNumber !== null) profile.recordFrameNumber(frameNumber);
+                if (frameNumber !== null && frameNumber !== lastSeenFrameNumber) {
                   newFramesThisSecond++;
-                  lastSeenFrameNumber = bitmap._frameNumber;
+                  lastSeenFrameNumber = frameNumber;
                 }
-                bitmap.close();
               } catch (e) {
                 const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
                 setLastGrabError(reason);
@@ -337,7 +345,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             }
             if (!frame) {
               fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
-              frame = { width: SYNTHETIC_SIZE, height: SYNTHETIC_SIZE, data: syntheticPixels };
+              frame = createBgraCameraFrameSource(SYNTHETIC_SIZE, SYNTHETIC_SIZE, syntheticPixels);
             }
             if (cancelled) return;
 
@@ -350,20 +358,14 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
               );
             }
 
-            const currentBindGroup = ensureTexture(frame.width, frame.height);
+            const currentBindGroup = ensureTexture(frame.width, frame.height, getCameraFrameTextureFormat(frame));
             profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
-            profile.count('uploadedBytes', frame.data.byteLength);
-            profile.time('writeTexture', () =>
-              device.queue.writeTexture(
-                { texture: cameraTexture! },
-                frame.data,
-                { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-                { width: frame.width, height: frame.height }
-              )
-            );
+            profile.count('uploadedBytes', getCameraFrameByteLength(frame));
+            profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
             activeSource = frameSource;
             activeWidth = frame.width;
             activeHeight = frame.height;
+            frameToClose = frame;
             bindGroup = currentBindGroup;
             lastUpload = now;
           }
@@ -404,6 +406,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          if (frameToClose) closeCameraFrame(frameToClose);
           profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           frames++;
@@ -478,38 +481,43 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     ? 'Camera stopped — synthetic frames standing in. Tap Start camera to share the live feed with the Home tab too.'
     : source === 'camera'
       ? 'Live camera frames via getUserMedia → ImageCapture → WebGPU — shared with the Home tab.'
-      : source === 'synthetic'
+        : source === 'synthetic'
         ? 'Stream live but no frames yet (cold start or simulator without an AVCaptureDevice).'
         : 'Opening the camera…';
+  const isDesktop = windowWidth >= 1040;
+  const isWebDesktop = Platform.OS === 'web' && isDesktop;
+  const canvasWidth = isDesktop
+    ? Math.max(320, Math.min(isWebDesktop ? windowWidth - 456 : windowWidth - 64, 960, Math.max(320, windowHeight - (isWebDesktop ? 180 : 240)) * 4 / 3))
+    : Math.max(240, Math.min(windowWidth, windowHeight - 240));
+  const canvasHeight = isDesktop ? Math.round(canvasWidth * 3 / 4) : canvasWidth;
 
   return (
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={styles.scrollContent}
       contentInsetAdjustmentBehavior="automatic">
-      <Canvas ref={ref} style={styles.canvas} />
-      <View style={styles.hud}>
-        <Text style={styles.hudText}>Cube of cameras · {status}</Text>
-        <Text style={styles.hudSub}>{subtitle}</Text>
-        <Text style={styles.hudSub}>· camera context: {cameraStatus}</Text>
-        {lastFrameNumber !== null && cameraOn ? (
-          <Text style={styles.hudSub}>· iOS frames delivered: {lastFrameNumber}</Text>
-        ) : null}
-        {cameraError ? <Text style={styles.hudError}>· camera error: {cameraError}</Text> : null}
-        {lastGrabError && source !== 'camera' ? (
-          <Text style={styles.hudSub}>· grabFrame: {lastGrabError}</Text>
-        ) : null}
-        {error ? <Text style={styles.hudError}>{error}</Text> : null}
-      </View>
+      <DemoPageFrame
+        action="standard-camera"
+        preview={<Canvas ref={ref} style={[styles.canvas, { height: canvasHeight, width: canvasWidth }]} />}
+        hud={
+          <View style={styles.hud}>
+            <Text style={styles.hudText}>Cube of cameras · {status}</Text>
+            <Text style={styles.hudSub}>{subtitle}</Text>
+            <Text style={styles.hudSub}>· camera context: {cameraStatus}</Text>
+            {lastFrameNumber !== null && cameraOn ? (
+              <Text style={styles.hudSub}>· iOS frames delivered: {lastFrameNumber}</Text>
+            ) : null}
+            {cameraError ? <Text style={styles.hudError}>· camera error: {cameraError}</Text> : null}
+            {lastGrabError && source !== 'camera' ? (
+              <Text style={styles.hudSub}>· grabFrame: {lastGrabError}</Text>
+            ) : null}
+            {error ? <Text style={styles.hudError}>{error}</Text> : null}
+          </View>
+        }
+      />
     </ScrollView>
   );
 }
-
-// The canvas takes the smaller of (window width) and (window height − header
-// allowance) so the cube renders square within a ScrollView. ScrollView
-// requires children with explicit dimensions; we can't use flex:1 here.
-const WINDOW = Dimensions.get('window');
-const CANVAS_SIDE = Math.min(WINDOW.width, WINDOW.height - 240);
 
 // Time-modulated test pattern: diagonal stripes whose hue shifts with t and
 // whose phase shifts so the texture is obviously alive frame to frame. The
@@ -605,8 +613,7 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   canvas: {
-    width: CANVAS_SIDE,
-    height: CANVAS_SIDE,
+    backgroundColor: '#0a0e1a',
   },
   hud: {
     paddingHorizontal: 16,

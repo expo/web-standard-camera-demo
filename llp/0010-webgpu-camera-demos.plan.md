@@ -41,6 +41,28 @@ The Demo tab should open to a catalog, not directly to one showcase. The point i
 
 The catalog route is intentionally part of the demo app rather than README-only documentation: the person holding the phone should be able to choose the story they want to tell in the moment without rebuilding the app.
 
+## Universal demo routes
+
+The main demo routes are shared across platforms. There should not be
+`.web.tsx` variants for `cube`, `shader-lens`, `neural-lens`, or
+`lidar-depth-webxr`; a developer reading a demo route should see the
+browser-shaped application code that the repo is trying to prove out.
+
+Small platform-specific helpers are acceptable where the host runtime genuinely
+differs. For example, Expo Web should use the browser's own
+`navigator.mediaDevices`, `ImageCapture`, `navigator.gpu`, and `navigator.xr`
+surfaces, while iOS should provide those same API shapes through the local
+module and through `react-native-wgpu`. UI affordances may also sit behind
+platform helpers when a route wants SwiftUI controls on iOS and React Native
+Web controls in the browser.
+
+The important boundary is that platform-specific code implements or adapts a
+web API surface; it must not become a separate demo. Web routes should not
+import `NativeStandardCamera`, and universal demo routes should not reach into
+iOS-only backdoor APIs. Native-only capabilities such as LiDAR scene depth can
+render as unsupported on browsers that do not expose the matching WebXR
+features.
+
 ## Global camera controls
 
 Demo route Start/Stop controls are owned by the demo stack layout, not by each

@@ -7,12 +7,12 @@
 // `grabFrame()` returns a `Promise<ImageBitmap>`. In a real browser the
 // returned bitmap is opaque and is consumed by WebGPU through
 // `device.queue.copyExternalImageToTexture({ source: bitmap }, ...)`.
-// `react-native-wgpu@0.5.11` does not yet implement that path for our
-// bitmaps, so the bitmap we return additionally exposes its tight-packed
-// BGRA bytes through `_data` and `_format`. The demo uploads via
-// `device.queue.writeTexture(...)` in the meantime; once react-native-wgpu
-// accepts our bitmaps in `copyExternalImageToTexture`, callers can drop the
-// underscore-prefixed reach-through and use the standard API verbatim.
+// `react-native-wgpu@0.5.11` does not yet implement that path for this
+// module's camera bitmaps, so the bitmap we return additionally exposes its
+// tight-packed BGRA bytes through `_data` and `_format`. Universal demos route
+// this through a small upload helper; once react-native-wgpu accepts these
+// bitmaps in `copyExternalImageToTexture`, that helper can use the standard
+// API verbatim on iOS too.
 
 import { DOMException } from './DOMException';
 import { MediaStreamTrack as StandardMediaStreamTrack } from './MediaStreamTrack';
@@ -78,8 +78,8 @@ export class ImageCapture {
 // — width / height / close() and that's it — so this stays narrow. The extra
 // `_data` / `_format` / `_frameNumber` fields are how WebGPU consumers
 // currently fetch the pixels and tell whether the camera is producing new
-// frames; they go away once we have full `copyExternalImageToTexture`
-// integration.
+// frames on iOS; they go away once we have full
+// `copyExternalImageToTexture` integration for these native camera bitmaps.
 class ShimImageBitmap implements CameraImageBitmap {
   readonly width: number;
   readonly height: number;

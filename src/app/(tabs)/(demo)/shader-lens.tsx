@@ -1,13 +1,21 @@
-import { Host, Picker, Slider, Text as UIText } from '@expo/ui/swift-ui';
-import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
 import { useFocusEffect } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
+import { Host, Picker, Slider, SymbolView, Text as UIText, pickerStyle, tag } from '@/components/demo-platform-controls';
+import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
+import {
+  closeCameraFrame,
+  createBgraCameraFrameSource,
+  getCameraFrameByteLength,
+  getCameraFrameNumber,
+  getCameraFrameTextureFormat,
+  type CameraFrameUploadSource,
+  uploadCameraFrameToTexture,
+} from '@/lib/camera-frame-upload';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -97,15 +105,17 @@ fn heat(c: vec4f) -> vec4f {
 }
 
 fn kaleidoscope(uv: vec2f) -> vec4f {
+  let segments = 1.0 + floor(clamp(u.intensity, 0.0, 1.0) * 9.0);
+  if (segments < 1.5) {
+    return sampleAt(uv);
+  }
   let center = uv - vec2f(0.5);
   let radius = length(center);
-  let amount = clamp(u.intensity, 0.0, 1.0);
-  let angle = atan2(center.y, center.x) + sin(u.time * 0.35) * 0.2 * amount;
   let pi = 3.14159265;
-  let segments = 3.0 + floor(amount * 9.0);
+  let angle = atan2(center.y, center.x) + sin(u.time * 0.35) * 0.2;
   let folded = abs(fract(angle / (2.0 * pi) * segments) - 0.5) * (2.0 * pi / segments);
   let sampleUv = vec2f(0.5) + vec2f(cos(folded), sin(folded)) * radius;
-  return mix(sampleAt(uv), sampleAt(sampleUv), amount);
+  return sampleAt(sampleUv);
 }
 
 @fragment
@@ -141,12 +151,6 @@ const EFFECTS = [
   { label: 'Kaleido', value: 4 },
 ] as const;
 
-interface Frame {
-  data: Uint8Array;
-  height: number;
-  width: number;
-}
-
 interface FrameDimensions {
   height: number;
   width: number;
@@ -167,7 +171,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
     applyConstraints,
   } = useCamera();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const [effect, setEffect] = React.useState<(typeof EFFECTS)[number]['value']>(2);
+  const [effect, setEffect] = React.useState<(typeof EFFECTS)[number]['value']>(0);
   const [intensity, setIntensity] = React.useState(0.65);
   const [status, setStatus] = React.useState('initializing');
   const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
@@ -185,6 +189,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const frameDimensionsRef = React.useRef<FrameDimensions | null>(null);
   const lastGrabErrorRef = React.useRef<string | null>(null);
   const preserveCameraPreviewUntilRef = React.useRef(0);
+  const previewRotatesRef = React.useRef(false);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   // On real hardware we always suppress the synthetic test pattern — both
@@ -316,15 +321,16 @@ export default function ShaderLensScreen(): React.JSX.Element {
         let bindGroup: GPUBindGroup | null = null;
         let texWidth = 0;
         let texHeight = 0;
+        let texFormat: GPUTextureFormat | null = null;
 
-        const ensureTexture = (width: number, height: number): GPUBindGroup => {
-          if (cameraTexture && texWidth === width && texHeight === height) {
+        const ensureTexture = (width: number, height: number, format: GPUTextureFormat): GPUBindGroup => {
+          if (cameraTexture && texWidth === width && texHeight === height && texFormat === format) {
             return bindGroup!;
           }
           if (cameraTexture) cameraTexture.destroy();
           cameraTexture = device.createTexture({
             size: { width, height },
-            format: 'bgra8unorm',
+            format,
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
           });
           bindGroup = device.createBindGroup({
@@ -337,6 +343,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
           });
           texWidth = width;
           texHeight = height;
+          texFormat = format;
           return bindGroup;
         };
 
@@ -353,6 +360,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
           const now = Date.now();
           const elapsed = (now - startedAt) / 1000;
           const shouldUpload = bindGroup == null || now - lastUpload >= FRAME_UPLOAD_INTERVAL_MS;
+          let frameToClose: CameraFrameUploadSource | null = null;
 
           if (shouldUpload) {
             const cameraStatusNow = cameraStatusRef.current;
@@ -360,7 +368,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
               cameraStatusNow === 'requesting' ||
               cameraStatusNow === 'starting' ||
               cameraStatusNow === 'playing';
-            let frame: Frame | null = null;
+            let frame: CameraFrameUploadSource | null = null;
             let frameSource: 'camera' | 'synthetic' = 'synthetic';
             const imageCapture = imageCaptureRef.current;
 
@@ -380,12 +388,11 @@ export default function ShaderLensScreen(): React.JSX.Element {
               } else {
                 try {
                   const bitmap = await profile.timeAsync('grabFrame', () => imageCapture.grabFrame());
-                  frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
+                  frame = bitmap;
                   frameSource = 'camera';
                   preserveCameraPreviewUntilRef.current = 0;
-                  lastSeenFrameNumber = bitmap._frameNumber;
-                  profile.recordFrameNumber(bitmap._frameNumber);
-                  bitmap.close();
+                  lastSeenFrameNumber = getCameraFrameNumber(bitmap);
+                  if (lastSeenFrameNumber !== null) profile.recordFrameNumber(lastSeenFrameNumber);
                   setGrabError(null);
                 } catch (e) {
                   if (isEndedTrackGrabError(e)) {
@@ -414,7 +421,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
               now - startedAt >= SYNTHETIC_FALLBACK_DELAY_MS
             ) {
               fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
-              frame = { data: syntheticPixels, height: SYNTHETIC_SIZE, width: SYNTHETIC_SIZE };
+              frame = createBgraCameraFrameSource(SYNTHETIC_SIZE, SYNTHETIC_SIZE, syntheticPixels);
             } else if (!frame) {
               lastUpload = now;
               profile.count('uploadSkips');
@@ -429,17 +436,11 @@ export default function ShaderLensScreen(): React.JSX.Element {
               }
 
               setFrameInfo(frame.width, frame.height);
-              ensureTexture(frame.width, frame.height);
+              ensureTexture(frame.width, frame.height, getCameraFrameTextureFormat(frame));
               profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
-              profile.count('uploadedBytes', frame.data.byteLength);
-              profile.time('writeTexture', () =>
-                device.queue.writeTexture(
-                  { texture: cameraTexture! },
-                  frame.data,
-                  { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-                  { width: frame.width, height: frame.height }
-                )
-              );
+              profile.count('uploadedBytes', getCameraFrameByteLength(frame));
+              profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
+              frameToClose = frame;
               lastUpload = now;
             }
           }
@@ -451,7 +452,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
             return;
           }
 
-          const rotatesPreview = texWidth > texHeight;
+          const rotatesPreview = previewRotatesRef.current && texWidth > texHeight;
           device.queue.writeBuffer(
             uniformBuffer,
             0,
@@ -485,6 +486,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
           pass.end();
           device.queue.submit([encoder.finish()]);
           context.present();
+          if (frameToClose) closeCameraFrame(frameToClose);
           profile.duration('renderSubmitPresent', nowMs() - renderStart);
 
           frames += 1;
@@ -547,14 +549,19 @@ export default function ShaderLensScreen(): React.JSX.Element {
   // status machine flips to 'idle'/'ended'/'error' in those cases and the
   // button switches back to Start, matching the real device state.
   const cameraOn = cameraStatus === 'playing';
-  const targetPreviewAspect = DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
+  const isDesktop = windowWidth >= 1040;
+  const isWebDesktop = Platform.OS === 'web' && isDesktop;
+  previewRotatesRef.current = !isDesktop;
+  const targetPreviewAspect = isDesktop ? 4 / 3 : DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
   const previewAspect = frameDimensions
-    ? frameDimensions.width > frameDimensions.height
-      ? frameDimensions.height / frameDimensions.width
-      : frameDimensions.width / frameDimensions.height
+    ? isDesktop
+      ? frameDimensions.width / frameDimensions.height
+      : frameDimensions.width > frameDimensions.height
+        ? frameDimensions.height / frameDimensions.width
+        : frameDimensions.width / frameDimensions.height
     : targetPreviewAspect;
-  const previewMaxHeight = Math.max(240, windowHeight - 440);
-  const previewMaxWidth = Math.max(240, windowWidth - 32);
+  const previewMaxHeight = Math.max(240, windowHeight - (isWebDesktop ? 180 : 440));
+  const previewMaxWidth = Math.max(240, isWebDesktop ? windowWidth - 456 : windowWidth - 32);
   const previewStageWidth = Math.max(240, Math.min(previewMaxWidth, previewMaxHeight * targetPreviewAspect));
   const previewStageHeight = previewStageWidth / targetPreviewAspect;
   const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
@@ -601,74 +608,81 @@ export default function ShaderLensScreen(): React.JSX.Element {
         style={styles.scroll}
         contentContainerStyle={styles.content}
         contentInsetAdjustmentBehavior="automatic">
-        <View style={[styles.previewStage, { height: previewStageHeight, width: previewStageWidth }]}>
-          <Canvas ref={ref} style={[styles.canvas, { height: previewHeight, width: previewWidth }]} />
-          {showStoppedPlaceholder ? (
-            <View pointerEvents="none" style={styles.stoppedOverlay}>
-              <SymbolView
-                name="video.slash.fill"
-                size={56}
-                weight="semibold"
-                tintColor="#94a3b8"
-              />
+        <DemoPageFrame
+          action="standard-camera"
+          preview={
+            <View style={[styles.previewStage, { height: previewStageHeight, width: previewStageWidth }]}>
+              <Canvas ref={ref} style={[styles.canvas, { height: previewHeight, width: previewWidth }]} />
+              {showStoppedPlaceholder ? (
+                <View pointerEvents="none" style={styles.stoppedOverlay}>
+                  <SymbolView
+                    name="video.slash.fill"
+                    size={56}
+                    weight="semibold"
+                    tintColor="#94a3b8"
+                  />
+                </View>
+              ) : null}
             </View>
-          ) : null}
-        </View>
-
-        <View style={styles.controls}>
-          <Host style={styles.pickerHost}>
-            <Picker
-              modifiers={[pickerStyle('segmented')]}
-              label="Camera"
-              selection={cameraFacing}
-              onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
-              <UIText modifiers={[tag('environment')]}>Back</UIText>
-              <UIText modifiers={[tag('user')]}>Front</UIText>
-            </Picker>
-          </Host>
-
-          <Host style={styles.pickerHost}>
-            <Picker
-              modifiers={[pickerStyle('segmented')]}
-              label="Effect"
-              selection={effect}
-              onSelectionChange={(value) =>
-                setEffect(value as (typeof EFFECTS)[number]['value'])
-              }>
-              {EFFECTS.map((item) => (
-                <UIText key={item.value} modifiers={[tag(item.value)]}>
-                  {item.label}
-                </UIText>
-              ))}
-            </Picker>
-          </Host>
-
-          <View style={styles.intensityBlock}>
-            <View style={styles.intensityHeader}>
-              <Text style={styles.intensityLabel}>Intensity</Text>
-              <Text style={styles.intensityValue}>{Math.round(intensity * 100)}%</Text>
-            </View>
-            <View style={styles.sliderInset}>
-              <Host style={styles.sliderHost}>
-                <Slider value={intensity} min={0} max={1} onValueChange={setIntensity} />
+          }
+          controls={
+            <View style={styles.controls}>
+              <Host style={styles.pickerHost}>
+                <Picker
+                  modifiers={[pickerStyle('segmented')]}
+                  label="Camera"
+                  selection={cameraFacing}
+                  onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
+                  <UIText modifiers={[tag('environment')]}>Back</UIText>
+                  <UIText modifiers={[tag('user')]}>Front</UIText>
+                </Picker>
               </Host>
-            </View>
-          </View>
-        </View>
 
-        <View style={styles.hud}>
-          <Text style={styles.hudText}>Shader lens · {status}</Text>
-          <Text style={styles.hudSub}>camera: {cameraLine}</Text>
-          <Text style={styles.hudSub}>render: {fps} fps · source: {source}</Text>
-          {lastFrameNumber !== null && cameraOn ? (
-            <Text style={styles.hudSub}>iOS frames delivered: {lastFrameNumber}</Text>
-          ) : null}
-          {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
-          {lastGrabError && source !== 'camera' ? (
-            <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
-          ) : null}
-          {error ? <Text style={styles.hudError}>{error}</Text> : null}
-        </View>
+              <Host style={styles.pickerHost}>
+                <Picker
+                  modifiers={[pickerStyle('segmented')]}
+                  label="Effect"
+                  selection={effect}
+                  onSelectionChange={(value) =>
+                    setEffect(value as (typeof EFFECTS)[number]['value'])
+                  }>
+                  {EFFECTS.map((item) => (
+                    <UIText key={item.value} modifiers={[tag(item.value)]}>
+                      {item.label}
+                    </UIText>
+                  ))}
+                </Picker>
+              </Host>
+
+              <View style={styles.intensityBlock}>
+                <View style={styles.intensityHeader}>
+                  <Text style={styles.intensityLabel}>Intensity</Text>
+                  <Text style={styles.intensityValue}>{Math.round(intensity * 100)}%</Text>
+                </View>
+                <View style={styles.sliderInset}>
+                  <Host style={styles.sliderHost}>
+                    <Slider value={intensity} min={0} max={1} onValueChange={setIntensity} />
+                  </Host>
+                </View>
+              </View>
+            </View>
+          }
+          hud={
+            <View style={styles.hud}>
+              <Text style={styles.hudText}>Shader lens · {status}</Text>
+              <Text style={styles.hudSub}>camera: {cameraLine}</Text>
+              <Text style={styles.hudSub}>render: {fps} fps · source: {source}</Text>
+              {lastFrameNumber !== null && cameraOn ? (
+                <Text style={styles.hudSub}>iOS frames delivered: {lastFrameNumber}</Text>
+              ) : null}
+              {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
+              {lastGrabError && source !== 'camera' ? (
+                <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
+              ) : null}
+              {error ? <Text style={styles.hudError}>{error}</Text> : null}
+            </View>
+          }
+        />
       </ScrollView>
     </>
   );

@@ -25,6 +25,16 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Test Expo Web
+
+```bash
+bun run test:web
+```
+
+This starts Expo Web, opens the app with `agent-browser`, and reports Expo dev
+server logs plus browser console/page errors. The default smoke test does not
+request camera permission.
+
 ## Get a fresh project
 
 When you're ready, run:

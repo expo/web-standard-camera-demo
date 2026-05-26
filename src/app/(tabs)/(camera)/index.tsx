@@ -316,6 +316,7 @@ const START_STOP_ICON: Record<
 };
 
 const STOP_TINT = '#ff453a';
+const START_STOP_BUTTON_WIDTH = 146;
 
 function CameraStartStopButton({
   disabled,
@@ -346,12 +347,14 @@ function CameraStartStopButton({
         disabled ? styles.startStopButtonDisabled : null,
         pressed && !disabled ? styles.startStopButtonPressed : null,
       ]}>
-      <SymbolView
-        fallback={<Text style={[styles.startStopFallback, { color: tintColor }]}>{running ? 'S' : 'P'}</Text>}
-        name={icon}
-        size={18}
-        tintColor={tintColor}
-      />
+      <View style={styles.startStopIconSlot}>
+        <SymbolView
+          fallback={<Text style={[styles.startStopFallback, { color: tintColor }]}>{running ? 'S' : 'P'}</Text>}
+          name={icon}
+          size={18}
+          tintColor={tintColor}
+        />
+      </View>
       <Text numberOfLines={1} style={[styles.startStopText, { color: tintColor }]}>
         {label}
       </Text>
@@ -537,7 +540,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   startStopButton: {
-    minWidth: 134,
+    width: START_STOP_BUTTON_WIDTH,
     minHeight: 36,
     borderRadius: 18,
     flexDirection: 'row',
@@ -546,6 +549,13 @@ const styles = StyleSheet.create({
     gap: 7,
     paddingHorizontal: 13,
     paddingVertical: 8,
+  },
+  startStopIconSlot: {
+    alignItems: 'center',
+    flexShrink: 0,
+    height: 18,
+    justifyContent: 'center',
+    width: 18,
   },
   startStopButtonDisabled: {
     opacity: 0.55,

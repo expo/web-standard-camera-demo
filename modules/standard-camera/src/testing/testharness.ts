@@ -296,7 +296,6 @@ class TestHandleImpl implements TestHandle {
         fn(...args);
       } catch (e) {
         this.failed = e as Error;
-        throw e;
       }
     };
   }
@@ -309,7 +308,6 @@ class TestHandleImpl implements TestHandle {
       } catch (e) {
         this.failed = e as Error;
         this.done();
-        throw e;
       }
     };
   }
@@ -794,6 +792,11 @@ export interface RunOptions {
    *  signal — but the runner ignores the result and bails out before the
    *  next iteration. */
   signal?: AbortSignal;
+  /** Execute every registered test regardless of native applicability
+   *  metadata. The web Tests tab uses this because browser-hosted tests
+   *  should produce concrete pass/fail/timeout results instead of inheriting
+   *  React Native skip categories. */
+  forceRunAll?: boolean;
 }
 
 /** Snapshot of every test currently registered, for UI pre-rendering. */
@@ -895,6 +898,16 @@ function preSkipMessage(req: TestRequirement, outOfScopeReason?: string): string
 // the *current* test's TestHandle so the run finishes cleanly and the test is
 // marked failed rather than crashing the bundle.
 let currentTestHandle: TestHandleImpl | null = null;
+const pendingLateErrors: Error[] = [];
+
+function captureTestError(error: unknown): void {
+  const err = error instanceof Error ? error : new Error(String(error));
+  if (currentTestHandle) {
+    if (!currentTestHandle.failed) currentTestHandle.failed = err;
+    return;
+  }
+  pendingLateErrors.push(err);
+}
 
 // Install error-catching hooks at MODULE LOAD time (not runAllTests-time) so
 // the late-error path is always armed. WPT bodies often fire events whose
@@ -926,12 +939,11 @@ let currentTestHandle: TestHandleImpl | null = null;
   g.HermesInternal?.enablePromiseRejectionTracker?.({
     allRejections: true,
     onUnhandled: (_id: number, reason: unknown) => {
-      if (currentTestHandle && !currentTestHandle.failed) {
-        const err = reason instanceof Error ? reason : new Error(String(reason));
-        currentTestHandle.failed = err;
-      }
+      captureTestError(reason);
     },
   });
+
+  (g as unknown as Record<string, unknown>).__standardCameraCaptureTestError = captureTestError;
 
   // Belt-and-suspenders: monkeypatch setTimeout so callbacks that throw
   // attribute to the current test (the event-target-polyfill uses
@@ -945,11 +957,7 @@ let currentTestHandle: TestHandleImpl | null = null;
         try {
           fn(...args);
         } catch (e) {
-          if (currentTestHandle && !currentTestHandle.failed) {
-            currentTestHandle.failed = e as Error;
-            return;
-          }
-          throw e;
+          captureTestError(e);
         }
       }, ms);
     }) as typeof originalSetTimeout;
@@ -968,9 +976,7 @@ let currentTestHandle: TestHandleImpl | null = null;
     consoleObj.error = (...args: unknown[]): void => {
       const first = args[0];
       if (currentTestHandle && first instanceof Error) {
-        if (!currentTestHandle.failed) {
-          currentTestHandle.failed = first;
-        }
+        captureTestError(first);
         // Still log to plain console.log so the dev sees what happened.
         try {
           (globalThis as unknown as { console: { log: (m: string) => void } }).console.log(
@@ -984,6 +990,30 @@ let currentTestHandle: TestHandleImpl | null = null;
       prevConsoleError(...args);
     };
   }
+
+  const browserWindow = typeof window !== 'undefined' ? window : null;
+  if (typeof browserWindow?.addEventListener === 'function') {
+    browserWindow.addEventListener(
+      'error',
+      (event) => {
+        const err = event.error instanceof Error ? event.error : new Error(event.message);
+        captureTestError(err);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true
+    );
+    browserWindow.addEventListener(
+      'unhandledrejection',
+      (event) => {
+        const reason = event.reason;
+        captureTestError(reason);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true
+    );
+  }
 })();
 
 export async function runAllTests(_unused?: { video: HTMLVideoElement }, options: RunOptions = {}): Promise<TestResult[]> {
@@ -995,6 +1025,7 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   // real device.
   options.resetFile?.();
   options.resetEnvironment?.();
+  pendingLateErrors.length = 0;
 
   // Probe both video and audio via gUM. Two reasons:
   //   1. On a real device the probes trigger iOS's permission prompts at run
@@ -1115,7 +1146,7 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     // (out-of-scope, or device-required without the matching device). The
     // message distinguishes "never applicable" from "needs a camera/mic" so
     // a reader can tell whether a real device would change the outcome.
-    if (!isApplicable(entry.requirement, env)) {
+    if (!options.forceRunAll && !isApplicable(entry.requirement, env)) {
       const result: TestResult = {
         name: entry.name,
         status: 'skip',
@@ -1147,12 +1178,25 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
       // before exiting on abort keeps a half-run test from leaking shared
       // state (capture grants, denied-set, the stub `<video>`'s srcObject)
       // into the next runAllTests call in the same JS session.
-      await Promise.race([
-        runOne(entry, t),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), DEFAULT_TIMEOUT_MS)
-        ),
-      ]);
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      const testPromise = runOne(entry, t);
+      testPromise.catch((e) => {
+        if (!t.failed) {
+          t.failed = e instanceof Error ? e : new Error(String(e));
+        }
+      });
+      try {
+        await Promise.race([
+          testPromise,
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => reject(new Error('timeout')), DEFAULT_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeoutHandle != null) {
+          clearTimeout(timeoutHandle);
+        }
+      }
       result = {
         name: entry.name,
         status: 'pass',
@@ -1202,6 +1246,15 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
         }
       }
     }
+
+    // Give browser media/event callbacks queued by this test a short chance
+    // to report through the late-error hooks before the row is finalized.
+    // Keep currentTestHandle set during this grace window so unexpected media
+    // events become suite failures instead of dev-server overlays.
+    await new Promise<void>((r) => setTimeout(r, 25));
+    if (!t.failed && pendingLateErrors.length > 0) {
+      t.failed = pendingLateErrors.shift() ?? null;
+    }
     if (t.failed && result.status === 'pass') {
       result = { ...result, status: 'fail', message: t.failed.message };
     }
@@ -1209,13 +1262,6 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     results.push(result);
     emit(`WPT_RESULT: ${JSON.stringify(result)}`);
     options.onResult?.(result, i, total);
-    // Yield to the host so the UI can render incremental progress and so
-    // late setTimeout/event callbacks queued by the just-finished test fire
-    // before the next test starts. We keep `currentTestHandle = t` during
-    // the yield so the late-error hook attributes errors to this test (the
-    // result is already emitted, so the attribution is just for "don't
-    // RedBox" — the late error is silently absorbed into t.failed).
-    await new Promise<void>((r) => setTimeout(r, 8));
     currentTestHandle = null;
   }
   } finally {
@@ -1230,7 +1276,9 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   // "deviceMissing" (would run on a real device) so the CLI / UI can show
   // "applicable" counts that don't conflate the two. `applicable` is the
   // number we actually attempted to run.
-  const applicability = summarizeApplicability(env);
+  const applicability = options.forceRunAll
+    ? { total: tests.length, applicable: tests.length, outOfScope: 0, deviceMissing: 0 }
+    : summarizeApplicability(env);
   // eslint-disable-next-line no-console
   console.log(`[wpt:debug] runAllTests: applicability=${JSON.stringify(applicability)}`);
   const summary = {

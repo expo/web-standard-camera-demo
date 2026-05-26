@@ -1,17 +1,9 @@
-// @ref LLP 0007 — In-scope WPT tests are registered as a side-effect of these imports.
-//
-// `wpt/*.ts` files are verbatim 1:1 ports of the upstream
-// web-platform-tests/wpt/mediacapture-streams suite. `local/*.ts` files are
-// project-specific tests that cover behavior outside the WPT corpus (e.g.
-// our AVCaptureSession interruption-driven mute/unmute path).
-//
-// Within each group we keep the upstream alphabetical ordering. WPT files
-// whose required APIs are outside LLP 0001 (`getDisplayMedia`, Browser Capture
-// crop/restrict, cross-origin iframe transfer, Permissions Policy headers,
-// SecureContext-only behavior, canvas/WebAudio frame inspection) are kept on
-// disk for provenance but are not imported into the active compliance suite.
+// @ref LLP 0019#browser-tests-tab — Expo Web registers only the in-scope
+// browser-runnable subset. Web uses the browser's own Media Capture APIs; it
+// must not import project-local iOS backdoor tests that depend on
+// NativeStandardCamera internals.
 
-// WPT — testable on iOS (alphabetical, matching upstream listing)
+// WPT — in-scope Media Capture and Streams / srcObject coverage.
 import './wpt/GUM-api';
 import './wpt/GUM-deny';
 import './wpt/GUM-echoCancellation-all';
@@ -51,16 +43,10 @@ import './wpt/MediaStreamTrack-init';
 import './wpt/MediaStreamTrackEvent-constructor';
 import './wpt/overconstrained_error';
 
-// Project-local tests covering behavior outside the WPT corpus.
-import './local/deviceId-pick';
-import './local/enumerate-multi-device';
+// Project-local tests that exercise the common web-shaped API surface without
+// reaching into iOS native backdoors or requiring multiple built-in cameras.
 import './local/enumerateDevices-not-allowed-camera';
 import './local/enumerateDevices-not-allowed-mic';
-import './local/facingMode-switch';
-import './local/frameRate-resolution';
 import './local/MediaStream-construction';
-import './local/MediaStreamTrack-disabled-audio';
-import './local/MediaStreamTrack-disabled-video';
-import './local/MediaStreamTrack-mute';
 
 export * from './testharness';

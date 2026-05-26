@@ -1,14 +1,13 @@
-import { Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
-import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import * as Device from 'expo-device';
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
-import { Animated, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import type { SFSymbol } from 'sf-symbols-typescript';
 
+import { Host, Picker, SymbolView, Text as UIText, pickerStyle, tag } from '@/components/demo-platform-controls';
+import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs as perfNowMs } from '@/lib/webgpu-perf';
@@ -342,8 +341,16 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const viewModeRef = React.useRef(viewMode);
 
   const isDesktop = windowWidth >= 1040;
+  const isWebDesktop = Platform.OS === 'web' && isDesktop;
   const stageWidth = isDesktop
-    ? Math.max(360, Math.min(windowWidth - 64, 960, Math.max(360, windowHeight - 260) * 4 / 3))
+    ? Math.max(
+        360,
+        Math.min(
+          isWebDesktop ? windowWidth - 456 : windowWidth - 64,
+          960,
+          Math.max(360, windowHeight - (isWebDesktop ? 180 : 260)) * 4 / 3
+        )
+      )
     : Math.min(Math.max(288, windowWidth - 32), 420);
   const stageHeight = Math.round(isDesktop ? stageWidth * 3 / 4 : stageWidth * 4 / 3);
 
@@ -362,10 +369,16 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
 
   React.useEffect(() => {
     installWebXRDepthProfile();
-    void navigator.xr?.isSessionSupported('immersive-ar').then((supported) => {
+    const xr = navigator.xr;
+    if (!xr) {
+      setSupport('WebXR LiDAR depth unsupported here');
+      resetXRReadouts('unsupported');
+      return;
+    }
+    void xr.isSessionSupported('immersive-ar').then((supported) => {
       setSupport(supported ? 'immersive-ar + depth-sensing available' : 'WebXR LiDAR depth unsupported here');
     });
-  }, []);
+  }, [resetXRReadouts]);
 
   React.useEffect(() => {
     targetDepthRef.current = targetDepth;
@@ -389,7 +402,11 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
     setStatus('requesting XR session');
     try {
       const xr = navigator.xr;
-      if (!xr) throw new Error('navigator.xr was not installed');
+      if (!xr) {
+        setSupport('WebXR LiDAR depth unsupported here');
+        resetXRReadouts('unsupported');
+        return;
+      }
       const supported = await xr.isSessionSupported('immersive-ar');
       if (!supported) {
         setSupport('WebXR LiDAR depth unsupported here');
@@ -683,7 +700,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
               stageWidth / stageHeight,
               frameNumber,
               targetDepthRef.current,
-              cameraWidth > 1 ? (cameraWidth > cameraHeight ? 1 : 0) : depthWidth > depthHeight ? 1 : 0,
+              !isDesktop && (cameraWidth > 1 ? cameraWidth > cameraHeight : depthWidth > depthHeight) ? 1 : 0,
               viewModeRef.current,
             ])
           );
@@ -858,118 +875,132 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
         style={styles.scroll}
         contentContainerStyle={styles.content}
         contentInsetAdjustmentBehavior="automatic">
-        <View style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
-          <Canvas ref={ref} style={styles.canvas} />
-          <Pressable
-            accessibilityLabel="Set target to center depth"
-            accessibilityRole="button"
-            accessibilityState={{ disabled: !canSetCenterTarget }}
-            disabled={!canSetCenterTarget}
-            hitSlop={18}
-            onPressIn={() => animateReticlePress(1)}
-            onPressOut={() => animateReticlePress(0)}
-            onPress={setCenterTarget}
-            style={styles.reticleHitTarget}>
-            <Animated.View pointerEvents="none" style={[styles.reticle, reticleAnimatedStyle]}>
-              <View style={styles.reticleHorizontal} />
-              <View style={styles.reticleVertical} />
-            </Animated.View>
-          </Pressable>
-          {showStoppedPlaceholder ? (
-            <View pointerEvents="none" style={styles.stoppedOverlay}>
-              <SymbolView
-                name="video.slash.fill"
-                size={56}
-                weight="semibold"
-                tintColor="#94a3b8"
-              />
+        <DemoPageFrame
+          action={{
+            disabled: transitioning || (!running && unsupported),
+            label: running ? 'Stop WebXR' : 'Start WebXR',
+            onPress: running ? () => void stopSession() : () => void startSession(),
+            running,
+            testID: 'webxr-lidar-start-stop',
+          }}
+          preview={
+            <View style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
+              <Canvas ref={ref} style={styles.canvas} />
+              <Pressable
+                accessibilityLabel="Set target to center depth"
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canSetCenterTarget }}
+                disabled={!canSetCenterTarget}
+                hitSlop={18}
+                onPressIn={() => animateReticlePress(1)}
+                onPressOut={() => animateReticlePress(0)}
+                onPress={setCenterTarget}
+                style={styles.reticleHitTarget}>
+                <Animated.View pointerEvents="none" style={[styles.reticle, reticleAnimatedStyle]}>
+                  <View style={styles.reticleHorizontal} />
+                  <View style={styles.reticleVertical} />
+                </Animated.View>
+              </Pressable>
+              {showStoppedPlaceholder ? (
+                <View pointerEvents="none" style={styles.stoppedOverlay}>
+                  <SymbolView
+                    name="video.slash.fill"
+                    size={56}
+                    weight="semibold"
+                    tintColor="#94a3b8"
+                  />
+                </View>
+              ) : null}
+              <View pointerEvents="none" style={styles.stageReadout}>
+                <Text style={styles.stageReadoutLabel}>CENTER</Text>
+                <Text style={styles.stageReadoutValue}>{centerDepth}</Text>
+              </View>
+              <View pointerEvents="none" style={styles.stageModePill}>
+                <Text style={styles.stageModeLabel}>TARGET</Text>
+                <Text style={styles.stageModeValue}>{targetDepth.toFixed(2)}m</Text>
+              </View>
+              {viewMode === 2 ? (
+                <View pointerEvents="none" style={styles.fusionLabels}>
+                  <Text style={styles.fusionLabel}>Camera</Text>
+                  <Text style={styles.fusionLabel}>LiDAR depth</Text>
+                </View>
+              ) : null}
+              <View pointerEvents="none" style={styles.maskReadout}>
+                <View style={styles.maskReadoutHeader}>
+                  <Text style={styles.maskReadoutLabel}>CLOSER THAN TARGET</Text>
+                  <Text style={styles.maskReadoutValue}>{foregroundPercent}%</Text>
+                </View>
+                <View style={styles.maskBarTrack}>
+                  <View
+                    style={[styles.maskBarFill, { width: `${Math.min(100, foregroundPercent)}%` }]}
+                  />
+                </View>
+              </View>
             </View>
-          ) : null}
-          <View pointerEvents="none" style={styles.stageReadout}>
-            <Text style={styles.stageReadoutLabel}>CENTER</Text>
-            <Text style={styles.stageReadoutValue}>{centerDepth}</Text>
-          </View>
-          <View pointerEvents="none" style={styles.stageModePill}>
-            <Text style={styles.stageModeLabel}>TARGET</Text>
-            <Text style={styles.stageModeValue}>{targetDepth.toFixed(2)}m</Text>
-          </View>
-          {viewMode === 2 ? (
-            <View pointerEvents="none" style={styles.fusionLabels}>
-              <Text style={styles.fusionLabel}>Camera</Text>
-              <Text style={styles.fusionLabel}>LiDAR depth</Text>
-            </View>
-          ) : null}
-          <View pointerEvents="none" style={styles.maskReadout}>
-            <View style={styles.maskReadoutHeader}>
-              <Text style={styles.maskReadoutLabel}>CLOSER THAN TARGET</Text>
-              <Text style={styles.maskReadoutValue}>{foregroundPercent}%</Text>
-            </View>
-            <View style={styles.maskBarTrack}>
-              <View
-                style={[styles.maskBarFill, { width: `${Math.min(100, foregroundPercent)}%` }]}
-              />
-            </View>
-          </View>
-        </View>
+          }
+          controls={
+            <>
+              <View style={[styles.quickControls, { width: isWebDesktop ? '100%' : stageWidth }]}>
+                <View style={styles.depthControl}>
+                  <Text style={styles.depthControlLabel}>View</Text>
+                  <Host style={styles.pickerHost}>
+                    <Picker
+                      modifiers={[pickerStyle('segmented')]}
+                      label="View"
+                      selection={viewMode}
+                      onSelectionChange={(value) => setViewMode(value as number)}>
+                      {VIEW_MODES.map((mode) => (
+                        <UIText key={mode.value} modifiers={[tag(mode.value)]}>
+                          {mode.label}
+                        </UIText>
+                      ))}
+                    </Picker>
+                  </Host>
+                </View>
 
-        <View style={[styles.quickControls, { width: stageWidth }]}>
-          <View style={styles.depthControl}>
-            <Text style={styles.depthControlLabel}>View</Text>
-            <Host style={styles.pickerHost}>
-              <Picker
-                modifiers={[pickerStyle('segmented')]}
-                label="View"
-                selection={viewMode}
-                onSelectionChange={(value) => setViewMode(value as number)}>
-                {VIEW_MODES.map((mode) => (
-                  <UIText key={mode.value} modifiers={[tag(mode.value)]}>
-                    {mode.label}
-                  </UIText>
-                ))}
-              </Picker>
-            </Host>
-          </View>
+                <View style={styles.depthControl}>
+                  <Text style={styles.depthControlLabel}>Target distance</Text>
+                  <Host style={styles.pickerHost}>
+                    <Picker
+                      modifiers={[pickerStyle('segmented')]}
+                      label="Target distance"
+                      selection={planeSelection}
+                      onSelectionChange={(value) => setTargetDepth(value as number)}>
+                      {OCCLUSION_DEPTHS_M.map((depth) => (
+                        <UIText key={depth} modifiers={[tag(depth)]}>
+                          {depth.toFixed(depth % 1 === 0 ? 0 : 2)}m
+                        </UIText>
+                      ))}
+                    </Picker>
+                  </Host>
+                </View>
+              </View>
 
-          <View style={styles.depthControl}>
-            <Text style={styles.depthControlLabel}>Target distance</Text>
-            <Host style={styles.pickerHost}>
-              <Picker
-                modifiers={[pickerStyle('segmented')]}
-                label="Target distance"
-                selection={planeSelection}
-                onSelectionChange={(value) => setTargetDepth(value as number)}>
-                {OCCLUSION_DEPTHS_M.map((depth) => (
-                  <UIText key={depth} modifiers={[tag(depth)]}>
-                    {depth.toFixed(depth % 1 === 0 ? 0 : 2)}m
-                  </UIText>
-                ))}
-              </Picker>
-            </Host>
-          </View>
-        </View>
+              <View style={styles.controls}>
+                <View style={styles.titleBlock}>
+                  <Text style={styles.title}>WebXR LiDAR Depth Studio</Text>
+                  <Text style={styles.subtitle}>
+                    navigator.xr camera and scene depth rendered through WebGPU
+                  </Text>
+                </View>
 
-        <View style={styles.controls}>
-          <View style={styles.titleBlock}>
-            <Text style={styles.title}>WebXR LiDAR Depth Studio</Text>
-            <Text style={styles.subtitle}>
-              navigator.xr camera and scene depth rendered through WebGPU
-            </Text>
-          </View>
+                <View style={styles.statusRow}>
+                  <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
+                  <Text style={styles.statusText}>{displayStatus}</Text>
+                </View>
 
-          <View style={styles.statusRow}>
-            <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
-            <Text style={styles.statusText}>{displayStatus}</Text>
-          </View>
-
-          <Text style={styles.metric}>{support}</Text>
-          <Text style={styles.metric}>camera: {cameraInfo}</Text>
-          <Text style={styles.metric}>depth: {frameInfo}</Text>
-          <Text style={styles.metric}>center: {centerDepth}</Text>
-          <Text style={styles.metric}>target: {maskInfo}</Text>
-          <Text style={styles.metric}>range: {depthRange}</Text>
-          <Text style={styles.metric}>webgpu: {fps} fps</Text>
-          {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
-        </View>
+                <Text style={styles.metric}>{support}</Text>
+                <Text style={styles.metric}>camera: {cameraInfo}</Text>
+                <Text style={styles.metric}>depth: {frameInfo}</Text>
+                <Text style={styles.metric}>center: {centerDepth}</Text>
+                <Text style={styles.metric}>target: {maskInfo}</Text>
+                <Text style={styles.metric}>range: {depthRange}</Text>
+                <Text style={styles.metric}>webgpu: {fps} fps</Text>
+                {displayError ? <Text style={styles.error}>{displayError}</Text> : null}
+              </View>
+            </>
+          }
+        />
       </ScrollView>
     </>
   );
