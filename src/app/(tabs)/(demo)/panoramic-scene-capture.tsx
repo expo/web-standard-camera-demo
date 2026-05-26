@@ -8,7 +8,18 @@ import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import type { SFSymbol } from 'sf-symbols-typescript';
 
-import { Button as UIButton, Host, buttonStyle, controlSize, disabled as disabledModifier, tint } from '@/components/demo-platform-controls';
+import {
+  Button as UIButton,
+  Host,
+  Picker,
+  Text as UIText,
+  buttonStyle,
+  controlSize,
+  disabled as disabledModifier,
+  pickerStyle,
+  tag,
+  tint,
+} from '@/components/demo-platform-controls';
 import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
@@ -51,13 +62,20 @@ import {
 // rendered with WebGPU.
 
 const QUAD_VERTEX_COUNT = 6;
+const MODEL_VIEW_MODES = [
+  { label: 'Color', value: 0 },
+  { label: 'Depth', value: 1 },
+  { label: 'Normals', value: 2 },
+] as const;
+
+type ModelViewMode = (typeof MODEL_VIEW_MODES)[number]['value'];
 
 const CAPTURE_MODEL_SHADER = /* wgsl */ `
 struct Uniforms {
   viewProjection: mat4x4f,
   pointScale: vec2f,
   time: f32,
-  _pad0: f32,
+  displayMode: f32,
 };
 
 struct VsIn {
@@ -71,6 +89,7 @@ struct VsOut {
   @location(0) color: vec4f,
   @location(1) local: vec2f,
   @location(2) normal: vec3f,
+  @location(3) distanceMeters: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -100,7 +119,18 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vertexIndex: u32) -> VsOut {
   out.color = vec4f(in.colorWeight.rgb, 1.0);
   out.local = corner;
   out.normal = normalize(in.normalCount.xyz);
+  out.distanceMeters = length(in.positionRadius.xyz);
   return out;
+}
+
+fn depthRamp(t: f32) -> vec3f {
+  let near = vec3f(1.0, 0.42, 0.14);
+  let mid = vec3f(0.1, 0.86, 0.72);
+  let far = vec3f(0.25, 0.34, 1.0);
+  if (t < 0.55) {
+    return mix(near, mid, smoothstep(0.0, 0.55, t));
+  }
+  return mix(mid, far, smoothstep(0.48, 1.0, t));
 }
 
 @fragment
@@ -112,8 +142,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
   let alpha = smoothstep(1.0, 0.55, d);
   let lightDir = normalize(vec3f(-0.25, 0.72, 0.64));
   let diffuse = 0.52 + 0.38 * max(dot(normalize(in.normal), lightDir), 0.0);
-  let lit = in.color.rgb * (diffuse + alpha * 0.18);
-  return vec4f(lit, 1.0);
+  var rgb = in.color.rgb * (diffuse + alpha * 0.18);
+  if (u.displayMode > 1.5) {
+    rgb = normalize(in.normal) * 0.5 + vec3f(0.5);
+  } else if (u.displayMode > 0.5) {
+    let t = clamp((in.distanceMeters - 0.35) / 4.45, 0.0, 1.0);
+    rgb = depthRamp(t);
+  }
+  return vec4f(rgb, 1.0);
 }
 `;
 
@@ -146,6 +182,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const keyframeCountRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
+  const modelViewModeRef = React.useRef<ModelViewMode>(0);
   const statusRef = React.useRef<CaptureStatus>('checking');
   const surfelCountRef = React.useRef(0);
   const supportCheckedRef = React.useRef(false);
@@ -157,6 +194,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const [support, setSupport] = React.useState('checking WebXR camera/depth support');
   const [error, setError] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<CaptureModel | null>(null);
+  const [modelViewMode, setModelViewMode] = React.useState<ModelViewMode>(0);
   const [viewer, setViewer] = React.useState<ViewerState>(DEFAULT_VIEWER_STATE);
   const [frameInfo, setFrameInfo] = React.useState('waiting for depth frames');
   const [modelInfo, setModelInfo] = React.useState('no capture yet');
@@ -176,6 +214,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   React.useEffect(() => {
     viewerRef.current = viewer;
   }, [viewer]);
+
+  React.useEffect(() => {
+    modelViewModeRef.current = modelViewMode;
+  }, [modelViewMode]);
 
   React.useEffect(() => {
     statusRef.current = status;
@@ -229,7 +271,9 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     keyframeCountRef.current = 0;
     surfelCountRef.current = 0;
     viewerRef.current = DEFAULT_VIEWER_STATE;
+    modelViewModeRef.current = 0;
     publishModel(null);
+    setModelViewMode(0);
     setViewer(DEFAULT_VIEWER_STATE);
     setFrameInfo('waiting for depth frames');
     setModelInfo('no capture yet');
@@ -480,7 +524,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           .catch(() => undefined);
         const bindGroupLayout = device.createBindGroupLayout({
           entries: [
-            { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+            { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
           ],
         });
         const pipeline = device.createRenderPipeline({
@@ -566,6 +610,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           uniforms[16] = 10 / Math.max(width, 1);
           uniforms[17] = 10 / Math.max(height, 1);
           uniforms[18] = elapsed;
+          uniforms[19] = modelViewModeRef.current;
           device.queue.writeBuffer(uniformBuffer, 0, uniforms);
 
           const encoder = device.createCommandEncoder();
@@ -602,7 +647,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           context.present();
           if (didDrawCapturedModel && currentModel) {
             renderedCapturedModelRevision = currentModelRevision;
-            logRenderMetrics(currentModel, currentModelRevision, width, height, presentationFormat);
+            logRenderMetrics(
+              currentModel,
+              currentModelRevision,
+              width,
+              height,
+              presentationFormat,
+              modelViewModeRef.current
+            );
           }
 
           frames += 1;
@@ -705,6 +757,26 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                   tone="secondary"
                 />
               </View>
+              {model ? (
+                // @ref LLP 0020#model-view - Model-view exposes inspection
+                // modes for camera color, geometric depth, and fused normals.
+                <View style={[styles.modeControl, { width: stageWidth }]}>
+                  <Text style={styles.modeControlLabel}>View</Text>
+                  <Host colorScheme="dark" style={styles.modePickerHost}>
+                    <Picker
+                      label="View"
+                      modifiers={[pickerStyle('segmented')]}
+                      onSelectionChange={(value) => setModelViewMode(value as ModelViewMode)}
+                      selection={modelViewMode}>
+                      {MODEL_VIEW_MODES.map((mode) => (
+                        <UIText key={mode.value} modifiers={[tag(mode.value)]}>
+                          {mode.label}
+                        </UIText>
+                      ))}
+                    </Picker>
+                  </Host>
+                </View>
+              ) : null}
 
               <View style={styles.controls}>
                 <View style={styles.titleBlock}>
@@ -935,7 +1007,8 @@ function logRenderMetrics(
   modelRevision: number,
   canvasWidth: number,
   canvasHeight: number,
-  presentationFormat: GPUTextureFormat
+  presentationFormat: GPUTextureFormat,
+  modelViewMode: ModelViewMode
 ): void {
   console.log('PANORAMIC_RENDER_METRICS', JSON.stringify({
     buildMs: Number(model.buildMs.toFixed(2)),
@@ -948,6 +1021,7 @@ function logRenderMetrics(
     presentationFormat,
     rawSampleCount: model.rawSampleCount,
     surfelCount: model.surfelCount,
+    viewMode: MODEL_VIEW_MODES.find((mode) => mode.value === modelViewMode)?.label ?? modelViewMode,
   }));
 }
 
@@ -1099,6 +1173,18 @@ const styles = StyleSheet.create({
     flexBasis: '48%',
     flexGrow: 1,
     minHeight: 42,
+  },
+  modeControl: {
+    gap: 6,
+  },
+  modeControlLabel: {
+    color: '#7dd3fc',
+    fontFamily: 'Menlo',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  modePickerHost: {
+    minHeight: 36,
   },
   controls: {
     alignSelf: 'stretch',

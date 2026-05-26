@@ -64,6 +64,9 @@ Implemented:
   Files-visible path, file URI, byte count, keyframe count, and surfel count.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
+- Model-view display modes: a segmented View control switches the WebGPU
+  surfel renderer between camera color, geometric depth/distance, and fused
+  normal inspection.
 - Model-view reset: after capture, the Reset slot becomes a Recenter action
   that restores the orbit/pinch viewer state without deleting the captured
   model.
