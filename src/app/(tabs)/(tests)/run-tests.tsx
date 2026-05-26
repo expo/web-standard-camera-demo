@@ -267,11 +267,15 @@ export default function RunTestsScreen(): React.JSX.Element {
   React.useEffect(() => {
     const m = url ? /[?&]only=([^&]+)/.exec(url) : null;
     onlyRef.current = m ? decodeURIComponent(m[1]) : undefined;
+    // eslint-disable-next-line no-console
+    console.log(`[wpt:debug] URL filter parsed url=${url ?? 'null'} only=${onlyRef.current ?? '<none>'}`);
   }, [url]);
 
   const run = React.useCallback(async () => {
     if (!videoRef.current) return;
     const only = onlyRef.current;
+    // eslint-disable-next-line no-console
+    console.log(`[wpt:debug] run() called with only=${only ?? '<none>'}`);
     runAbortRef.current?.abort();
     const ac = new AbortController();
     runAbortRef.current = ac;
