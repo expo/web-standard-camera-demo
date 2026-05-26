@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Button, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SymbolView, type AndroidSymbol, type SFSymbol } from 'expo-symbols';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useCamera, type CameraConstraints } from '@/contexts/CameraContext';
 import { useTheme } from '@/hooks/use-theme';
@@ -50,6 +51,7 @@ function facingOfDevice(label: string): 'user' | 'environment' | null {
 
 export default function HomeScreen(): React.JSX.Element {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
   const {
     stream,
     status,
@@ -131,134 +133,173 @@ export default function HomeScreen(): React.JSX.Element {
     (fr: number | undefined) => applyConstraints({ frameRate: fr }),
     [applyConstraints]
   );
+  const cameraRunning = status === 'playing';
+  const cameraTransitioning =
+    status === 'requesting' || status === 'starting' || status === 'stopping';
+  const inlineStartStopDisabled = externalLocked || cameraTransitioning;
+  const inlineStartStopLabel = externalLocked
+    ? 'Camera in use'
+    : status === 'requesting' || status === 'starting'
+      ? 'Starting...'
+      : status === 'stopping'
+        ? 'Stopping...'
+        : cameraRunning
+          ? 'Stop camera'
+          : 'Start camera';
+  const onToggleCamera = React.useCallback((): void => {
+    if (inlineStartStopDisabled) return;
+    if (cameraRunning) {
+      stop();
+    } else {
+      void start();
+    }
+  }, [cameraRunning, inlineStartStopDisabled, start, stop]);
 
   const isFront = explicitFacing === 'user';
   const selectedDeviceId = (settings?.deviceId as string | undefined) ?? constraints.deviceId;
+  const isDesktop = width >= 1040;
+  const contentStyle = [
+    styles.contentContainer,
+    isDesktop ? styles.desktopContentContainer : null,
+  ];
 
   return (
     <ScrollView
       style={[styles.scrollView, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.contentContainer}
+      contentContainerStyle={contentStyle}
       contentInsetAdjustmentBehavior="automatic">
-      <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-        navigator.mediaDevices.getUserMedia → &lt;Video srcObject&gt;
-      </Text>
+      <View style={[styles.shell, isDesktop ? styles.desktopShell : null]}>
+        <View style={[styles.previewPane, isDesktop ? styles.desktopPreviewPane : null]}>
+          <View style={styles.previewHeader}>
+            <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+              navigator.mediaDevices.getUserMedia → &lt;Video srcObject&gt;
+            </Text>
+            {Platform.OS === 'web' ? (
+              <CameraStartStopButton
+                disabled={inlineStartStopDisabled}
+                label={inlineStartStopLabel}
+                running={cameraRunning}
+                theme={theme}
+                onPress={onToggleCamera}
+              />
+            ) : null}
+          </View>
 
-      <View style={styles.videoContainer}>
-        <Video ref={videoRef} style={styles.video} />
-      </View>
+          <View style={[styles.videoContainer, isDesktop ? styles.desktopVideoContainer : null]}>
+            <Video ref={videoRef} style={styles.video} />
+          </View>
+        </View>
 
-      <View style={styles.controls}>
-        {!stream ? (
-          <Button title="Start camera" disabled={externalLocked} onPress={() => void start()} />
-        ) : (
-          <Button title="Stop camera" onPress={stop} />
-        )}
-      </View>
+        <View style={[styles.settingsPane, isDesktop ? styles.desktopSettingsPane : null]}>
+          <ControlRow label="Facing" theme={theme} desktop={isDesktop}>
+            <FacingPill mode="user" selected={isFront} theme={theme} onPick={onPickFacing} label="Front" />
+            <FacingPill mode="environment" selected={!isFront} theme={theme} onPick={onPickFacing} label="Back" />
+          </ControlRow>
 
-      <ControlRow label="Facing" theme={theme}>
-        <FacingPill mode="user" selected={isFront} theme={theme} onPick={onPickFacing} label="Front" />
-        <FacingPill mode="environment" selected={!isFront} theme={theme} onPick={onPickFacing} label="Back" />
-      </ControlRow>
+          {frontDevices.length > 0 ? (
+            <ControlRow label="Front camera" theme={theme} desktop={isDesktop}>
+              {frontDevices.map((d) => (
+                <DevicePill
+                  key={d.deviceId}
+                  deviceId={d.deviceId}
+                  label={shortDeviceLabel(d.label, 'user')}
+                  selected={selectedDeviceId === d.deviceId}
+                  theme={theme}
+                  onPick={onPickDevice}
+                />
+              ))}
+            </ControlRow>
+          ) : null}
 
-      {frontDevices.length > 0 ? (
-        <ControlRow label="Front camera" theme={theme}>
-          {frontDevices.map((d) => (
-            <DevicePill
-              key={d.deviceId}
-              deviceId={d.deviceId}
-              label={shortDeviceLabel(d.label, 'user')}
-              selected={selectedDeviceId === d.deviceId}
+          {backDevices.length > 0 ? (
+            <ControlRow label="Back camera" theme={theme} desktop={isDesktop}>
+              {backDevices.map((d) => (
+                <DevicePill
+                  key={d.deviceId}
+                  deviceId={d.deviceId}
+                  label={shortDeviceLabel(d.label, 'environment')}
+                  selected={selectedDeviceId === d.deviceId}
+                  theme={theme}
+                  onPick={onPickDevice}
+                />
+              ))}
+            </ControlRow>
+          ) : null}
+
+          <ControlRow label="Resolution" theme={theme} desktop={isDesktop}>
+            <ResolutionPill
+              label="Auto"
+              width={undefined}
+              height={undefined}
+              selected={!constraints.width}
               theme={theme}
-              onPick={onPickDevice}
+              onPick={onPickResolution}
             />
-          ))}
-        </ControlRow>
-      ) : null}
+            {RESOLUTION_PRESETS.map((p) => (
+              <ResolutionPill
+                key={p.label}
+                label={p.label}
+                width={p.width}
+                height={p.height}
+                selected={constraints.width === p.width && constraints.height === p.height}
+                theme={theme}
+                onPick={onPickResolution}
+              />
+            ))}
+          </ControlRow>
 
-      {backDevices.length > 0 ? (
-        <ControlRow label="Back camera" theme={theme}>
-          {backDevices.map((d) => (
-            <DevicePill
-              key={d.deviceId}
-              deviceId={d.deviceId}
-              label={shortDeviceLabel(d.label, 'environment')}
-              selected={selectedDeviceId === d.deviceId}
+          <ControlRow label="Frame rate" theme={theme} desktop={isDesktop}>
+            <FrameRatePill
+              label="Auto"
+              rate={undefined}
+              selected={!constraints.frameRate}
               theme={theme}
-              onPick={onPickDevice}
+              onPick={onPickFrameRate}
             />
-          ))}
-        </ControlRow>
-      ) : null}
+            {FRAME_RATE_PRESETS.map((fr) => (
+              <FrameRatePill
+                key={fr}
+                label={`${fr} fps`}
+                rate={fr}
+                selected={constraints.frameRate === fr}
+                theme={theme}
+                onPick={onPickFrameRate}
+              />
+            ))}
+          </ControlRow>
 
-      <ControlRow label="Resolution" theme={theme}>
-        <ResolutionPill
-          label="Auto"
-          width={undefined}
-          height={undefined}
-          selected={!constraints.width}
-          theme={theme}
-          onPick={onPickResolution}
-        />
-        {RESOLUTION_PRESETS.map((p) => (
-          <ResolutionPill
-            key={p.label}
-            label={p.label}
-            width={p.width}
-            height={p.height}
-            selected={constraints.width === p.width && constraints.height === p.height}
-            theme={theme}
-            onPick={onPickResolution}
-          />
-        ))}
-      </ControlRow>
-
-      <ControlRow label="Frame rate" theme={theme}>
-        <FrameRatePill
-          label="Auto"
-          rate={undefined}
-          selected={!constraints.frameRate}
-          theme={theme}
-          onPick={onPickFrameRate}
-        />
-        {FRAME_RATE_PRESETS.map((fr) => (
-          <FrameRatePill
-            key={fr}
-            label={`${fr} fps`}
-            rate={fr}
-            selected={constraints.frameRate === fr}
-            theme={theme}
-            onPick={onPickFrameRate}
-          />
-        ))}
-      </ControlRow>
-
-      <View style={styles.statusBlock}>
-        <Text style={[styles.statusLine, { color: theme.text }]}>status: {status}</Text>
-        <Text style={[styles.statusLine, { color: theme.text }]}>
-          active: {stream?.active ? 'true' : 'false'}
-        </Text>
-        <Text style={[styles.statusLine, { color: theme.text }]}>
-          tracks: {stream?.getTracks().length ?? 0}
-        </Text>
-        {settings ? (
-          <>
-            <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
-              settings.deviceId: {String(settings.deviceId ?? '—')}
+          <View
+            style={[
+              styles.statusBlock,
+              isDesktop ? [styles.desktopStatusBlock, { backgroundColor: theme.backgroundElement }] : null,
+            ]}>
+            <Text style={[styles.statusLine, { color: theme.text }]}>status: {status}</Text>
+            <Text style={[styles.statusLine, { color: theme.text }]}>
+              active: {stream?.active ? 'true' : 'false'}
             </Text>
-            <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
-              settings.facingMode: {String(settings.facingMode ?? '—')}
+            <Text style={[styles.statusLine, { color: theme.text }]}>
+              tracks: {stream?.getTracks().length ?? 0}
             </Text>
-            <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
-              settings.width × height: {String(settings.width ?? '—')} ×{' '}
-              {String(settings.height ?? '—')}
-            </Text>
-            <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
-              settings.frameRate: {String(settings.frameRate ?? '—')}
-            </Text>
-          </>
-        ) : null}
-        {error && <Text style={styles.errorLine}>{error}</Text>}
+            {settings ? (
+              <>
+                <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
+                  settings.deviceId: {String(settings.deviceId ?? '—')}
+                </Text>
+                <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
+                  settings.facingMode: {String(settings.facingMode ?? '—')}
+                </Text>
+                <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
+                  settings.width × height: {String(settings.width ?? '—')} ×{' '}
+                  {String(settings.height ?? '—')}
+                </Text>
+                <Text style={[styles.statusLine, { color: theme.textSecondary }]}>
+                  settings.frameRate: {String(settings.frameRate ?? '—')}
+                </Text>
+              </>
+            ) : null}
+            {error && <Text style={styles.errorLine}>{error}</Text>}
+          </View>
+        </View>
       </View>
     </ScrollView>
   );
@@ -266,24 +307,82 @@ export default function HomeScreen(): React.JSX.Element {
 
 type Theme = { text: string; textSecondary: string; backgroundElement: string };
 
+const START_STOP_ICON: Record<
+  'play' | 'stop',
+  { android: AndroidSymbol; ios: SFSymbol; web: AndroidSymbol }
+> = {
+  play: { android: 'play_arrow', ios: 'play.fill', web: 'play_arrow' },
+  stop: { android: 'stop', ios: 'stop.fill', web: 'stop' },
+};
+
+const STOP_TINT = '#ff453a';
+
+function CameraStartStopButton({
+  disabled,
+  label,
+  running,
+  theme,
+  onPress,
+}: {
+  disabled: boolean;
+  label: string;
+  running: boolean;
+  theme: Theme;
+  onPress: () => void;
+}): React.JSX.Element {
+  const tintColor = running ? STOP_TINT : theme.text;
+  const icon = START_STOP_ICON[running ? 'stop' : 'play'];
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      testID="standard-camera-start-stop"
+      style={({ pressed }) => [
+        styles.startStopButton,
+        { backgroundColor: theme.backgroundElement },
+        disabled ? styles.startStopButtonDisabled : null,
+        pressed && !disabled ? styles.startStopButtonPressed : null,
+      ]}>
+      <SymbolView
+        fallback={<Text style={[styles.startStopFallback, { color: tintColor }]}>{running ? 'S' : 'P'}</Text>}
+        name={icon}
+        size={18}
+        tintColor={tintColor}
+      />
+      <Text numberOfLines={1} style={[styles.startStopText, { color: tintColor }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 const ControlRow = React.memo(function ControlRow({
   label,
   theme,
+  desktop,
   children,
 }: {
   label: string;
   theme: Theme;
+  desktop?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <View style={styles.controlRow}>
       <Text style={[styles.controlLabel, { color: theme.textSecondary }]}>{label}</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.pillRow}>
-        {children}
-      </ScrollView>
+      {desktop ? (
+        <View style={styles.pillWrap}>{children}</View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.pillRow}>
+          {children}
+        </ScrollView>
+      )}
     </View>
   );
 });
@@ -395,9 +494,75 @@ const styles = StyleSheet.create({
     gap: 14,
     paddingBottom: 32,
   },
+  desktopContentContainer: {
+    width: '100%',
+    maxWidth: 1180,
+    alignSelf: 'center',
+    padding: 32,
+    paddingBottom: 48,
+  },
+  shell: {
+    gap: 14,
+  },
+  desktopShell: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 28,
+  },
+  previewPane: {
+    gap: 14,
+  },
+  desktopPreviewPane: {
+    flex: 1.7,
+    minWidth: 0,
+  },
+  settingsPane: {
+    gap: 14,
+  },
+  desktopSettingsPane: {
+    flex: 1,
+    minWidth: 280,
+  },
   subtitle: {
+    flexShrink: 1,
     fontSize: 13,
     fontFamily: 'Menlo',
+  },
+  previewHeader: {
+    minHeight: 36,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  startStopButton: {
+    minWidth: 134,
+    minHeight: 36,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+  },
+  startStopButtonDisabled: {
+    opacity: 0.55,
+  },
+  startStopButtonPressed: {
+    opacity: 0.72,
+  },
+  startStopFallback: {
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 13,
+  },
+  startStopText: {
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 15,
   },
   videoContainer: {
     aspectRatio: 3 / 4,
@@ -405,13 +570,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
   },
+  desktopVideoContainer: {
+    width: '100%',
+    maxWidth: '100%',
+    aspectRatio: 4 / 3,
+    borderRadius: 10,
+  },
   video: {
     flex: 1,
-  },
-  controls: {
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center',
+    width: '100%',
+    height: '100%',
   },
   controlRow: {
     gap: 4,
@@ -422,6 +590,12 @@ const styles = StyleSheet.create({
   },
   pillRow: {
     flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+  },
+  pillWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
     alignItems: 'center',
   },
@@ -438,6 +612,11 @@ const styles = StyleSheet.create({
   statusBlock: {
     gap: 4,
     marginTop: 4,
+  },
+  desktopStatusBlock: {
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 2,
   },
   statusLine: {
     fontFamily: 'Menlo',
