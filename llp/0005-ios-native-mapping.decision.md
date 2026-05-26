@@ -76,6 +76,27 @@ The `loadeddata` event must fire when the first frame is rendered. We attach a h
 
 We tried KVO on `previewLayer.isPreviewing` first; it was unreliable on iPhone 15 Pro / iOS 26 (never transitioned to `true`) and would not have produced a single source of truth that works the same on simulator and device. The data-output approach also has the side effect of forcing frames to actually flow through the session — without any output configured, `AVCaptureSession` can be `isRunning == true` yet deliver no samples to a preview-only layer.
 
+## Preview orientation and mirroring
+
+The `<Video>` view renders with `AVCaptureVideoPreviewLayer`. On iOS 17 and
+newer, preview rotation is driven by `AVCaptureDevice.RotationCoordinator` and
+its `videoRotationAngleForHorizonLevelPreview`, applied to the preview
+connection's `videoRotationAngle`. This replaces a hard-coded 90-degree
+portrait rotation and keeps the preview layer level across front/back stream
+swaps.
+
+The app uses the standard web idiom for self-view mirroring:
+`transform: scaleX(-1)` on the video element. React Native writes that transform
+to the layer, but `AVCaptureVideoPreviewLayer`'s direct camera rendering path
+does not reliably honor it as a normal composited CALayer transform. The native
+view therefore translates the effective horizontal flip into
+`AVCaptureConnection.isVideoMirrored` and then resets the CALayer transform to
+identity so mirroring is applied exactly once.
+
+Ordering matters: whenever mirroring changes, the view reapplies the current
+preview rotation afterward. This prevents AVFoundation mirror changes from
+leaving a stale effective rotation on the preview connection.
+
 ## Passing SharedObjects to view props (the big landmine)
 
 Expo views (under either architecture, as of SDK 56) **cannot accept SharedObject references as view props directly.** A prop declared on the Swift side as `(view, stream: MediaStream?)` *will silently receive `nil`* if JS passes the SharedObject's JS-side handle. You have to pass the shared-object id (an integer stored on the JS proxy as `__expo_shared_object_id__`), and the prop converter resolves it back to the Swift instance.

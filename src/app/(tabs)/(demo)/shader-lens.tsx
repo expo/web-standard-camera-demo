@@ -20,12 +20,11 @@ import {
   closeCameraFrame,
   createBgraCameraFrameSource,
   getCameraFrameByteLength,
-  getCameraFrameNumber,
   getCameraFrameTextureFormat,
   type CameraFrameUploadSource,
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
-import { displayFacingMode } from '@/lib/camera-facing';
+import { cameraFrameFacingMode, displayFacingMode } from '@/lib/camera-facing';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -155,6 +154,7 @@ const SYNTHETIC_SIZE = 256;
 const SYNTHETIC_FALLBACK_DELAY_MS = 3000;
 const FRAME_UPLOAD_INTERVAL_MS = 33;
 const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
+const CAMERA_CAPTURE_SETTLE_MS = 180;
 const DEMO_CAPTURE_CONSTRAINTS = { width: 640, height: 480, frameRate: 30 } as const;
 
 const EFFECTS = [
@@ -192,7 +192,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
   const [fps, setFps] = React.useState('0.0');
   const [frameDimensions, setFrameDimensions] = React.useState<FrameDimensions | null>(null);
-  const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
 
@@ -200,12 +199,13 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const intensityRef = React.useRef(intensity);
   const cameraStatusRef = React.useRef(cameraStatus);
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
+  const imageCaptureMirroredRef = React.useRef(false);
+  const imageCaptureAcceptAfterRef = React.useRef(0);
   const rafRef = React.useRef<number | null>(null);
   const frameDimensionsRef = React.useRef<FrameDimensions | null>(null);
   const lastGrabErrorRef = React.useRef<string | null>(null);
   const preserveCameraPreviewUntilRef = React.useRef(0);
   const previewRotatesRef = React.useRef(false);
-  const mirrorRef = React.useRef(false);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   // On real hardware we always suppress the synthetic test pattern — both
@@ -257,7 +257,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
     setGrabError(null);
     setSource('pending');
     setFrameDimensions(null);
-    setLastFrameNumber(null);
   }, [cameraStatus, setGrabError, stream]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -280,24 +279,41 @@ export default function ShaderLensScreen(): React.JSX.Element {
   React.useEffect(() => {
     if (!stream) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       setGrabError(null);
       return;
     }
     const track = stream.getVideoTracks()[0];
     if (!track) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       setGrabError(null);
       return;
     }
     try {
+      // @ref LLP 0010#frame-bound-demo-mirroring — Snapshot mirroring with
+      // the ImageCapture; stopped/replacing iOS tracks can lose facingMode
+      // before an awaited grabFrame() returns.
+      const mirrored = cameraFrameFacingMode(track.getSettings()) === 'user';
       imageCaptureRef.current = new ImageCapture(track);
+      imageCaptureMirroredRef.current = mirrored;
+      // @ref LLP 0010#frame-bound-demo-mirroring — Avoid accepting the
+      // replacement camera's transient exposure-settling frames without
+      // depending on native-only frame diagnostics.
+      imageCaptureAcceptAfterRef.current = Date.now() + CAMERA_CAPTURE_SETTLE_MS;
       setGrabError(null);
     } catch (e) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
     return () => {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
     };
   }, [setGrabError, stream]);
 
@@ -371,7 +387,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
         let lastReport = startedAt;
         let lastUpload = 0;
         let lastReportedSource: 'camera' | 'synthetic' | null = null;
-        let lastSeenFrameNumber: number | null = null;
+        let activeTextureMirrored = false;
 
         const renderFrame = async (): Promise<void> => {
           if (cancelled) return;
@@ -388,7 +404,9 @@ export default function ShaderLensScreen(): React.JSX.Element {
               cameraStatusNow === 'playing';
             let frame: CameraFrameUploadSource | null = null;
             let frameSource: 'camera' | 'synthetic' = 'synthetic';
+            let frameMirrored = false;
             const imageCapture = imageCaptureRef.current;
+            const imageCaptureMirrored = imageCaptureMirroredRef.current;
 
             if (!cameraMayDeliverFrames && sourceRef.current === 'camera') {
               lastReportedSource = null;
@@ -406,12 +424,19 @@ export default function ShaderLensScreen(): React.JSX.Element {
               } else {
                 try {
                   const bitmap = await profile.timeAsync('grabFrame', () => imageCapture.grabFrame());
-                  frame = bitmap;
-                  frameSource = 'camera';
-                  preserveCameraPreviewUntilRef.current = 0;
-                  lastSeenFrameNumber = getCameraFrameNumber(bitmap);
-                  if (lastSeenFrameNumber !== null) profile.recordFrameNumber(lastSeenFrameNumber);
-                  setGrabError(null);
+                  if (cancelled || imageCaptureRef.current !== imageCapture) {
+                    closeCameraFrame(bitmap);
+                  } else if (Date.now() < imageCaptureAcceptAfterRef.current) {
+                    closeCameraFrame(bitmap);
+                    lastUpload = Date.now();
+                    setGrabError(null);
+                  } else {
+                    frame = bitmap;
+                    frameSource = 'camera';
+                    frameMirrored = imageCaptureMirrored;
+                    preserveCameraPreviewUntilRef.current = 0;
+                    setGrabError(null);
+                  }
                 } catch (e) {
                   if (isEndedTrackGrabError(e)) {
                     if (imageCaptureRef.current === imageCapture) {
@@ -458,6 +483,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
               profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
               profile.count('uploadedBytes', getCameraFrameByteLength(frame));
               profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
+              activeTextureMirrored = frameSource === 'camera' ? frameMirrored : false;
               frameToClose = frame;
               lastUpload = now;
             }
@@ -481,7 +507,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
               1 / (rotatesPreview ? texWidth : texHeight),
               intensityRef.current,
               rotatesPreview ? 1 : 0,
-              mirrorRef.current ? 1 : 0,
+              activeTextureMirrored ? 1 : 0,
               0,
             ])
           );
@@ -512,9 +538,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
           if (now - lastReport >= 1000) {
             const fpsValue = frames / ((now - lastReport) / 1000);
             setFps(fpsValue.toFixed(1));
-            if (lastSeenFrameNumber !== null) {
-              setLastFrameNumber(lastSeenFrameNumber);
-            }
             profile.report({
               cameraStatus: cameraStatusRef.current,
               fps: Number(fpsValue.toFixed(1)),
@@ -560,13 +583,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
   }, [adapter, device, ref, setFrameInfo, setGrabError])
   );
 
-  // Drive Start/Stop off the context's status machine, not `stream != null`.
-  // The stream stays non-null across the 'ended' transition (track ended by
-  // the OS or another app), and using `stream != null` there left the nav
-  // button claiming "Stop" against a camera that had already stopped. The
-  // status machine flips to 'idle'/'ended'/'error' in those cases and the
-  // button switches back to Start, matching the real device state.
-  const cameraOn = cameraStatus === 'playing';
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
   // eslint-disable-next-line react-hooks/refs -- The long-lived WebGPU loop reads this ref between renders.
@@ -589,9 +605,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
   // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
   // when the web provider proves no environment camera exists.
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
-  React.useEffect(() => {
-    mirrorRef.current = cameraFacing === 'user';
-  }, [cameraFacing]);
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
@@ -695,9 +708,6 @@ export default function ShaderLensScreen(): React.JSX.Element {
               <Text style={styles.hudText}>Shader lens · {status}</Text>
               <Text style={styles.hudSub}>camera: {cameraLine}</Text>
               <Text style={styles.hudSub}>render: {fps} fps · source: {source}</Text>
-              {lastFrameNumber !== null && cameraOn ? (
-                <Text style={styles.hudSub}>iOS frames delivered: {lastFrameNumber}</Text>
-              ) : null}
               {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
               {lastGrabError && source !== 'camera' ? (
                 <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>

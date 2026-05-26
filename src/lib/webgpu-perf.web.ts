@@ -16,7 +16,6 @@ export function nowMs(): number {
 
 export function createWebGpuPerfProbe(demo: string, staticInfo: WebGpuPerfExtra = {}) {
   let windowStartedAt = nowMs();
-  let lastFrameNumber: number | null = null;
   const counts = new Map<string, number>();
   const timings = new Map<string, TimingBucket>();
 
@@ -48,17 +47,6 @@ export function createWebGpuPerfProbe(demo: string, staticInfo: WebGpuPerfExtra 
     } finally {
       duration(name, nowMs() - start);
     }
-  };
-
-  const recordFrameNumber = (frameNumber: number | null | undefined): void => {
-    count('cameraReads');
-    if (typeof frameNumber !== 'number') return;
-    if (lastFrameNumber === null || frameNumber !== lastFrameNumber) {
-      count('newCameraFrames');
-    } else {
-      count('duplicateCameraReads');
-    }
-    lastFrameNumber = frameNumber;
   };
 
   const report = (extra: WebGpuPerfExtra = {}, force = false): void => {
@@ -99,7 +87,6 @@ export function createWebGpuPerfProbe(demo: string, staticInfo: WebGpuPerfExtra 
   return {
     count,
     duration,
-    recordFrameNumber,
     report,
     time,
     timeAsync,

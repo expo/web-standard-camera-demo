@@ -256,7 +256,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       if (previous) {
         streamRef.current = null;
         setStreamState(null);
-        setSettings(null);
         for (const t of previous.getTracks()) t.stop();
       }
       setError(null);
@@ -309,6 +308,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         );
         if (!mountedRef.current || requestId !== startRequestRef.current) return;
         const constraintHint = err.constraint ? ` (${err.constraint})` : '';
+        setSettings(null);
         setError(`${err.name ?? 'Error'}${constraintHint}: ${err.message}`);
         setStatus('error');
       }

@@ -78,6 +78,31 @@ for the same iOS camera hardware. Starting LiDAR first tears down and locks out
 the standard camera; stopping LiDAR releases that lock so the shared standard
 camera can auto-resume only when the user had not explicitly stopped it.
 
+## Frame-bound demo mirroring
+
+Front-camera previews are mirrored for self-view, but the WebGPU demos must
+bind that mirror flag to the frame texture being displayed rather than to the
+currently requested camera constraint. During a front/back switch the UI
+selection and stored constraints can update before the next stream has
+delivered pixels. If the shader mirror flag follows the request immediately,
+the old texture visibly flips for a few frames before the new camera appears.
+
+The demo render loops therefore store mirror state beside the currently bound
+camera texture, and update both only when a camera frame is successfully
+accepted from `ImageCapture.grabFrame()` for upload. The facing mode comes from
+that frame's track settings. On web, a missing `settings.facingMode` still
+follows LLP 0021's self-view convention; on native iOS, AVFoundation-backed
+tracks report the concrete front/back mode.
+
+On native iOS, the first frame from a newly selected camera can be a transient
+exposure/settling frame. The demo routes avoid native frame diagnostics here:
+when an `ImageCapture` is rebound to a replacement track, the render loop keeps
+the previously bound texture for a short timer window before accepting
+`grabFrame()` output from the new capture object. That uses only the
+browser-shaped APIs already in the demo (`MediaStreamTrack.getSettings()`,
+`ImageCapture.grabFrame()`, `ImageBitmap.close()`, timers, and WebGPU) while
+avoiding the dark startup frame during front/back switches.
+
 ## Validated foundations
 
 These were spiked and verified before this LLP was written.

@@ -34,5 +34,21 @@ export function displayFacingMode({
   if (Platform.OS === 'web') {
     return reported ?? 'user';
   }
-  return constraints?.facingMode ?? reported ?? 'environment';
+  // @ref LLP 0010#frame-bound-demo-mirroring — Native UI should reflect the
+  // camera that is actually active, not the next requested facing mode, so
+  // preview mirroring cannot flip before the replacement stream produces
+  // frames.
+  return reported ?? constraints?.facingMode ?? 'environment';
+}
+
+// @ref LLP 0010#frame-bound-demo-mirroring — GPU demos mirror the frame whose
+// pixels are currently bound, not the next requested constraint state.
+export function cameraFrameFacingMode(
+  settings: MediaTrackSettings | null | undefined
+): CameraFacingMode {
+  const reported = reportedFacingMode(settings);
+  if (Platform.OS === 'web') {
+    return reported ?? 'user';
+  }
+  return reported ?? 'environment';
 }

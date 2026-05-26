@@ -16,12 +16,11 @@ import { useCamera } from '@/contexts/CameraContext';
 import {
   closeCameraFrame,
   getCameraFrameByteLength,
-  getCameraFrameNumber,
   getCameraFrameTextureFormat,
   type CameraFrameUploadSource,
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
-import { displayFacingMode } from '@/lib/camera-facing';
+import { cameraFrameFacingMode, displayFacingMode } from '@/lib/camera-facing';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -86,6 +85,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 // keeps the inside hidden.
 const CUBE_VERTEX_COUNT = 36;
 const CAMERA_UPLOAD_INTERVAL_MS = 33;
+const CAMERA_CAPTURE_SETTLE_MS = 180;
 const CUBE_VERTICES = new Float32Array([
   // +Z (front)
   -1, -1, 1, 0, 1,
@@ -151,10 +151,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
   // when the web provider proves no environment camera exists.
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
-  const mirrorRef = React.useRef(cameraFacing === 'user');
-  React.useEffect(() => {
-    mirrorRef.current = cameraFacing === 'user';
-  }, [cameraFacing]);
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
       if (facingMode === cameraFacing) return;
@@ -186,16 +182,19 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   const [source, setSource] = React.useState<'pending' | 'camera'>('pending');
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
 
   // The render loop reads from a ref so swapping the stream doesn't restart
   // the WebGPU pipeline. The effect below keeps the ref in sync with the
   // context's active stream.
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
+  const imageCaptureMirroredRef = React.useRef(false);
+  const imageCaptureAcceptAfterRef = React.useRef(0);
   /* eslint-disable react-hooks/set-state-in-effect -- Keep the existing stream-swap HUD reset timing. */
   React.useEffect(() => {
     if (!stream) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       setSource('pending');
       console.log(`CUBE_TRACE stream-cleared`);
       return;
@@ -204,21 +203,33 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     const track = stream.getVideoTracks()[0];
     if (!track) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       return;
     }
     try {
+      const mirrored = cameraFrameFacingMode(track.getSettings()) === 'user';
       imageCaptureRef.current = new ImageCapture(track);
+      imageCaptureMirroredRef.current = mirrored;
+      // @ref LLP 0010#frame-bound-demo-mirroring — Avoid accepting the
+      // replacement camera's transient exposure-settling frames without
+      // depending on native-only frame diagnostics.
+      imageCaptureAcceptAfterRef.current = Date.now() + CAMERA_CAPTURE_SETTLE_MS;
       const s = track.getSettings() as { width?: number; height?: number };
       console.log(
         `CUBE_TRACE stream-ready ${JSON.stringify({ trackId: track.id, label: track.label, w: s.width, h: s.height })}`
       );
     } catch (e) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       console.log(`CUBE_TRACE ImageCapture-construct-fail ${JSON.stringify({ reason })}`);
     }
     return () => {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
     };
   }, [stream]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -353,17 +364,16 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
         let activeSource: 'pending' | 'camera' = 'pending';
         let activeWidth = 0;
         let activeHeight = 0;
-        let lastSeenFrameNumber: number | null = null;
-        let newFramesThisSecond = 0;
         let grabsThisSecond = 0;
         let cameraGrabInFlight = false;
+        let activeTextureMirrored = false;
 
         const aspect = canvasWidth / canvasHeight;
         const projection = mat4Perspective((60 * Math.PI) / 180, aspect, 0.1, 100);
         const view = mat4Translate(0, 0, -5);
         const viewProjection = mat4Multiply(projection, view);
 
-        const uploadCameraFrame = (frame: CameraFrameUploadSource): void => {
+        const uploadCameraFrame = (frame: CameraFrameUploadSource, mirrored: boolean): void => {
           if (cancelled) return;
           if (!hasReportedCameraSource) {
             hasReportedCameraSource = true;
@@ -382,9 +392,10 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           activeHeight = frame.height;
           bindGroup = currentBindGroup;
           lastUpload = Date.now();
+          activeTextureMirrored = mirrored;
         };
 
-        const scheduleCameraUpload = (ic: ImageCapture): void => {
+        const scheduleCameraUpload = (ic: ImageCapture, mirrored: boolean): void => {
           if (cameraGrabInFlight) return;
           cameraGrabInFlight = true;
           void (async () => {
@@ -392,14 +403,13 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             try {
               frame = await profile.timeAsync('grabFrame', () => ic.grabFrame());
               if (cancelled || imageCaptureRef.current !== ic) return;
-              grabsThisSecond++;
-              const frameNumber = getCameraFrameNumber(frame);
-              if (frameNumber !== null) profile.recordFrameNumber(frameNumber);
-              if (frameNumber !== null && frameNumber !== lastSeenFrameNumber) {
-                newFramesThisSecond++;
-                lastSeenFrameNumber = frameNumber;
+              if (Date.now() < imageCaptureAcceptAfterRef.current) {
+                lastUpload = Date.now();
+                setLastGrabError(null);
+                return;
               }
-              uploadCameraFrame(frame);
+              grabsThisSecond++;
+              uploadCameraFrame(frame, mirrored);
               setLastGrabError(null);
             } catch (e) {
               if (!cancelled && imageCaptureRef.current === ic) {
@@ -427,14 +437,17 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             // expensive browser ImageCapture copy cannot stop animation.
             const ic = imageCaptureRef.current;
             if (ic) {
-              scheduleCameraUpload(ic);
+              // @ref LLP 0010#frame-bound-demo-mirroring — Snapshot mirroring
+              // with the capture object; stopped tracks can lose facingMode
+              // before an in-flight grabFrame() resolves.
+              scheduleCameraUpload(ic, imageCaptureMirroredRef.current);
             }
           }
 
           const model = mat4Multiply(mat4RotateY(elapsed * 0.7), mat4RotateX(elapsed * 0.4));
           const mvp = mat4Multiply(viewProjection, model);
           uniformScratch.set(mvp, 0);
-          uniformScratch[16] = mirrorRef.current ? 1 : 0;
+          uniformScratch[16] = activeTextureMirrored ? 1 : 0;
           device.queue.writeBuffer(uniformBuffer, 0, uniformScratch);
 
           const renderStart = nowMs();
@@ -477,21 +490,16 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
           if (now - lastReport >= 1000) {
             const fps = (frames / ((now - lastReport) / 1000)).toFixed(1);
             console.log(
-              `CUBE_FPS ${JSON.stringify({ fps: +fps, frames, source: activeSource, w: activeWidth, h: activeHeight, newFrames: newFramesThisSecond, grabs: grabsThisSecond, lastN: lastSeenFrameNumber })}`
+              `CUBE_FPS ${JSON.stringify({ fps: +fps, frames, source: activeSource, w: activeWidth, h: activeHeight, grabs: grabsThisSecond })}`
             );
-            if (lastSeenFrameNumber !== null) {
-              setLastFrameNumber(lastSeenFrameNumber);
-            }
             profile.report({
               fps: Number(fps),
               grabs: grabsThisSecond,
               height: activeHeight,
-              newFrames: newFramesThisSecond,
               source: activeSource,
               width: activeWidth,
             });
             frames = 0;
-            newFramesThisSecond = 0;
             grabsThisSecond = 0;
             lastReport = now;
           }
@@ -577,9 +585,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             <Text style={styles.hudText}>Cube of cameras · {status}</Text>
             <Text style={styles.hudSub}>{subtitle}</Text>
             <Text style={styles.hudSub}>· camera context: {cameraStatus}</Text>
-            {lastFrameNumber !== null && cameraOn ? (
-              <Text style={styles.hudSub}>· iOS frames delivered: {lastFrameNumber}</Text>
-            ) : null}
             {cameraError ? <Text style={styles.hudError}>· camera error: {cameraError}</Text> : null}
             {lastGrabError && source !== 'camera' ? (
               <Text style={styles.hudSub}>· grabFrame: {lastGrabError}</Text>

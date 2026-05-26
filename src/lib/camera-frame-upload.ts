@@ -7,7 +7,6 @@ export interface CameraFrameUploadSource {
   readonly close?: () => void;
   readonly _data?: Uint8Array;
   readonly _format?: GPUTextureFormat;
-  readonly _frameNumber?: number;
 }
 
 export interface CameraFrameUploadResult {
@@ -28,10 +27,6 @@ export function createBgraCameraFrameSource(
 
 export function getCameraFrameByteLength(frame: CameraFrameUploadSource): number {
   return frame._data?.byteLength ?? frame.width * frame.height * 4;
-}
-
-export function getCameraFrameNumber(frame: CameraFrameUploadSource): number | null {
-  return typeof frame._frameNumber === 'number' ? frame._frameNumber : null;
 }
 
 export function getCameraFrameTextureFormat(frame: CameraFrameUploadSource): GPUTextureFormat {

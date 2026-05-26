@@ -8,23 +8,37 @@ import ExpoModulesCore
 // The backing layer is the AVCaptureVideoPreviewLayer itself (via
 // `+layerClass`) so React Native's style writes land on it directly. The web
 // spec idiom for mirroring a preview — `transform: scaleX(-1)` on the video
-// element — is honoured by observing the resulting `layer.transform` and
-// translating any horizontal flip into AVFoundation's
-// `AVCaptureConnection.isVideoMirrored`, which is the canonical iOS knob for
-// display-only preview mirroring. The mirror lives on the preview layer's
+// element — is honoured by intercepting React Native's writes to
+// `layer.transform` and translating the effective horizontal flip into
+// AVFoundation's `AVCaptureConnection.isVideoMirrored`, the canonical iOS knob
+// for display-only preview mirroring. The mirror lives on the preview layer's
 // own connection, so downstream consumers (FrameSink, ImageCapture,
 // MediaStreamTrack.getSettings) still see un-flipped frames.
 
+private final class MirroringPreviewLayer: AVCaptureVideoPreviewLayer {
+  var onTransformWrite: (() -> Void)?
+
+  override var transform: CATransform3D {
+    didSet {
+      onTransformWrite?()
+    }
+  }
+}
+
 internal final class VideoView: ExpoView {
   public override class var layerClass: AnyClass {
-    return AVCaptureVideoPreviewLayer.self
+    return MirroringPreviewLayer.self
   }
 
-  private var previewLayer: AVCaptureVideoPreviewLayer {
+  private var mirroringLayer: MirroringPreviewLayer {
     // Force-cast is safe because `+layerClass` above guarantees the layer's
     // runtime type.
     // swiftlint:disable:next force_cast
-    return layer as! AVCaptureVideoPreviewLayer
+    return layer as! MirroringPreviewLayer
+  }
+
+  private var previewLayer: AVCaptureVideoPreviewLayer {
+    mirroringLayer
   }
 
   // Opaque black overlay used to express the "disabled track shows solid
@@ -39,14 +53,8 @@ internal final class VideoView: ExpoView {
     return mask
   }()
 
-  // KVO handle for `layer.transform`. React Native applies the React style
-  // `transform: [{ scaleX: -1 }]` by writing the resulting CATransform3D
-  // directly onto the layer (it does not go through UIView's `transform`
-  // property), so we have to observe the layer to learn about it.
-  private var layerTransformObservation: NSKeyValueObservation?
-
-  // Guard for the reentrant write inside the observer — when we reset
-  // `layer.transform` to identity, the observer fires again and we don't want
+  // Guard for the reentrant write inside the layer callback — when we reset
+  // `layer.transform` to identity, the callback fires again and we don't want
   // to overwrite a freshly-set isVideoMirrored from the recursive callback.
   private var applyingLayerTransform = false
 
@@ -55,6 +63,9 @@ internal final class VideoView: ExpoView {
   // `attachStream`, since `connection.isVideoMirrored` lives on the
   // AVCaptureConnection — which doesn't exist until a session is attached.
   private var pendingPreviewMirror = false
+  private var previewRotationCoordinator: NSObject?
+  private var previewRotationObservation: NSKeyValueObservation?
+  private var currentPreviewRotationAngle: CGFloat?
 
   private var firstFrameObserver: NSKeyValueObservation?
   // CaptureSource the preview is currently subscribed to, so we can
@@ -82,7 +93,7 @@ internal final class VideoView: ExpoView {
     previewLayer.needsDisplayOnBoundsChange = true
     previewLayer.addSublayer(disabledMaskLayer)
 
-    // @ref LLP 0004 — Spec idiom for mirroring a preview is
+    // @ref LLP 0004#preview-mirroring — Spec idiom for mirroring a preview is
     // `transform: scaleX(-1)` on the video element. RN writes that onto
     // `layer.transform`. AVCaptureVideoPreviewLayer's video rendering uses an
     // IOSurface fast path that ignores the CALayer transform, so we translate
@@ -90,14 +101,17 @@ internal final class VideoView: ExpoView {
     // canonical `connection.isVideoMirrored` knob and reset the layer
     // transform back to identity to avoid a second flip stacking with the
     // mirrored video pixels.
-    layerTransformObservation = layer.observe(\.transform, options: [.new]) {
-      [weak self] _, _ in
+    // Use a layer subclass instead of KVO so the clear-to-identity write from
+    // React Native is still observed after we have already reset the backing
+    // layer to identity ourselves.
+    mirroringLayer.onTransformWrite = { [weak self] in
       self?.syncMirrorFromLayerTransform()
     }
   }
 
   deinit {
-    layerTransformObservation?.invalidate()
+    mirroringLayer.onTransformWrite = nil
+    previewRotationObservation?.invalidate()
     firstFrameObserver?.invalidate()
     previewSource?.unregisterPreview(self)
   }
@@ -108,17 +122,21 @@ internal final class VideoView: ExpoView {
     // CATransform3D.m11 is the X-axis scale; negative means a horizontal flip
     // along the spec's `scaleX(-1)` idiom. (Other transforms like `rotate` are
     // out of scope for preview mirroring; we just check the X-scale sign.)
-    pendingPreviewMirror = !CATransform3DIsIdentity(t) && t.m11 < 0
+    let mirrored = !CATransform3DIsIdentity(t) && t.m11 < 0
+    setPreviewMirroredOnMain(mirrored, resetLayerTransform: true)
+  }
 
+  private func setPreviewMirroredOnMain(_ mirrored: Bool, resetLayerTransform: Bool) {
+    pendingPreviewMirror = mirrored
     applyingLayerTransform = true
     defer { applyingLayerTransform = false }
-
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    if !CATransform3DIsIdentity(t) {
+    if resetLayerTransform && !CATransform3DIsIdentity(layer.transform) {
       layer.transform = CATransform3DIdentity
     }
     applyPendingMirrorToConnection()
+    applyCurrentPreviewOrientation()
     CATransaction.commit()
   }
 
@@ -127,8 +145,8 @@ internal final class VideoView: ExpoView {
           connection.isVideoMirroringSupported else {
       return
     }
+    connection.automaticallyAdjustsVideoMirroring = false
     if connection.isVideoMirrored != pendingPreviewMirror {
-      connection.automaticallyAdjustsVideoMirroring = false
       connection.isVideoMirrored = pendingPreviewMirror
     }
   }
@@ -184,6 +202,10 @@ internal final class VideoView: ExpoView {
   private func attachStream() {
     firstFrameObserver?.invalidate()
     firstFrameObserver = nil
+    previewRotationObservation?.invalidate()
+    previewRotationObservation = nil
+    previewRotationCoordinator = nil
+    currentPreviewRotationAngle = nil
     // Detach from any previous source so we don't receive stale preview-
     // enable callbacks after the stream changes.
     previewSource?.unregisterPreview(self)
@@ -206,14 +228,13 @@ internal final class VideoView: ExpoView {
     previewLayer.session = session
 
     // @ref LLP 0005#first-frame-detection — Explicitly enable the connection
-    // (expo-camera pattern) and force portrait orientation. Initial enabled
-    // state comes from the stream's first video track so a stream attached
-    // while its track is already disabled doesn't briefly show live pixels.
+    // (expo-camera pattern). Initial enabled state comes from the stream's
+    // first video track so a stream attached while its track is already
+    // disabled doesn't briefly show live pixels.
     let videoTrack = stream.tracks.first(where: { $0.kind == "video" })
     let initiallyEnabled = videoTrack?.enabled ?? true
     if let connection = previewLayer.connection {
       connection.isEnabled = initiallyEnabled
-      configurePreviewOrientation(connection)
     }
     // Match the disabled-mask behaviour from setPreviewEnabled so a stream
     // attached while its track is already disabled doesn't briefly show
@@ -223,6 +244,12 @@ internal final class VideoView: ExpoView {
     // the session attached — `connection.isVideoMirrored` only exists once
     // the connection does.
     applyPendingMirrorToConnection()
+    // @ref LLP 0005#preview-orientation-and-mirroring — Apply rotation after
+    // mirroring so the last AVFoundation connection write is the orientation
+    // correction for the current camera/preview-layer pair.
+    if let connection = previewLayer.connection {
+      configurePreviewOrientation(connection, device: videoTrack?.source?.device)
+    }
     CATransaction.commit()
 
     // @ref LLP 0003#track-enabled — Subscribe so the preview layer's
@@ -253,10 +280,59 @@ internal final class VideoView: ExpoView {
     }
   }
 
-  private func configurePreviewOrientation(_ connection: AVCaptureConnection) {
+  // @ref LLP 0005#preview-orientation-and-mirroring — Use Apple's rotation
+  // coordinator on iOS 17+ instead of a hard-coded portrait angle, and keep
+  // that angle available so mirror changes can reapply it afterward.
+  private func configurePreviewOrientation(
+    _ connection: AVCaptureConnection,
+    device: AVCaptureDevice?
+  ) {
     if #available(iOS 17.0, *) {
+      if let device {
+        let coordinator = AVCaptureDevice.RotationCoordinator(
+          device: device,
+          previewLayer: previewLayer
+        )
+        previewRotationCoordinator = coordinator
+        applyPreviewRotationAngle(
+          coordinator.videoRotationAngleForHorizonLevelPreview,
+          to: connection
+        )
+        previewRotationObservation = coordinator.observe(
+          \.videoRotationAngleForHorizonLevelPreview,
+          options: [.new]
+        ) { [weak self, weak connection] coordinator, _ in
+          guard let connection else { return }
+          self?.applyPreviewRotationAngle(
+            coordinator.videoRotationAngleForHorizonLevelPreview,
+            to: connection
+          )
+        }
+        return
+      }
       if connection.isVideoRotationAngleSupported(90) {
-        connection.videoRotationAngle = 90
+        applyPreviewRotationAngle(90, to: connection)
+      }
+    } else if connection.isVideoOrientationSupported {
+      connection.videoOrientation = .portrait
+    }
+  }
+
+  private func applyPreviewRotationAngle(
+    _ angle: CGFloat,
+    to connection: AVCaptureConnection
+  ) {
+    if #available(iOS 17.0, *), connection.isVideoRotationAngleSupported(angle) {
+      currentPreviewRotationAngle = angle
+      connection.videoRotationAngle = angle
+    }
+  }
+
+  private func applyCurrentPreviewOrientation() {
+    guard let connection = previewLayer.connection else { return }
+    if #available(iOS 17.0, *), let angle = currentPreviewRotationAngle {
+      if connection.isVideoRotationAngleSupported(angle) {
+        connection.videoRotationAngle = angle
       }
     } else if connection.isVideoOrientationSupported {
       connection.videoOrientation = .portrait

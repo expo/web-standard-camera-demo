@@ -19,12 +19,11 @@ import {
   closeCameraFrame,
   createBgraCameraFrameSource,
   getCameraFrameByteLength,
-  getCameraFrameNumber,
   getCameraFrameTextureFormat,
   type CameraFrameUploadSource,
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
-import { displayFacingMode, reportedFacingMode } from '@/lib/camera-facing';
+import { cameraFrameFacingMode, displayFacingMode, reportedFacingMode } from '@/lib/camera-facing';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -161,6 +160,7 @@ const FRAME_UPLOAD_INTERVAL_MS = 33;
 const INFERENCE_INTERVAL_MS = 450;
 const RELAXED_CAMERA_RETRY_MS = 2500;
 const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
+const CAMERA_CAPTURE_SETTLE_MS = 180;
 const SCORE_FLOATS = 8;
 const DEMO_CAPTURE_CONSTRAINTS = { width: 1280, height: 720, frameRate: 30 } as const;
 const RELAXED_CAPTURE_CONSTRAINTS = { frameRate: 30 } as const;
@@ -220,13 +220,14 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const [frameSize, setFrameSize] = React.useState('pending');
   const [frameDimensions, setFrameDimensions] = React.useState<FrameDimensions | null>(null);
   const [prediction, setPrediction] = React.useState<Prediction>(INITIAL_PREDICTION);
-  const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
   const [inferenceError, setInferenceError] = React.useState<string | null>(null);
   const [captureProfile, setCaptureProfile] = React.useState<CaptureProfile>('demo');
 
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
+  const imageCaptureMirroredRef = React.useRef(false);
+  const imageCaptureAcceptAfterRef = React.useRef(0);
   const rafRef = React.useRef<number | null>(null);
   const lastGrabErrorRef = React.useRef<string | null>(null);
   const frameDimensionsRef = React.useRef<FrameDimensions | null>(null);
@@ -234,7 +235,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const predictionRef = React.useRef(prediction);
   const preserveCameraPreviewUntilRef = React.useRef(0);
   const previewRotatesRef = React.useRef(false);
-  const mirrorRef = React.useRef(false);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   const didRetryRelaxedCameraRef = React.useRef(false);
@@ -248,9 +248,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
   // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
   // when the web provider proves no environment camera exists.
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
-  React.useEffect(() => {
-    mirrorRef.current = cameraFacing === 'user';
-  }, [cameraFacing]);
 
   const setGrabError = React.useCallback((message: string | null): void => {
     if (lastGrabErrorRef.current === message) return;
@@ -284,7 +281,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
     setSource('pending');
     setFrameDimensions(null);
     setFrameSize('pending');
-    setLastFrameNumber(null);
   }, [setGrabError]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing camera-idle reset sequence. */
@@ -356,21 +352,38 @@ export default function NeuralLensScreen(): React.JSX.Element {
   React.useEffect(() => {
     if (!stream) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       return;
     }
     const track = stream.getVideoTracks()[0];
     if (!track) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       return;
     }
     try {
+      // @ref LLP 0010#frame-bound-demo-mirroring — Snapshot mirroring with
+      // the ImageCapture; stopped/replacing iOS tracks can lose facingMode
+      // before an awaited grabFrame() returns.
+      const mirrored = cameraFrameFacingMode(track.getSettings()) === 'user';
       imageCaptureRef.current = new ImageCapture(track);
+      imageCaptureMirroredRef.current = mirrored;
+      // @ref LLP 0010#frame-bound-demo-mirroring — Avoid accepting the
+      // replacement camera's transient exposure-settling frames without
+      // depending on native-only frame diagnostics.
+      imageCaptureAcceptAfterRef.current = Date.now() + CAMERA_CAPTURE_SETTLE_MS;
     } catch (e) {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
       setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
     return () => {
       imageCaptureRef.current = null;
+      imageCaptureMirroredRef.current = false;
+      imageCaptureAcceptAfterRef.current = 0;
     };
   }, [setGrabError, stream]);
 
@@ -470,7 +483,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
         let lastInference = 0;
         let inferencePending = false;
         let lastReportedSource: 'camera' | 'synthetic' | null = null;
-        let lastSeenFrameNumber: number | null = null;
+        let activeTextureMirrored = false;
 
         const runInference = async (elapsed: number): Promise<void> => {
           if (!computeBindGroup || !cameraTexture || !texWidth || !texHeight || inferencePending) return;
@@ -519,17 +532,26 @@ export default function NeuralLensScreen(): React.JSX.Element {
           if (shouldUpload) {
             let frame: CameraFrameUploadSource | null = null;
             let frameSource: 'camera' | 'synthetic' = 'synthetic';
+            let frameMirrored = false;
             const imageCapture = imageCaptureRef.current;
+            const imageCaptureMirrored = imageCaptureMirroredRef.current;
 
             if (imageCapture) {
               try {
                 const bitmap = await profile.timeAsync('grabFrame', () => imageCapture.grabFrame());
-                frame = bitmap;
-                frameSource = 'camera';
-                preserveCameraPreviewUntilRef.current = 0;
-                lastSeenFrameNumber = getCameraFrameNumber(bitmap);
-                if (lastSeenFrameNumber !== null) profile.recordFrameNumber(lastSeenFrameNumber);
-                setGrabError(null);
+                if (cancelled || imageCaptureRef.current !== imageCapture) {
+                  closeCameraFrame(bitmap);
+                } else if (Date.now() < imageCaptureAcceptAfterRef.current) {
+                  closeCameraFrame(bitmap);
+                  lastUpload = Date.now();
+                  setGrabError(null);
+                } else {
+                  frame = bitmap;
+                  frameSource = 'camera';
+                  frameMirrored = imageCaptureMirrored;
+                  preserveCameraPreviewUntilRef.current = 0;
+                  setGrabError(null);
+                }
               } catch (e) {
                 setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
               }
@@ -576,6 +598,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
               profile.count(frameSource === 'camera' ? 'cameraUploads' : 'syntheticUploads');
               profile.count('uploadedBytes', getCameraFrameByteLength(frame));
               profile.time('uploadTexture', () => uploadCameraFrameToTexture(device, cameraTexture!, frame));
+              activeTextureMirrored = frameSource === 'camera' ? frameMirrored : false;
               frameToClose = frame;
               lastUpload = now;
             }
@@ -597,7 +620,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
               currentPrediction.labelIndex,
               currentPrediction.confidence,
               previewRotatesRef.current && texWidth > texHeight ? 1 : 0,
-              mirrorRef.current ? 1 : 0,
+              activeTextureMirrored ? 1 : 0,
               0,
               0,
               0,
@@ -635,9 +658,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
           if (now - lastReport >= 1000) {
             const fpsValue = frames / ((now - lastReport) / 1000);
             setFps(fpsValue.toFixed(1));
-            if (lastSeenFrameNumber !== null) {
-              setLastFrameNumber(lastSeenFrameNumber);
-            }
             profile.report({
               fps: Number(fpsValue.toFixed(1)),
               height: texHeight,
@@ -782,7 +802,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
                   <Text style={styles.captureText}>camera: {cameraSettingsLine}</Text>
                   <Text style={styles.captureText}>request: {captureProfileLabel}</Text>
                   <Text style={styles.captureText}>
-                    uploaded: {frameSize} · iOS frames: {lastFrameNumber ?? 'pending'}
+                    uploaded: {frameSize}
                   </Text>
                 </View>
                 <View style={styles.bars}>

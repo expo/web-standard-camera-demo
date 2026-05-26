@@ -137,6 +137,26 @@ If both are set, the last writer wins (the React reconciler will set the prop af
 2. Resets `readyState = 0`, `duration = NaN`, `ended = false`.
 3. Waits for the native `loadeddata` event to fire the transitions above.
 
+## Preview mirroring
+
+The standard browser idiom for a self-view preview is a horizontal transform on
+the video element (`scaleX(-1)`). The React Native surface accepts the equivalent
+style (`transform: [{ scaleX: -1 }]`) on `<Video>`.
+
+On iOS the rendered camera pixels live inside an `AVCaptureVideoPreviewLayer`,
+not a DOM/CSS box. The native view translates the React style's effective
+horizontal flip into `AVCaptureConnection.isVideoMirrored`, the AVFoundation
+preview-only mirror flag. The preview layer subclass observes every
+`transform` setter call from React Native, including a clear-to-identity write.
+This is required because the native view resets the CALayer transform to
+identity after translating it; plain KVO can miss a later React style clear
+when the underlying CALayer is already identity, leaving a stale front-camera
+mirror active when a later back-camera stream attaches to the same view.
+
+This mirror affects only display. Frame sinks, `ImageCapture`, and
+`MediaStreamTrack.getSettings()` continue to observe the unmirrored source
+frames.
+
 ## What we don't expose
 
 - `src` (URL-based source). React Native developers should reach for `expo-video` for URL playback.
