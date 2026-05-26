@@ -15,8 +15,10 @@
       "bundleIdentifier": "dev.ide.standardcameraapp",
       "deploymentTarget": "16.4",
       "infoPlist": {
+        "LSSupportsOpeningDocumentsInPlace": true,
         "NSCameraUsageDescription": "This app needs camera access to display the live camera preview.",
-        "NSMicrophoneUsageDescription": "This app needs microphone access to capture audio alongside the camera preview."
+        "NSMicrophoneUsageDescription": "This app needs microphone access to capture audio alongside the camera preview.",
+        "UIFileSharingEnabled": true
       }
     },
     "android": {

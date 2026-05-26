@@ -3,7 +3,7 @@ import { File, Paths } from 'expo-file-system';
 import { Stack, useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import * as React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 import type { NativeStackHeaderItem } from 'expo-router/build/react-navigation/native-stack';
 import type { SFSymbol } from 'sf-symbols-typescript';
@@ -75,7 +75,8 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vertexIndex: u32) -> VsOut {
   let corner = quadCorner(vertexIndex);
   var clip = u.viewProjection * vec4f(in.positionRadius.xyz, 1.0);
   let radiusScale = max(in.positionRadius.w, 0.35);
-  clip.xy += corner * u.pointScale * radiusScale * clip.w;
+  let clipOffset = corner * u.pointScale * radiusScale * clip.w;
+  clip = vec4f(clip.x + clipOffset.x, clip.y + clipOffset.y, clip.z, clip.w);
 
   var out: VsOut;
   out.position = clip;
@@ -120,7 +121,19 @@ interface KeyframeSnapshot {
   time: number;
 }
 
+interface ViewerState {
+  distanceScale: number;
+  pitch: number;
+  yaw: number;
+}
+
 type Vec3 = [number, number, number];
+
+const DEFAULT_VIEWER_STATE: ViewerState = {
+  distanceScale: 1,
+  pitch: 0.34,
+  yaw: 0,
+};
 
 export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const ref = useCanvasRef();
@@ -132,16 +145,23 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const pointStoreRef = React.useRef<number[]>([]);
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
+  const modelRef = React.useRef<CaptureModel | null>(null);
+  const modelRevisionRef = React.useRef(0);
+  const statusRef = React.useRef<CaptureStatus>('checking');
   const surfelCountRef = React.useRef(0);
   const supportCheckedRef = React.useRef(false);
+  const viewerRef = React.useRef<ViewerState>(DEFAULT_VIEWER_STATE);
+  const viewerGestureStartRef = React.useRef<ViewerState>(DEFAULT_VIEWER_STATE);
+  const pinchDistanceStartRef = React.useRef<number | null>(null);
   const [session, setSession] = React.useState<WebXRSession | null>(null);
   const [status, setStatus] = React.useState<CaptureStatus>('checking');
   const [support, setSupport] = React.useState('checking WebXR depth support');
   const [error, setError] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<CaptureModel | null>(null);
-  const [renderVersion, setRenderVersion] = React.useState(0);
+  const [viewer, setViewer] = React.useState<ViewerState>(DEFAULT_VIEWER_STATE);
   const [frameInfo, setFrameInfo] = React.useState('waiting for depth frames');
   const [modelInfo, setModelInfo] = React.useState('no capture yet');
+  const [liveSurfelCount, setLiveSurfelCount] = React.useState(0);
   const [saveInfo, setSaveInfo] = React.useState('save after capture');
   const [saving, setSaving] = React.useState(false);
   const [fps, setFps] = React.useState('0.0');
@@ -151,6 +171,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     ? Math.max(360, Math.min(windowWidth - 448, 980, Math.max(360, windowHeight - 190) * 4 / 3))
     : Math.min(Math.max(288, windowWidth - 32), 430);
   const stageHeight = Math.round(isDesktop ? stageWidth * 3 / 4 : stageWidth * 4 / 3);
+
+  React.useEffect(() => {
+    viewerRef.current = viewer;
+  }, [viewer]);
+
+  React.useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing support-check initialization timing. */
   React.useEffect(() => {
@@ -193,23 +221,25 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }, [])
   );
 
-  const resetCapture = React.useCallback((): void => {
+  function resetCapture(): void {
     pointStoreRef.current = [];
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
     surfelCountRef.current = 0;
-    setModel(null);
-    setRenderVersion((version) => version + 1);
+    viewerRef.current = DEFAULT_VIEWER_STATE;
+    publishModel(null);
+    setViewer(DEFAULT_VIEWER_STATE);
     setFrameInfo('waiting for depth frames');
     setModelInfo('no capture yet');
+    setLiveSurfelCount(0);
     setSaveInfo('save after capture');
     setError(null);
-    if (!sessionRef.current && status !== 'unsupported') {
-      setStatus('idle');
+    if (!sessionRef.current) {
+      setStatus((current) => (current === 'unsupported' ? current : 'idle'));
     }
-  }, [status]);
+  }
 
-  const startSession = React.useCallback(async (): Promise<void> => {
+  async function startSession(): Promise<void> {
     if (sessionRef.current) return;
     installWebXRDepthProfile();
     resetCapture();
@@ -246,9 +276,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         if (sessionRef.current === nextSession) {
           sessionRef.current = null;
           setSession(null);
-          if (status !== 'captured') {
-            setStatus((current) => (current === 'captured' ? current : 'idle'));
-          }
+          setStatus((current) => (current === 'captured' ? current : 'idle'));
         }
       });
       void startXRLoop(nextSession).catch((e) => {
@@ -261,10 +289,9 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       setStatus('error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- Preserve the current session-start callback identity.
-  }, [resetCapture, status]);
+  }
 
-  const stopSession = React.useCallback(async (): Promise<void> => {
+  async function stopSession(): Promise<void> {
     const current = sessionRef.current;
     if (!current) return;
     setStatus('ending');
@@ -278,26 +305,24 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       setStatus('error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
-  }, [model]);
+  }
 
-  const captureModel = React.useCallback(async (): Promise<void> => {
+  async function captureModel(): Promise<void> {
     const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
     if (!nextModel || nextModel.surfelCount === 0) {
       setError('No valid depth samples have been captured yet.');
       return;
     }
-    setModel(nextModel);
-    setRenderVersion((version) => version + 1);
+    publishModel(nextModel);
     setModelInfo(formatModelInfo(nextModel));
     setSaveInfo('ready to save .ply');
     setStatus('captured');
     await stopActiveSession();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- Preserve the current capture callback identity.
-  }, []);
+  }
 
   // @ref LLP 0020#privacy-and-permissions - Export is an explicit user action
   // and uses the system share sheet; captures are not uploaded or saved silently.
-  const saveModel = React.useCallback(async (): Promise<void> => {
+  async function saveModel(): Promise<void> {
     if (!model || saving) return;
     setSaving(true);
     setError(null);
@@ -308,7 +333,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         throw new Error('System file sharing is unavailable on this platform.');
       }
       const filename = modelFileName();
-      const file = new File(Paths.cache, filename);
+      const file = new File(Paths.document, filename);
       file.create({ overwrite: true });
       file.write(serializeModelAsPly(model));
       setSaveInfo(`share sheet: ${filename}`);
@@ -317,19 +342,18 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         mimeType: 'model/ply',
         UTI: 'public.data',
       });
-      setSaveInfo(`exported: ${filename}`);
+      setSaveInfo(`saved to Files: ${filename}`);
     } catch (e) {
       setSaveInfo('save failed');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     } finally {
       setSaving(false);
     }
-  }, [model, saving]);
+  }
 
   const running = session !== null;
   const canStart = status === 'idle' || status === 'captured';
-  // eslint-disable-next-line react-hooks/refs -- This read backs the existing imperative XR capture counter.
-  const canCapture = status === 'scanning' && surfelCountRef.current > 0;
+  const canCapture = status === 'scanning' && liveSurfelCount > 0;
   const canSave = model !== null && !saving;
   const transitioning = status === 'requesting' || status === 'ending';
   const unsupported = status === 'unsupported';
@@ -343,26 +367,61 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     return { label: 'ready', style: styles.badgeWarn };
   })();
 
-  const xrHeaderRightItems = React.useCallback(
-    (): NativeStackHeaderItem[] => {
-      const iconName: SFSymbol = running ? 'stop.fill' : 'play.fill';
-      const label = running ? 'Stop scan' : 'Start scan';
-      return [
-        {
-          type: 'button' as const,
-          label,
-          accessibilityLabel: label,
-          disabled: transitioning || (!running && !canStart) || unsupported,
-          icon: { type: 'sfSymbol' as const, name: iconName },
-          identifier: 'panoramic-capture-start-stop',
-          onPress: running ? () => void stopSession() : () => void startSession(),
-          tintColor: running ? '#ff453a' : '#f8fafc',
-          variant: 'plain' as const,
+  const modelPanResponder = React.useMemo(
+    () =>
+      // eslint-disable-next-line react-hooks/refs -- PanResponder stores handlers; refs are read when gestures fire.
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          model !== null && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
+        onPanResponderGrant: (event) => {
+          viewerGestureStartRef.current = viewerRef.current;
+          pinchDistanceStartRef.current = touchDistance(event.nativeEvent.touches);
         },
-      ];
-    },
-    [canStart, running, startSession, stopSession, transitioning, unsupported]
+        onPanResponderMove: (event, gesture) => {
+          if (!model) return;
+          const start = viewerGestureStartRef.current;
+          const pinchDistance = touchDistance(event.nativeEvent.touches);
+          if (pinchDistance !== null && pinchDistanceStartRef.current !== null) {
+            setViewer({
+              ...start,
+              distanceScale: clamp(start.distanceScale * pinchDistanceStartRef.current / pinchDistance, 0.45, 2.4),
+            });
+            return;
+          }
+          setViewer({
+            ...start,
+            pitch: clamp(start.pitch + gesture.dy * 0.006, -1.05, 1.15),
+            yaw: start.yaw + gesture.dx * 0.008,
+          });
+        },
+        onPanResponderRelease: () => {
+          pinchDistanceStartRef.current = null;
+        },
+        onPanResponderTerminate: () => {
+          pinchDistanceStartRef.current = null;
+        },
+        onStartShouldSetPanResponder: (event) => model !== null && event.nativeEvent.touches.length > 1,
+      }),
+    [model]
   );
+
+  function xrHeaderRightItems(): NativeStackHeaderItem[] {
+    const iconName: SFSymbol = running ? 'stop.fill' : 'play.fill';
+    const label = running ? 'Stop scan' : 'Start scan';
+    return [
+      {
+        type: 'button' as const,
+        label,
+        accessibilityLabel: label,
+        disabled: transitioning || (!running && !canStart) || unsupported,
+        icon: { type: 'sfSymbol' as const, name: iconName },
+        identifier: 'panoramic-capture-start-stop',
+        onPress: running ? () => void stopSession() : () => void startSession(),
+        tintColor: running ? '#ff453a' : '#f8fafc',
+        variant: 'plain' as const,
+      },
+    ];
+  }
 
   React.useEffect(() => {
     if (!device) return;
@@ -426,7 +485,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         });
         let surfelBuffer: GPUBuffer | null = null;
         let depthTexture: GPUTexture | null = null;
-        let lastModel = model;
+        let lastModelRevision = -1;
         let frames = 0;
         let lastFpsReport = Date.now();
 
@@ -451,21 +510,21 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         };
 
         rebuildDepthTexture(width, height);
-        rebuildSurfelBuffer(model);
 
         const render = (): void => {
           if (cancelled) return;
-          if (model !== lastModel) {
-            lastModel = model;
-            rebuildSurfelBuffer(model);
+          const currentModel = modelRef.current;
+          if (modelRevisionRef.current !== lastModelRevision) {
+            lastModelRevision = modelRevisionRef.current;
+            rebuildSurfelBuffer(currentModel);
           }
 
-          const currentModel = lastModel;
           const elapsed = performanceNow() / 1000;
           const viewProjection = makeModelViewProjection(
             currentModel,
             width / Math.max(height, 1),
-            status === 'scanning' ? 0.18 : elapsed * 0.22
+            statusRef.current === 'scanning' ? 0.18 : elapsed * 0.22,
+            viewerRef.current
           );
           const uniforms = new Float32Array(20);
           uniforms.set(viewProjection, 0);
@@ -531,7 +590,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       cancelled = true;
       cleanup?.();
     };
-  }, [device, model, ref, renderVersion, stageHeight, stageWidth, status]);
+  }, [device, ref, stageHeight, stageWidth]);
 
   const showStoppedPlaceholder = Device.isDevice && !running && !model;
 
@@ -544,21 +603,20 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         contentInsetAdjustmentBehavior="automatic">
         <DemoPageFrame
           preview={
-            <View style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
+            <View {...modelPanResponder.panHandlers} style={[styles.stage, { height: stageHeight, width: stageWidth }]}>
               <Canvas ref={ref} style={styles.canvas} />
               {showStoppedPlaceholder ? (
-                <View pointerEvents="none" style={styles.emptyOverlay}>
+                <View style={styles.emptyOverlay}>
                   <Text style={styles.emptyTitle}>Start a depth scan</Text>
                   <Text style={styles.emptySub}>Pan slowly, then capture the surfel model.</Text>
                 </View>
               ) : null}
-              <View pointerEvents="none" style={styles.stageBadge}>
+              <View style={styles.stageBadge}>
                 <Text style={[styles.badge, badgeState.style]}>{badgeState.label}</Text>
               </View>
-              <View pointerEvents="none" style={styles.stageReadout}>
+              <View style={styles.stageReadout}>
                 <Text style={styles.stageReadoutLabel}>MODEL</Text>
-                {/* eslint-disable-next-line react-hooks/refs -- This read backs the existing imperative XR capture counter. */}
-                <Text style={styles.stageReadoutValue}>{model ? `${model.surfelCount}` : surfelCountRef.current}</Text>
+                <Text style={styles.stageReadoutValue}>{model ? `${model.surfelCount}` : liveSurfelCount}</Text>
                 <Text style={styles.stageReadoutSub}>surfels</Text>
               </View>
             </View>
@@ -654,8 +712,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         if (accepted) {
           const nextModel = buildModel(pointStoreRef.current, keyframeCountRef.current);
           if (nextModel) {
-            setModel(nextModel);
-            setRenderVersion((version) => version + 1);
+            publishModel(nextModel);
             setModelInfo(formatModelInfo(nextModel));
           }
         }
@@ -663,6 +720,15 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
     };
     xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
+  }
+
+  function publishModel(nextModel: CaptureModel | null): void {
+    modelRef.current = nextModel;
+    modelRevisionRef.current += 1;
+    setModel(nextModel);
+    if (nextModel) {
+      setLiveSurfelCount(nextModel.surfelCount);
+    }
   }
 
   function maybeCaptureKeyframe(
@@ -839,6 +905,13 @@ function colorByte(value: number): number {
   return Math.round(Math.min(1, Math.max(0, value)) * 255);
 }
 
+function touchDistance(touches: readonly { pageX: number; pageY: number }[]): number | null {
+  if (touches.length < 2) return null;
+  const [a, b] = touches;
+  if (!a || !b) return null;
+  return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+}
+
 function unprojectViewSample(inverseProjection: Float32Array, viewX: number, viewY: number, depthMeters: number): Vec3 {
   const ndcX = viewX * 2 - 1;
   const ndcY = 1 - viewY * 2;
@@ -885,7 +958,12 @@ function depthPalette(depthMeters: number): Vec3 {
     : mixVec3(mid, far, smoothstep(0.48, 1, t));
 }
 
-function makeModelViewProjection(model: CaptureModel | null, aspect: number, orbit: number): Float32Array {
+function makeModelViewProjection(
+  model: CaptureModel | null,
+  aspect: number,
+  orbit: number,
+  viewer: ViewerState
+): Float32Array {
   if (!model) {
     return mat4Multiply(perspective(Math.PI / 3.1, aspect, 0.01, 100), lookAt([0, 0.4, 3.4], [0, 0, 0], [0, 1, 0]));
   }
@@ -899,11 +977,13 @@ function makeModelViewProjection(model: CaptureModel | null, aspect: number, orb
     Math.max(0.1, model.boundsMax[1] - model.boundsMin[1]),
     Math.max(0.1, model.boundsMax[2] - model.boundsMin[2]),
   ];
-  const radius = Math.max(1.2, Math.hypot(span[0], span[1], span[2]) * 0.72);
+  const radius = Math.max(1.2, Math.hypot(span[0], span[1], span[2]) * 0.72) * viewer.distanceScale;
+  const yaw = orbit + viewer.yaw;
+  const horizontalRadius = Math.cos(viewer.pitch) * radius;
   const eye: Vec3 = [
-    center[0] + Math.sin(orbit) * radius,
-    center[1] + Math.max(0.45, radius * 0.28),
-    center[2] + Math.cos(orbit) * radius,
+    center[0] + Math.sin(yaw) * horizontalRadius,
+    center[1] + Math.sin(viewer.pitch) * radius,
+    center[2] + Math.cos(yaw) * horizontalRadius,
   ];
   return mat4Multiply(perspective(Math.PI / 3.0, aspect, 0.01, Math.max(20, radius * 8)), lookAt(eye, center, [0, 1, 0]));
 }
@@ -1047,6 +1127,11 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
 function performanceNow(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -1082,6 +1167,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     left: 0,
     padding: 22,
+    pointerEvents: 'none',
     position: 'absolute',
     right: 0,
     top: 0,
@@ -1101,6 +1187,7 @@ const styles = StyleSheet.create({
   },
   stageBadge: {
     left: 10,
+    pointerEvents: 'none',
     position: 'absolute',
     top: 10,
   },
@@ -1112,6 +1199,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 9,
     paddingVertical: 7,
+    pointerEvents: 'none',
     position: 'absolute',
     right: 10,
     top: 10,
