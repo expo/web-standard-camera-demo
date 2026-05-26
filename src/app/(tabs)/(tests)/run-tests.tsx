@@ -265,10 +265,17 @@ export default function RunTestsScreen(): React.JSX.Element {
   const url = Linking.useLinkingURL();
   const onlyRef = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
-    const m = url ? /[?&]only=([^&]+)/.exec(url) : null;
+    // `Linking.useLinkingURL()` returns null after the initial cold-launch
+    // URL is consumed (and on subsequent renders that aren't driven by a
+    // new deep link). Treating null as "no filter" would clear a filter
+    // set by an earlier deep link the moment the Run button is tapped
+    // again — keep the existing filter in that case. A genuine "clear the
+    // filter" needs an explicit deep link without `only=`.
+    if (url == null) return;
+    const m = /[?&]only=([^&]+)/.exec(url);
     onlyRef.current = m ? decodeURIComponent(m[1]) : undefined;
     // eslint-disable-next-line no-console
-    console.log(`[wpt:debug] URL filter parsed url=${url ?? 'null'} only=${onlyRef.current ?? '<none>'}`);
+    console.log(`[wpt:debug] URL filter parsed url=${url} only=${onlyRef.current ?? '<none>'}`);
   }, [url]);
 
   const run = React.useCallback(async () => {

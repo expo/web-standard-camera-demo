@@ -27,16 +27,18 @@ internal final class MediaStreamTrack: SharedObject {
     didSet {
       // The data-output connection controls whether frames / audio samples
       // flow into the sink (and any future MediaRecorder-style consumers).
-      // The AVCaptureVideoPreviewLayer has its own internal connection that
-      // we don't toggle here, so disabling a video track freezes downstream
-      // consumers but leaves the on-screen preview showing the most recent
-      // frame. Clones share the connection with the original — documented
-      // divergence in LLP 0003#track-clone.
+      // For video, `CaptureSource.setVideoEnabled` also fans out to every
+      // subscribed `VideoView` so the on-screen preview layer's separate
+      // AVCaptureConnection tracks the toggle — without that fan-out a
+      // disabled video track would still render live pixels on screen,
+      // violating the spec's "renders as solid black frames" step.
+      // Clones share the same connection / preview list with the original
+      // — documented divergence in LLP 0003#track-clone.
       // @ref LLP 0009#audio-build-session — audio uses its own connection.
       if kind == "audio" {
         source?.audioConnection?.isEnabled = enabled
       } else {
-        source?.videoConnection?.isEnabled = enabled
+        source?.setVideoEnabled(enabled)
       }
     }
   }
@@ -279,6 +281,17 @@ internal final class MediaStreamTrack: SharedObject {
       "channelCount": snap.channelCount,
       "frameNumber": snap.frameNumber,
     ]
+  }
+
+  // Test hook — surfaces the preview-layer's connection enabled state via
+  // CaptureSource's subscriber list so the `MediaStreamTrack-disabled-video`
+  // project-local test can assert the fan-out actually reached the layer
+  // (rather than asking a reviewer to watch a thumbnail). nil if the track
+  // isn't a video track, has no source, or no VideoView is currently
+  // rendering it.
+  func getPreviewEnabledForTesting() -> Bool? {
+    if kind != "video" { return nil }
+    return source?.aggregatePreviewEnabledForTesting
   }
 
   // Called by CaptureSource when an AVCaptureSession runtime error fires.

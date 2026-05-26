@@ -17,6 +17,10 @@ internal final class VideoView: ExpoView {
   }()
 
   private var firstFrameObserver: NSKeyValueObservation?
+  // CaptureSource the preview is currently subscribed to, so we can
+  // unregister on detach. Weak so we don't keep the source alive past
+  // its last live track.
+  private weak var previewSource: CaptureSource?
 
   let onLoadedData = EventDispatcher()
   let onDurationChange = EventDispatcher()
@@ -38,6 +42,40 @@ internal final class VideoView: ExpoView {
 
   deinit {
     firstFrameObserver?.invalidate()
+    previewSource?.unregisterPreview(self)
+  }
+
+  // Test hook — returns the preview layer's connection.isEnabled value.
+  // Used by `MediaStreamTrack-disabled-video` to assert the fan-out from
+  // `CaptureSource.setVideoEnabled` reached the preview layer. nil if the
+  // preview layer hasn't created its connection yet (no session attached).
+  var previewConnectionEnabledForTesting: Bool? {
+    previewLayer.connection?.isEnabled
+  }
+
+  // Called by `CaptureSource.setVideoEnabled` so the preview layer's
+  // separate AVCaptureConnection follows the video track's enabled state.
+  // Disabling the connection alone is not enough: the AVCaptureVideoPreviewLayer
+  // keeps its last frame as a static image (CALayer just stops repainting),
+  // so a disabled track would *freeze* on the last live pixel rather than
+  // going black. We also hide the layer so the view's
+  // `backgroundColor = .black` shows through — that's the visible "solid
+  // black frames" the spec asks for. CATransaction's disable-actions
+  // suppresses the implicit fade Core Animation would otherwise apply.
+  func setPreviewEnabled(_ enabled: Bool) {
+    let apply: () -> Void = { [weak self] in
+      guard let self else { return }
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      self.previewLayer.connection?.isEnabled = enabled
+      self.previewLayer.isHidden = !enabled
+      CATransaction.commit()
+    }
+    if Thread.isMainThread {
+      apply()
+    } else {
+      DispatchQueue.main.async(execute: apply)
+    }
   }
 
   public override func layoutSubviews() {
@@ -59,6 +97,10 @@ internal final class VideoView: ExpoView {
   private func attachStream() {
     firstFrameObserver?.invalidate()
     firstFrameObserver = nil
+    // Detach from any previous source so we don't receive stale preview-
+    // enable callbacks after the stream changes.
+    previewSource?.unregisterPreview(self)
+    previewSource = nil
 
     guard let stream = srcObject, let session = stream.captureSession else {
       CATransaction.begin()
@@ -77,17 +119,33 @@ internal final class VideoView: ExpoView {
     previewLayer.session = session
 
     // @ref LLP 0005#first-frame-detection — Explicitly enable the connection
-    // (expo-camera pattern) and force portrait orientation.
+    // (expo-camera pattern) and force portrait orientation. Initial enabled
+    // state comes from the stream's first video track so a stream attached
+    // while its track is already disabled doesn't briefly show live pixels.
+    let videoTrack = stream.tracks.first(where: { $0.kind == "video" })
+    let initiallyEnabled = videoTrack?.enabled ?? true
     if let connection = previewLayer.connection {
-      connection.isEnabled = true
+      connection.isEnabled = initiallyEnabled
       configurePreviewOrientation(connection)
     }
+    // Match the visibility-hide-on-disable behaviour from setPreviewEnabled
+    // so a stream attached while its track is already disabled doesn't
+    // briefly show live pixels before the first toggle.
+    previewLayer.isHidden = !initiallyEnabled
     CATransaction.commit()
+
+    // @ref LLP 0003#track-enabled — Subscribe so the preview layer's
+    // connection tracks future `track.enabled` toggles, not just the
+    // initial state captured above.
+    if let source = videoTrack?.source {
+      previewSource = source
+      source.registerPreview(self)
+    }
 
     // @ref LLP 0005#first-frame-detection — Drive loadeddata off the FrameSink's
     // first sample callback. The FrameSink lives on the first video track's
     // CaptureSource (post-refactor — tracks own the source, not the stream).
-    if let frameSink = stream.tracks.first(where: { $0.kind == "video" })?.source?.frameSink {
+    if let frameSink = videoTrack?.source?.frameSink {
       frameSink.resetFirstFrame()
       frameSink.onFirstFrame = { [weak self] in
         guard let self else { return }

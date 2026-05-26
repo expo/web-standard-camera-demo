@@ -364,6 +364,14 @@ public final class StandardCameraModule: Module {
       Function("__getLatestAudioBuffer") { (track: MediaStreamTrack, maxFrames: Int) -> [String: Any]? in
         track.getLatestAudioBuffer(maxFrames: maxFrames)
       }
+
+      // Test hook for the project-local `MediaStreamTrack-disabled-video`
+      // test — surfaces whether any subscribed VideoView's preview-layer
+      // connection is currently enabled. nil for non-video tracks, ended
+      // tracks, or when no VideoView is rendering the stream.
+      Function("__getPreviewEnabledForTesting") { (track: MediaStreamTrack) -> Bool? in
+        track.getPreviewEnabledForTesting()
+      }
     }
 
     // MARK: - VideoView

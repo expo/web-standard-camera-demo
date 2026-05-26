@@ -39,6 +39,14 @@ internal final class CaptureSource {
   // fan out mute/unmute/runtime-error events. NSHashTable provides weak
   // semantics so a track being GC'd silently leaves the set.
   private let liveTracks = NSHashTable<MediaStreamTrack>.weakObjects()
+  // Weak refs to every VideoView currently rendering a stream backed by
+  // this source. `setVideoEnabled` notifies each so the on-screen preview
+  // layer's own AVCaptureConnection (separate from `videoConnection`)
+  // tracks the video track's enabled state — without this, a disabled
+  // track stops delivering to the FrameSink but the preview keeps showing
+  // live pixels, which violates the spec's "renders as solid black frames"
+  // step in [LLP 0003#track-enabled].
+  private let previewSubscribers = NSHashTable<VideoView>.weakObjects()
   // Strict count, decremented from MediaStreamTrack.stop(). When this hits
   // zero the session is stopped; see LLP 0003#track-stop step 4.
   private var liveTrackCount = 0
@@ -86,6 +94,51 @@ internal final class CaptureSource {
     liveTrackCount += 1
     lock.unlock()
     liveTracks.add(track)
+  }
+
+  // Called from VideoView when it attaches a stream backed by this source.
+  // Idempotent — the underlying NSHashTable dedupes. Symmetric
+  // `unregisterPreview` runs when the view's srcObject changes or the view
+  // is torn down.
+  func registerPreview(_ view: VideoView) {
+    previewSubscribers.add(view)
+  }
+
+  func unregisterPreview(_ view: VideoView) {
+    previewSubscribers.remove(view)
+  }
+
+  // Test hook — returns the aggregate enabled-state of every preview
+  // subscriber. `false` when *any* subscriber has its preview connection
+  // disabled (since `setVideoEnabled` fans out to all, this is also the
+  // common case for "track is disabled"). nil when no subscribers exist
+  // (no VideoView rendering this source). Consumed via the
+  // `__getPreviewEnabledForTesting` Function on MediaStreamTrack.
+  var aggregatePreviewEnabledForTesting: Bool? {
+    let views = previewSubscribers.allObjects
+    guard !views.isEmpty else { return nil }
+    for view in views {
+      if let enabled = view.previewConnectionEnabledForTesting, !enabled {
+        return false
+      }
+    }
+    return true
+  }
+
+  // @ref LLP 0003#track-enabled — Video track enable toggle. Updates the
+  // input → FrameSink connection (consumer-facing) AND every subscribed
+  // VideoView's preview-layer connection (renderer-facing). The two
+  // connections are independent on AVCaptureSession, so without the
+  // fan-out a disabled video track would freeze WebGPU/grabFrame consumers
+  // but leave the on-screen `<Video>` showing live pixels.
+  func setVideoEnabled(_ enabled: Bool) {
+    videoConnection?.isEnabled = enabled
+    let views = previewSubscribers.allObjects
+    DispatchQueue.main.async {
+      for view in views {
+        view.setPreviewEnabled(enabled)
+      }
+    }
   }
 
   // Called from MediaStreamTrack.stop() and .endByRuntimeError().

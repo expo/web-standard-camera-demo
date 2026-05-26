@@ -53,6 +53,15 @@ export interface NativeMediaStreamTrack {
    */
   __getLatestAudioBuffer(maxFrames: number): NativeMediaStreamAudioBuffer | null;
 
+  /**
+   * @internal Test hook used by the `MediaStreamTrack-disabled-video`
+   * project-local test to assert that toggling `track.enabled` propagates
+   * to the on-screen preview layer's AVCaptureConnection. Returns null on
+   * non-video tracks, ended tracks, or when no `<Video>` is currently
+   * rendering this track's stream.
+   */
+  __getPreviewEnabledForTesting(): boolean | null;
+
   addListener(
     eventName: 'ended' | 'mute' | 'unmute',
     listener: () => void
