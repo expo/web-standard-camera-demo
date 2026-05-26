@@ -22,9 +22,9 @@ import {
 } from '../../../../modules/standard-camera';
 
 // @ref LLP 0020#reconstruction-pipeline - The first panoramic capture slice
-// uses only WebXR-shaped depth and view geometry: no new AR APIs, no mesh
-// extension, and no repo-local CPU camera binding. The captured model is a
-// depth-colored surfel cloud rendered with WebGPU.
+// uses only WebXR-shaped depth, pose, and camera-image access: no new AR APIs
+// or mesh extension. The captured model is a camera-colored surfel cloud
+// rendered with WebGPU.
 
 const MAX_KEYFRAMES = 36;
 const MAX_SURFELS = 72000;
@@ -347,15 +347,17 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       }
       const filename = modelFileName();
       const file = new File(Paths.document, filename);
+      const ply = serializeModelAsPly(model);
       file.create({ overwrite: true });
-      file.write(serializeModelAsPly(model));
-      setSaveInfo(`share sheet: ${filename}`);
+      file.write(ply);
+      const savedSize = file.exists ? file.size : ply.length;
+      setSaveInfo(`Documents: ${filename} (${formatBytes(savedSize)})`);
       await Sharing.shareAsync(file.uri, {
         dialogTitle: 'Save scene model',
         mimeType: 'model/ply',
         UTI: 'public.data',
       });
-      setSaveInfo(`saved to Files: ${filename}`);
+      setSaveInfo(`export ready: ${filename} (${formatBytes(savedSize)})`);
     } catch (e) {
       setSaveInfo('save failed');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -960,6 +962,15 @@ function plyNumber(value: number): string {
 function colorByte(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(Math.min(1, Math.max(0, value)) * 255);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const kib = bytes / 1024;
+  if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
+  const mib = kib / 1024;
+  return `${mib.toFixed(mib >= 10 ? 1 : 2)} MB`;
 }
 
 function sampleCameraColor(

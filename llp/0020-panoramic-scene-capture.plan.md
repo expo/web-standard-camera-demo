@@ -45,8 +45,11 @@ Implemented:
   falls back to depth palette colors when camera pixels are unavailable.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
-- Export: writes an ASCII `.ply` model into the app Documents directory and
-  opens the system share sheet so the user can save it to Files.
+- Export: writes an ASCII `.ply` model into the app Documents directory,
+  reports the exported filename/size, and opens the system share sheet. The iOS
+  app enables document sharing so the Documents directory is visible in Files;
+  returning from the share sheet is not treated as proof that the user selected
+  Files.
 
 Not yet implemented:
 
