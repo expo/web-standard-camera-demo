@@ -118,6 +118,7 @@ type CaptureStatus =
 interface CaptureModel {
   boundsMax: Vec3;
   boundsMin: Vec3;
+  buildMs: number;
   cameraColoredSurfels: number;
   colorSource: 'camera' | 'depth' | 'mixed';
   keyframes: number;
@@ -196,6 +197,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const [viewer, setViewer] = React.useState<ViewerState>(DEFAULT_VIEWER_STATE);
   const [frameInfo, setFrameInfo] = React.useState('waiting for depth frames');
   const [modelInfo, setModelInfo] = React.useState('no capture yet');
+  const [qualityInfo, setQualityInfo] = React.useState('quality: no capture yet');
   const [liveSurfelCount, setLiveSurfelCount] = React.useState(0);
   const [coveragePercent, setCoveragePercent] = React.useState(0);
   const [saveInfo, setSaveInfo] = React.useState('save after capture');
@@ -267,6 +269,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setViewer(DEFAULT_VIEWER_STATE);
     setFrameInfo('waiting for depth frames');
     setModelInfo('no capture yet');
+    setQualityInfo('quality: no capture yet');
     setLiveSurfelCount(0);
     setCoveragePercent(0);
     setSaveInfo('save after capture');
@@ -357,6 +360,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
     publishModel(nextModel);
     setModelInfo(formatModelInfo(nextModel));
+    setQualityInfo(formatQualityInfo(nextModel));
+    logCaptureMetrics(nextModel);
     setSaveInfo('ready to save .ply');
     setStatus('captured');
     await stopActiveSession();
@@ -718,6 +723,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 <Text selectable style={styles.metric}>{support}</Text>
                 <Text selectable style={styles.metric}>{frameInfo}</Text>
                 <Text selectable style={styles.metric}>{modelInfo}</Text>
+                <Text selectable style={styles.metric}>{qualityInfo}</Text>
                 <Text selectable style={styles.metric}>webgpu: {fps} fps - {adapter?.info?.vendor ?? 'unknown adapter'}</Text>
                 <Text selectable style={styles.metric}>files: {saveInfo}</Text>
                 {displayError ? <Text selectable style={styles.error}>{displayError}</Text> : null}
@@ -794,6 +800,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setModel(nextModel);
     if (nextModel) {
       setLiveSurfelCount(nextModel.surfelCount);
+      setQualityInfo(formatQualityInfo(nextModel));
     }
   }
 
@@ -1104,6 +1111,7 @@ function voxelKey(x: number, y: number, z: number): string {
 }
 
 function buildModel(points: number[], keyframes: number): CaptureModel | null {
+  const buildStart = performanceNow();
   const rawSampleCount = Math.floor(points.length / SURFEL_STRIDE_FLOATS);
   if (rawSampleCount <= 0) return null;
   const fused = fuseSurfels(points);
@@ -1157,6 +1165,7 @@ function buildModel(points: number[], keyframes: number): CaptureModel | null {
   return {
     boundsMax,
     boundsMin,
+    buildMs: performanceNow() - buildStart,
     cameraColoredSurfels: fusedCameraColoredSurfels,
     colorSource,
     keyframes,
@@ -1179,11 +1188,41 @@ function formatModelInfo(model: CaptureModel): string {
     .join(' x ')}`;
 }
 
+function formatQualityInfo(model: CaptureModel): string {
+  return [
+    `quality: fused ${formatPercent(model.surfelCount / Math.max(model.rawSampleCount, 1))}`,
+    `camera ${formatPercent(model.cameraColoredSurfels / Math.max(model.surfelCount, 1))}`,
+    `normals ${formatPercent(model.normalEstimatedSurfels / Math.max(model.surfelCount, 1))}`,
+    `build ${model.buildMs.toFixed(1)}ms`,
+  ].join(' - ');
+}
+
+function logCaptureMetrics(model: CaptureModel): void {
+  const boundsMeters = [
+    model.boundsMax[0] - model.boundsMin[0],
+    model.boundsMax[1] - model.boundsMin[1],
+    model.boundsMax[2] - model.boundsMin[2],
+  ].map((value) => Number(Math.max(0, value).toFixed(3)));
+  console.log('PANORAMIC_CAPTURE_METRICS', JSON.stringify({
+    boundsMeters,
+    buildMs: Number(model.buildMs.toFixed(2)),
+    cameraColorPercent: Number((100 * model.cameraColoredSurfels / Math.max(model.surfelCount, 1)).toFixed(1)),
+    colorSource: model.colorSource,
+    fusionPercent: Number((100 * model.surfelCount / Math.max(model.rawSampleCount, 1)).toFixed(1)),
+    keyframes: model.keyframes,
+    normalPercent: Number((100 * model.normalEstimatedSurfels / Math.max(model.surfelCount, 1)).toFixed(1)),
+    rawSampleCount: model.rawSampleCount,
+    surfelCount: model.surfelCount,
+    voxelSizeMeters: model.voxelSizeMeters,
+  }));
+}
+
 function serializeModelAsPly(model: CaptureModel): string {
   const lines = [
     'ply',
     'format ascii 1.0',
     'comment standard-camera-app panoramic WebXR depth capture',
+    `comment build_ms ${model.buildMs.toFixed(2)}`,
     `comment color_source ${model.colorSource}`,
     `comment camera_colored_surfels ${model.cameraColoredSurfels}`,
     `comment estimated_normal_surfels ${model.normalEstimatedSurfels}`,
@@ -1238,6 +1277,11 @@ function formatBytes(bytes: number): string {
   if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
   const mib = kib / 1024;
   return `${mib.toFixed(mib >= 10 ? 1 : 2)} MB`;
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '0%';
+  return `${Math.max(0, Math.min(100, value * 100)).toFixed(0)}%`;
 }
 
 function sampleCameraColor(

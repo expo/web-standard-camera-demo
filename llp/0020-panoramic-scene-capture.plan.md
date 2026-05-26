@@ -49,6 +49,9 @@ Implemented:
 - Surfel normals: estimates normals from neighboring WebXR depth samples where
   local depth is continuous, fuses them into each voxel surfel, uses them for
   WebGPU lighting, and exports them as PLY vertex normals.
+- Capture telemetry: model view reports fusion, camera-color, normal-estimate,
+  and build-time metrics, and final Capture logs a
+  `PANORAMIC_CAPTURE_METRICS` JSON line for physical-device validation.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
 - Export: writes an ASCII `.ply` model into the app Documents directory,
@@ -533,6 +536,8 @@ Manual/device validation:
   pose drift
 - model-view is nonblank and interactive
 - WebGPU frame rate remains usable with the max retained surfel count
+- final Capture emits `PANORAMIC_CAPTURE_METRICS` with nonzero keyframes,
+  surfels, camera color percentage, normal percentage, and bounds
 
 Before requesting review for implementation, run:
 
