@@ -104,6 +104,19 @@ public final class StandardCameraModule: Module {
       // system's currently-routed input. We don't enumerate every port
       // (built-in / headset / bluetooth) because the iOS audio capture API
       // surfaces only the active route as an AVCaptureDevice.
+      //
+      // `AVCaptureDevice.default(for: .audio)` returns nil on a real device
+      // until AVAudioSession has been activated for record — so on a fresh
+      // app launch enumerate would report `hasMicrophone: false` even
+      // though the iPhone's built-in mic is unquestionably present and the
+      // user may have already granted permission. The fallback below
+      // synthesises an entry on non-simulator hardware whenever the
+      // authorization status isn't `.denied` / `.restricted`; the
+      // simulator path keeps using the actual default-device probe since
+      // simulator audio is the Mac host's input and "no input" is a real
+      // possibility there.
+      let audioAuth = AVCaptureDevice.authorizationStatus(for: .audio)
+      let micUsableOnHardware = !isSimulator() && audioAuth != .denied && audioAuth != .restricted
       if let audio = AVCaptureDevice.default(for: .audio) {
         // Fall back to a stable synthetic id if the device's uniqueID is
         // empty — iOS simulators sometimes return empty strings here, and
@@ -117,6 +130,15 @@ public final class StandardCameraModule: Module {
             "label": audio.localizedName,
           ])
         }
+      } else if micUsableOnHardware, seen.insert("default-audio-input").inserted {
+        out.append([
+          "deviceId": "default-audio-input",
+          "groupId": "default-audio-input",
+          "kind": "audioinput",
+          // Label is unknown until the audio session is configured; the
+          // JS polyfill will redact it pre-grant anyway.
+          "label": "",
+        ])
       }
       return out
     }
