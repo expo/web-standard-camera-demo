@@ -734,7 +734,10 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 function isEnvironmentSkip(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   const name = (e as { name?: string }).name;
-  if (name === 'NotFoundError' && /Requested device not found|no.*camera|no.*device/i.test(e.message)) {
+  if (
+    name === 'NotFoundError' &&
+    /Requested device not found|no.*camera|no.*device|no.*audio samples/i.test(e.message)
+  ) {
     return true;
   }
   // Only honor these sentinels when no camera is actually present — checked
@@ -1061,17 +1064,8 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     hasMicrophone: !noMicrophoneEnvironment,
   };
   // eslint-disable-next-line no-console
-  console.log(`[wpt:debug] runAllTests: probed env=${JSON.stringify(env)} (passing to onEnvironment)`);
+  console.log(`[wpt:debug] runAllTests: probed env=${JSON.stringify(env)}`);
   options.onEnvironment?.(env);
-  // Re-enumerate after the probes to see whether the audio probe configured
-  // AVAudioSession in a way that flips enumerate's hasMicrophone answer. If
-  // it doesn't, the iOS-side detection logic has a deeper issue than just
-  // permission timing.
-  const postProbeDetect = await detectEnvironment();
-  // eslint-disable-next-line no-console
-  console.log(
-    `[wpt:debug] runAllTests: post-probe enumerate detect=${JSON.stringify(postProbeDetect)}`
-  );
 
   const results: TestResult[] = [];
   const total = tests.length;
@@ -1241,8 +1235,6 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   // "deviceMissing" (would run on a real device) so the CLI / UI can show
   // "applicable" counts that don't conflate the two. `applicable` is the
   // number we actually attempted to run.
-  // eslint-disable-next-line no-console
-  console.log(`[wpt:debug] runAllTests: building summary with env=${JSON.stringify(env)}`);
   const applicability = summarizeApplicability(env);
   // eslint-disable-next-line no-console
   console.log(`[wpt:debug] runAllTests: applicability=${JSON.stringify(applicability)}`);

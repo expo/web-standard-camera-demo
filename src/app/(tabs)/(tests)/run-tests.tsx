@@ -182,34 +182,13 @@ export default function RunTestsScreen(): React.JSX.Element {
   // start of every run. Drives the "X applicable / Y total" header so users
   // on the simulator don't see a high skip count and assume the suite is
   // broken — it just isn't relevant to a device-less host.
-  const [environment, setEnvironmentRaw] = React.useState<TestEnvironment | null>(null);
-  // Wrap setEnvironment to log every transition with a short stack trace so
-  // we can tell whether a stale value from the mount-time `detectEnvironment`
-  // is overwriting the authoritative probe-derived env from `runAllTests`.
-  const setEnvironment = React.useCallback((next: TestEnvironment | null): void => {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[wpt:debug] screen setEnvironment(${JSON.stringify(next)}) from ${
-        (new Error().stack ?? '').split('\n').slice(2, 4).join(' | ')
-      }`
-    );
-    setEnvironmentRaw(next);
-  }, []);
+  const [environment, setEnvironment] = React.useState<TestEnvironment | null>(null);
 
   const total = rows.length;
   const applicability = React.useMemo(
     () => (environment ? computeApplicability(rows, environment) : null),
     [rows, environment]
   );
-  // Log every applicability recomputation so we can pin down exactly when
-  // the "needs a microphone" count flips. Pair with the `setEnvironment`
-  // log above to attribute the change to a specific caller.
-  React.useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[wpt:debug] screen applicability=${JSON.stringify(applicability)} env=${JSON.stringify(environment)}`
-    );
-  }, [applicability, environment]);
 
   // Buffered update path. `onStart` / `onResult` write the row patch into a
   // ref-backed Map (very cheap — no setState, no render). A timer drains the
