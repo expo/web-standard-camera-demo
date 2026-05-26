@@ -22,12 +22,31 @@ private func isSimulator() -> Bool {
   #endif
 }
 
+private let onLiDARDepthSessionState = "onLiDARDepthSessionState"
+
+private final class CaptureReleaseBlockedException: Exception {
+  override var reason: String {
+    "Standard camera capture source is still held by another live MediaStreamTrack"
+  }
+}
+
 // @ref LLP 0000 — standard-camera module entry point
 // @ref LLP 0001 — Spec subset index; every Function/Property below maps to a clause
 
 public final class StandardCameraModule: Module {
   public func definition() -> ModuleDefinition {
     Name("StandardCamera")
+    Events(onLiDARDepthSessionState)
+
+    OnStartObserving(onLiDARDepthSessionState) {
+      LiDARDepthSource.shared.onStateEvent = { [weak self] event in
+        self?.sendEvent(onLiDARDepthSessionState, event)
+      }
+    }
+
+    OnStopObserving(onLiDARDepthSessionState) {
+      LiDARDepthSource.shared.onStateEvent = nil
+    }
 
     // MARK: - MediaDevices
 
@@ -145,6 +164,41 @@ public final class StandardCameraModule: Module {
       ]
     }
 
+    // MARK: - LiDAR depth demo extension
+    // @ref LLP 0012#native-extension-shape — This is intentionally not
+    // navigator.mediaDevices API. Native ARKit produces depth frames; WebGPU
+    // consumes them in the demo route.
+
+    Function("getLiDARDepthCapabilities") { () -> [String: Any] in
+      LiDARDepthSource.shared.capabilities()
+    }
+
+    AsyncFunction("startLiDARDepthAsync") { (promise: Promise) in
+      DispatchQueue.main.async {
+        LiDARDepthSource.shared.start(
+          resolve: { payload in promise.resolve(payload) },
+          reject: { error in promise.reject(error) }
+        )
+      }
+    }
+
+    AsyncFunction("stopLiDARDepthAsync") { (promise: Promise) in
+      DispatchQueue.main.async {
+        LiDARDepthSource.shared.stop()
+        promise.resolve(nil)
+      }
+    }
+
+    Function("stopLiDARDepth") {
+      DispatchQueue.main.async {
+        LiDARDepthSource.shared.stop()
+      }
+    }
+
+    Function("getLatestLiDARDepthFrame") { () -> [String: Any]? in
+      LiDARDepthSource.shared.latestFrame()
+    }
+
     // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this
     // returns a `MediaTrackSupportedConstraints` dictionary listing every
     // constraint name the UA recognizes — regardless of whether the current
@@ -220,6 +274,19 @@ public final class StandardCameraModule: Module {
       // @ref LLP 0008#dom-mediastream-clone
       Function("clone") { (stream: MediaStream) -> MediaStream in
         stream.clone()
+      }
+
+      // @ref LLP 0012#native-extension-shape — Internal demo handoff hook:
+      // stops the stream's tracks, then resolves only after AVFoundation has
+      // reached the serialized capture release point.
+      AsyncFunction("__stopTracksAndWaitForCaptureReleaseAsync") { (stream: MediaStream, promise: Promise) in
+        stream.stopTracksAndWaitForCaptureRelease { released in
+          if released {
+            promise.resolve(nil)
+          } else {
+            promise.reject(CaptureReleaseBlockedException())
+          }
+        }
       }
 
       // Test hook — posts a synthetic AVCaptureSession interruption notification

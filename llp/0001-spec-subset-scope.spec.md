@@ -5,7 +5,7 @@
 **Systems:** standard-camera
 **Author:** James Ide
 **Date:** 2026-05-19 (audio brought into scope 2026-05-22)
-**Related:** 0000, 0002, 0003, 0004, 0009
+**Related:** 0000, 0002, 0003, 0004, 0009, 0012, 0013, 0018
 
 ## Summary
 
@@ -15,6 +15,24 @@ This document is the index of which clauses of [W3C Media Capture and Streams](h
 - **This LLP (0001)** and the per-interface notes (0002–0004) record our *scope decisions* — which clauses are in vs. out, and the iOS-specific implementation paths through them.
 
 The scope covers `navigator.mediaDevices.getUserMedia({ video: true })`, `getUserMedia({ audio: true })`, and the combined `getUserMedia({ audio: true, video: true })` resolving to a `MediaStream` whose video track displays in a `<Video srcObject={stream} />` while the audio track is fed through the iOS audio output.
+
+Media Capture depth tracks are out of scope. The discontinued W3C Media Capture
+Depth Stream Extensions draft proposed depth streams and a `videoKind: "depth"`
+constrainable property, but this repo does not add those members to
+`navigator.mediaDevices`, `MediaStream`, or `MediaStreamTrack`. That is an
+intentional standards-positioning decision, not just an implementation deferral:
+native LiDAR depth can demonstrate web-shaped rendering beside `getUserMedia`,
+but it should remain an explicit native extension unless/until a live web
+standard defines depth semantics. See [LLP 0012](./0012-lidar-webgpu-depth-demo.plan.md).
+
+The relevant discontinued W3C source slices live in
+[LLP 0018](./0018-mediacapture-depth-spec-slices.spec.md).
+
+WebXR depth sensing is also out of scope for this package. It is the better
+active standards model for AR depth, but implementing it would require an XR
+session/runtime surface rather than an extension of this repo's Media Capture
+subset. [LLP 0013](./0013-webxr-lidar-depth-api.spec.md) specifies what that
+research surface would look like if this repo ever prototypes it.
 
 ### Audio is in scope (as of 2026-05-22)
 

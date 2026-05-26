@@ -1,5 +1,9 @@
+import { Host, Picker, Slider, Text as UIText } from '@expo/ui/swift-ui';
+import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import * as Device from 'expo-device';
+import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
@@ -16,7 +20,7 @@ struct Uniforms {
   texelX: f32,
   texelY: f32,
   intensity: f32,
-  _pad0: f32,
+  rotate: f32,
   _pad1: f32,
   _pad2: f32,
 };
@@ -48,12 +52,19 @@ fn luma(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
+fn previewUv(uv: vec2f) -> vec2f {
+  if (u.rotate < 0.5) {
+    return uv;
+  }
+  return vec2f(uv.y, 1.0 - uv.x);
+}
+
 fn sampleAt(uv: vec2f) -> vec4f {
-  return textureSample(srcTex, srcSampler, clamp(uv, vec2f(0.0), vec2f(1.0)));
+  return textureSample(srcTex, srcSampler, clamp(previewUv(uv), vec2f(0.0), vec2f(1.0)));
 }
 
 fn posterize(c: vec4f) -> vec4f {
-  let levels = 4.0 + floor(u.intensity * 8.0);
+  let levels = 3.0 + floor((1.0 - u.intensity) * 21.0);
   return vec4f(floor(c.rgb * levels) / levels, c.a);
 }
 
@@ -78,18 +89,20 @@ fn heat(c: vec4f) -> vec4f {
   let r = smoothstep(0.25, 0.85, y);
   let g = 1.0 - abs(y - 0.55) * 2.0;
   let b = 1.0 - smoothstep(0.1, 0.65, y);
-  return vec4f(clamp(vec3f(r, g, b), vec3f(0.0), vec3f(1.0)), 1.0);
+  let heatColor = clamp(vec3f(r, g, b), vec3f(0.0), vec3f(1.0));
+  return vec4f(mix(c.rgb, heatColor, clamp(u.intensity, 0.0, 1.0)), 1.0);
 }
 
 fn kaleidoscope(uv: vec2f) -> vec4f {
   let center = uv - vec2f(0.5);
   let radius = length(center);
-  let angle = atan2(center.y, center.x) + sin(u.time * 0.35) * 0.2;
+  let amount = clamp(u.intensity, 0.0, 1.0);
+  let angle = atan2(center.y, center.x) + sin(u.time * 0.35) * 0.2 * amount;
   let pi = 3.14159265;
-  let segments = 6.0 + floor(u.intensity * 6.0);
+  let segments = 3.0 + floor(amount * 9.0);
   let folded = abs(fract(angle / (2.0 * pi) * segments) - 0.5) * (2.0 * pi / segments);
   let sampleUv = vec2f(0.5) + vec2f(cos(folded), sin(folded)) * radius;
-  return sampleAt(sampleUv);
+  return mix(sampleAt(uv), sampleAt(sampleUv), amount);
 }
 
 @fragment
@@ -112,7 +125,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 `;
 
 const SYNTHETIC_SIZE = 256;
+const SYNTHETIC_FALLBACK_DELAY_MS = 3000;
 const FRAME_UPLOAD_INTERVAL_MS = 100;
+const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
 const DEMO_CAPTURE_CONSTRAINTS = { width: 640, height: 480, frameRate: 30 } as const;
 
 const EFFECTS = [
@@ -129,6 +144,11 @@ interface Frame {
   width: number;
 }
 
+interface FrameDimensions {
+  height: number;
+  width: number;
+}
+
 export default function ShaderLensScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
@@ -138,8 +158,9 @@ export default function ShaderLensScreen(): React.JSX.Element {
     error: cameraError,
     constraints,
     settings,
+    userStopped,
+    externalLocked,
     start,
-    stop,
     applyConstraints,
   } = useCamera();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
@@ -148,16 +169,36 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const [status, setStatus] = React.useState('initializing');
   const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
   const [fps, setFps] = React.useState('0.0');
+  const [frameDimensions, setFrameDimensions] = React.useState<FrameDimensions | null>(null);
   const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
 
   const effectRef = React.useRef(effect);
   const intensityRef = React.useRef(intensity);
+  const cameraStatusRef = React.useRef(cameraStatus);
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
   const rafRef = React.useRef<number | null>(null);
+  const frameDimensionsRef = React.useRef<FrameDimensions | null>(null);
   const lastGrabErrorRef = React.useRef<string | null>(null);
+  const preserveCameraPreviewUntilRef = React.useRef(0);
+  const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
+  // On real hardware we always suppress the synthetic test pattern — both
+  // the brief flash before the first real frame arrives and the post-Stop
+  // case look misleading. The placeholder overlay covers the canvas during
+  // those windows. On the simulator (no AVCaptureDevice) we keep synthetic
+  // as the demo's hero animation. `Device.isDevice` is stable for the
+  // process lifetime, so a ref initialized once is sufficient.
+  const suppressSyntheticRef = React.useRef(Device.isDevice);
+
+  const setFrameInfo = React.useCallback((width: number, height: number): void => {
+    const previous = frameDimensionsRef.current;
+    if (previous?.width === width && previous.height === height) return;
+    const next = { height, width };
+    frameDimensionsRef.current = next;
+    setFrameDimensions(next);
+  }, []);
 
   const setGrabError = React.useCallback((message: string | null): void => {
     if (lastGrabErrorRef.current === message) return;
@@ -174,25 +215,57 @@ export default function ShaderLensScreen(): React.JSX.Element {
   }, [intensity]);
 
   React.useEffect(() => {
-    if (didAutoStartCameraRef.current) return;
-    if (cameraStatus === 'requesting' || cameraStatus === 'starting') return;
-    didAutoStartCameraRef.current = true;
-    void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    cameraStatusRef.current = cameraStatus;
   }, [cameraStatus]);
+
+  React.useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
+
+  React.useEffect(() => {
+    if (stream || (cameraStatus !== 'idle' && cameraStatus !== 'stopping' && cameraStatus !== 'ended')) {
+      return;
+    }
+    preserveCameraPreviewUntilRef.current = 0;
+    sourceRef.current = 'pending';
+    frameDimensionsRef.current = null;
+    setGrabError(null);
+    setSource('pending');
+    setFrameDimensions(null);
+    setLastFrameNumber(null);
+  }, [cameraStatus, setGrabError, stream]);
+
+  // Auto-start only when there is no live stream. We deliberately consume
+  // whatever resolution Home (or the previous demo) negotiated — the demo's
+  // WGSL pipeline scales to whatever frames arrive, and tearing down a live
+  // stream to demand exact 1280x720 used to leave the rest of the app
+  // camera-less if gUM rejected the new constraints. The user can change
+  // resolution from Home if they want a different mode for the demo.
+  React.useEffect(() => {
+    if (didAutoStartCameraRef.current) return;
+    if (userStopped || externalLocked) return;
+    if (cameraStatus === 'requesting' || cameraStatus === 'starting' || cameraStatus === 'stopping') return;
+    didAutoStartCameraRef.current = true;
+    if (stream) return;
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraStatus, userStopped, externalLocked, stream]);
 
   React.useEffect(() => {
     if (!stream) {
       imageCaptureRef.current = null;
+      setGrabError(null);
       return;
     }
     const track = stream.getVideoTracks()[0];
     if (!track) {
       imageCaptureRef.current = null;
+      setGrabError(null);
       return;
     }
     try {
       imageCaptureRef.current = new ImageCapture(track);
+      setGrabError(null);
     } catch (e) {
       imageCaptureRef.current = null;
       setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -280,42 +353,87 @@ export default function ShaderLensScreen(): React.JSX.Element {
           const shouldUpload = bindGroup == null || now - lastUpload >= FRAME_UPLOAD_INTERVAL_MS;
 
           if (shouldUpload) {
+            const cameraStatusNow = cameraStatusRef.current;
+            const cameraMayDeliverFrames =
+              cameraStatusNow === 'requesting' ||
+              cameraStatusNow === 'starting' ||
+              cameraStatusNow === 'playing';
             let frame: Frame | null = null;
             let frameSource: 'camera' | 'synthetic' = 'synthetic';
             const imageCapture = imageCaptureRef.current;
 
-            if (imageCapture) {
-              try {
-                const bitmap = await imageCapture.grabFrame();
-                frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
-                frameSource = 'camera';
-                lastSeenFrameNumber = bitmap._frameNumber;
-                bitmap.close();
+            if (!cameraMayDeliverFrames && sourceRef.current === 'camera') {
+              lastReportedSource = null;
+              sourceRef.current = 'pending';
+              setSource('pending');
+              setGrabError(null);
+            }
+
+            if (imageCapture && cameraMayDeliverFrames) {
+              if (imageCapture.track.readyState === 'ended') {
+                if (imageCaptureRef.current === imageCapture) {
+                  imageCaptureRef.current = null;
+                }
                 setGrabError(null);
-              } catch (e) {
-                setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+              } else {
+                try {
+                  const bitmap = await imageCapture.grabFrame();
+                  frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
+                  frameSource = 'camera';
+                  preserveCameraPreviewUntilRef.current = 0;
+                  lastSeenFrameNumber = bitmap._frameNumber;
+                  bitmap.close();
+                  setGrabError(null);
+                } catch (e) {
+                  if (isEndedTrackGrabError(e)) {
+                    if (imageCaptureRef.current === imageCapture) {
+                      imageCaptureRef.current = null;
+                    }
+                    setGrabError(null);
+                  } else {
+                    setGrabError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+                  }
+                }
               }
             }
 
-            if (!frame) {
+            if (
+              !frame &&
+              bindGroup &&
+              sourceRef.current === 'camera' &&
+              cameraMayDeliverFrames &&
+              now < preserveCameraPreviewUntilRef.current
+            ) {
+              lastUpload = now;
+            } else if (
+              !frame &&
+              !suppressSyntheticRef.current &&
+              now - startedAt >= SYNTHETIC_FALLBACK_DELAY_MS
+            ) {
               fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
               frame = { data: syntheticPixels, height: SYNTHETIC_SIZE, width: SYNTHETIC_SIZE };
+            } else if (!frame) {
+              lastUpload = now;
             }
             if (cancelled) return;
 
-            if (frameSource !== lastReportedSource) {
-              lastReportedSource = frameSource;
-              setSource(frameSource);
-            }
+            if (frame) {
+              if (frameSource !== lastReportedSource || sourceRef.current !== frameSource) {
+                lastReportedSource = frameSource;
+                sourceRef.current = frameSource;
+                setSource(frameSource);
+              }
 
-            ensureTexture(frame.width, frame.height);
-            device.queue.writeTexture(
-              { texture: cameraTexture! },
-              frame.data,
-              { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-              { width: frame.width, height: frame.height }
-            );
-            lastUpload = now;
+              setFrameInfo(frame.width, frame.height);
+              ensureTexture(frame.width, frame.height);
+              device.queue.writeTexture(
+                { texture: cameraTexture! },
+                frame.data,
+                { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+                { width: frame.width, height: frame.height }
+              );
+              lastUpload = now;
+            }
           }
 
           if (!bindGroup) {
@@ -325,16 +443,17 @@ export default function ShaderLensScreen(): React.JSX.Element {
             return;
           }
 
+          const rotatesPreview = texWidth > texHeight;
           device.queue.writeBuffer(
             uniformBuffer,
             0,
             new Float32Array([
               effectRef.current,
               elapsed,
-              1 / texWidth,
-              1 / texHeight,
+              1 / (rotatesPreview ? texHeight : texWidth),
+              1 / (rotatesPreview ? texWidth : texHeight),
               intensityRef.current,
-              0,
+              rotatesPreview ? 1 : 0,
               0,
               0,
             ])
@@ -399,11 +518,27 @@ export default function ShaderLensScreen(): React.JSX.Element {
       clearTimeout(timer);
       cleanup?.();
     };
-  }, [adapter, device, ref, setGrabError]);
+  }, [adapter, device, ref, setFrameInfo, setGrabError]);
 
-  const cameraOn = stream != null;
-  const canvasSide = Math.max(260, Math.min(windowWidth - 32, windowHeight - 330));
-  const activeEffect = EFFECTS.find((item) => item.value === effect)?.label ?? 'Original';
+  // Drive Start/Stop off the context's status machine, not `stream != null`.
+  // The stream stays non-null across the 'ended' transition (track ended by
+  // the OS or another app), and using `stream != null` there left the nav
+  // button claiming "Stop" against a camera that had already stopped. The
+  // status machine flips to 'idle'/'ended'/'error' in those cases and the
+  // button switches back to Start, matching the real device state.
+  const cameraOn = cameraStatus === 'playing';
+  const targetPreviewAspect = DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
+  const previewAspect = frameDimensions
+    ? frameDimensions.width > frameDimensions.height
+      ? frameDimensions.height / frameDimensions.width
+      : frameDimensions.width / frameDimensions.height
+    : targetPreviewAspect;
+  const previewMaxHeight = Math.max(240, windowHeight - 440);
+  const previewMaxWidth = Math.max(240, windowWidth - 32);
+  const previewStageWidth = Math.max(240, Math.min(previewMaxWidth, previewMaxHeight * targetPreviewAspect));
+  const previewStageHeight = previewStageWidth / targetPreviewAspect;
+  const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
+  const previewHeight = previewWidth / previewAspect;
   const settingsFacing =
     settings?.facingMode === 'user' || settings?.facingMode === 'environment'
       ? settings.facingMode
@@ -412,87 +547,110 @@ export default function ShaderLensScreen(): React.JSX.Element {
 
   const setFacing = React.useCallback(
     (facingMode: 'user' | 'environment'): void => {
-      applyConstraints({ ...DEMO_CAPTURE_CONSTRAINTS, facingMode });
+      if (sourceRef.current === 'camera') {
+        preserveCameraPreviewUntilRef.current = Date.now() + CAMERA_SWITCH_PREVIEW_HOLD_MS;
+      }
+      // Pass only `facingMode` so applyConstraints merges into whatever
+      // resolution Home is using — overriding with `DEMO_CAPTURE_CONSTRAINTS`
+      // would force a restart and risk a failed gUM dropping the global
+      // stream.
+      applyConstraints({ facingMode });
     },
     [applyConstraints]
   );
 
+  // On real hardware we cover the canvas with a centered SF Symbol any time
+  // the demo isn't actively rendering camera frames — that includes the
+  // post-Stop case and the brief startup window before the first frame
+  // lands. On the simulator we keep the synthetic pattern as the visual.
+  const showStoppedPlaceholder = Device.isDevice && source !== 'camera';
+
+  const cameraLine = (() => {
+    if (typeof settings?.width === 'number' && typeof settings?.height === 'number') {
+      const fpsPart = typeof settings.frameRate === 'number'
+        ? ` @ ${Math.round(settings.frameRate)} fps`
+        : '';
+      return `${settings.width}x${settings.height}${fpsPart} · ${cameraStatus}`;
+    }
+    return cameraStatus;
+  })();
+
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.content}
-      contentInsetAdjustmentBehavior="automatic">
-      <Canvas ref={ref} style={[styles.canvas, { height: canvasSide, width: canvasSide }]} />
-
-      <View style={styles.controls}>
-        <View style={styles.controlRow}>
-          <Pressable
-            onPress={() => setFacing('environment')}
-            style={[styles.chip, cameraFacing === 'environment' ? styles.chipActive : null]}>
-            <Text style={[styles.chipText, cameraFacing === 'environment' ? styles.chipTextActive : null]}>
-              Back
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setFacing('user')}
-            style={[styles.chip, cameraFacing === 'user' ? styles.chipActive : null]}>
-            <Text style={[styles.chipText, cameraFacing === 'user' ? styles.chipTextActive : null]}>
-              Front
-            </Text>
-          </Pressable>
+    <>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        contentInsetAdjustmentBehavior="automatic">
+        <View style={[styles.previewStage, { height: previewStageHeight, width: previewStageWidth }]}>
+          <Canvas ref={ref} style={[styles.canvas, { height: previewHeight, width: previewWidth }]} />
+          {showStoppedPlaceholder ? (
+            <View pointerEvents="none" style={styles.stoppedOverlay}>
+              <SymbolView
+                name="video.slash.fill"
+                size={56}
+                weight="semibold"
+                tintColor="#94a3b8"
+              />
+            </View>
+          ) : null}
         </View>
 
-        <View style={styles.controlRow}>
-          {EFFECTS.map((item) => (
-            <Pressable
-              key={item.value}
-              onPress={() => setEffect(item.value)}
-              style={[styles.chip, effect === item.value ? styles.chipActive : null]}>
-              <Text style={[styles.chipText, effect === item.value ? styles.chipTextActive : null]}>
-                {item.label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <View style={styles.controls}>
+          <Host style={styles.pickerHost}>
+            <Picker
+              modifiers={[pickerStyle('segmented')]}
+              label="Camera"
+              selection={cameraFacing}
+              onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
+              <UIText modifiers={[tag('environment')]}>Back</UIText>
+              <UIText modifiers={[tag('user')]}>Front</UIText>
+            </Picker>
+          </Host>
 
-        <View style={styles.controlRow}>
-          <Pressable
-            onPress={() => setIntensity((value) => Math.max(0, value - 0.15))}
-            style={styles.button}>
-            <Text style={styles.buttonText}>Less</Text>
-          </Pressable>
-          <View style={styles.readout}>
-            <Text style={styles.readoutText}>
-              {activeEffect} · intensity {Math.round(intensity * 100)}%
-            </Text>
+          <Host style={styles.pickerHost}>
+            <Picker
+              modifiers={[pickerStyle('segmented')]}
+              label="Effect"
+              selection={effect}
+              onSelectionChange={(value) =>
+                setEffect(value as (typeof EFFECTS)[number]['value'])
+              }>
+              {EFFECTS.map((item) => (
+                <UIText key={item.value} modifiers={[tag(item.value)]}>
+                  {item.label}
+                </UIText>
+              ))}
+            </Picker>
+          </Host>
+
+          <View style={styles.intensityBlock}>
+            <View style={styles.intensityHeader}>
+              <Text style={styles.intensityLabel}>Intensity</Text>
+              <Text style={styles.intensityValue}>{Math.round(intensity * 100)}%</Text>
+            </View>
+            <View style={styles.sliderInset}>
+              <Host style={styles.sliderHost}>
+                <Slider value={intensity} min={0} max={1} onValueChange={setIntensity} />
+              </Host>
+            </View>
           </View>
-          <Pressable
-            onPress={() => setIntensity((value) => Math.min(1, value + 0.15))}
-            style={styles.button}>
-            <Text style={styles.buttonText}>More</Text>
-          </Pressable>
         </View>
 
-        <Pressable
-          onPress={() => (cameraOn ? stop() : void start())}
-          style={[styles.button, styles.fullButton]}>
-          <Text style={styles.buttonText}>{cameraOn ? 'Stop camera' : 'Start camera'}</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.hud}>
-        <Text style={styles.hudText}>Shader lens · {status}</Text>
-        <Text style={styles.hudSub}>source: {source} · fps: {fps} · camera: {cameraStatus}</Text>
-        {lastFrameNumber !== null && cameraOn ? (
-          <Text style={styles.hudSub}>iOS frames delivered: {lastFrameNumber}</Text>
-        ) : null}
-        {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
-        {lastGrabError && source !== 'camera' ? (
-          <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
-        ) : null}
-        {error ? <Text style={styles.hudError}>{error}</Text> : null}
-      </View>
-    </ScrollView>
+        <View style={styles.hud}>
+          <Text style={styles.hudText}>Shader lens · {status}</Text>
+          <Text style={styles.hudSub}>camera: {cameraLine}</Text>
+          <Text style={styles.hudSub}>render: {fps} fps · source: {source}</Text>
+          {lastFrameNumber !== null && cameraOn ? (
+            <Text style={styles.hudSub}>iOS frames delivered: {lastFrameNumber}</Text>
+          ) : null}
+          {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
+          {lastGrabError && source !== 'camera' ? (
+            <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
+          ) : null}
+          {error ? <Text style={styles.hudError}>{error}</Text> : null}
+        </View>
+      </ScrollView>
+    </>
   );
 }
 
@@ -511,6 +669,14 @@ function fillTestPattern(buf: Uint8Array, size: number, t: number): void {
   }
 }
 
+function isEndedTrackGrabError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === 'InvalidStateError' &&
+    /ended/.test(error.message)
+  );
+}
+
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
@@ -524,65 +690,55 @@ const styles = StyleSheet.create({
   canvas: {
     backgroundColor: '#080b12',
   },
+  previewStage: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  stoppedOverlay: {
+    alignItems: 'center',
+    backgroundColor: '#000',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
   controls: {
     alignSelf: 'stretch',
-    gap: 10,
+    gap: 14,
     paddingHorizontal: 16,
   },
-  controlRow: {
+  pickerHost: {
+    alignSelf: 'stretch',
+    height: 34,
+  },
+  sliderHost: {
+    alignSelf: 'stretch',
+    height: 32,
+  },
+  sliderInset: {
+    paddingHorizontal: 20,
+  },
+  intensityBlock: {
+    gap: 6,
+  },
+  intensityHeader: {
+    alignItems: 'baseline',
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    justifyContent: 'space-between',
   },
-  chip: {
-    backgroundColor: 'rgba(255, 255, 255, 0.11)',
-    borderRadius: 8,
-    minHeight: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  chipActive: {
-    backgroundColor: '#f8fafc',
-  },
-  chipText: {
+  intensityLabel: {
     color: '#cbd5e1',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
   },
-  chipTextActive: {
-    color: '#0f172a',
-  },
-  button: {
-    alignItems: 'center',
-    backgroundColor: '#60a5fa',
-    borderRadius: 8,
-    justifyContent: 'center',
-    minHeight: 40,
-    paddingHorizontal: 12,
-  },
-  fullButton: {
-    alignSelf: 'stretch',
-  },
-  buttonText: {
-    color: '#07111f',
-    fontSize: 14,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  readout: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 8,
-    flex: 1,
-    justifyContent: 'center',
-    minHeight: 40,
-    paddingHorizontal: 10,
-  },
-  readoutText: {
+  intensityValue: {
     color: '#f8fafc',
     fontFamily: 'Menlo',
-    fontSize: 11,
-    textAlign: 'center',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '700',
   },
   hud: {
     alignSelf: 'stretch',

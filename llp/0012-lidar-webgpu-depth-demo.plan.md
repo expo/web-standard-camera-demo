@@ -1,0 +1,416 @@
+# LLP 0012: LiDAR WebGPU depth demo
+
+**Type:** Plan
+**Status:** Active
+**Systems:** demo, standard-camera-native-extension
+**Author:** James Ide
+**Date:** 2026-05-24
+**Related:** 0000, 0001, 0010, 0013, 0014, 0015, 0016, 0017, 0018
+
+## Summary
+
+This LLP documents a deliberately non-W3C demo that combines a native iOS-only
+mobile capability with browser-shaped rendering code: ARKit provides paired
+camera and LiDAR scene-depth frames, and WebGPU/WGSL turns those frames into a
+live camera/depth comparison visualization.
+
+The point is different from LLP 0010. The WebGPU camera demos prove that a
+small W3C camera surface can make browser-shaped code run on iOS. This demo
+shows the complementary story: native mobile sensors can expose data the web
+does not standardize today, while the visualization, animation, and GPU
+processing can still live in web-shaped WebGPU code.
+
+## Standards positioning
+
+**Decision:** do not extend this repo's `getUserMedia` implementation to expose
+LiDAR/depth as a W3C camera feature. The connection is real enough to explain,
+but not strong enough to justify adding depth tracks to the v1 Media Capture
+subset. A full WebXR depth implementation is also not the right next step for
+this repo; it would be a separate XR runtime project rather than evidence that
+ordinary web camera code runs in Expo.
+
+The product story should be: implementing the web camera API on native lets
+portable browser-shaped RGB camera code run in Expo; when a platform has extra
+sensor data the web does not standardize today, the app can pair that portable
+camera surface with a narrow native extension rather than pretending the native
+sensor is already part of the web platform.
+
+### Media Capture Depth history
+
+There is a meaningful historical connection to `getUserMedia`: the W3C Media
+Capture Depth Stream Extensions draft proposed depth-capable media streams,
+including a `videoKind` constrainable property with `"color"` and `"depth"`
+values. That work was published as a Discontinued Draft in 2022 because the
+working group saw too little implementation momentum, so this repo should cite
+it only as abandoned work, not as current web-platform behavior.
+
+The final draft's shape was not a new `MediaStreamTrack.kind === "depth"`.
+Instead, it treated depth as a video-like source selected through the
+constrainable property `videoKind`, with examples like:
+
+```js
+await navigator.mediaDevices.getUserMedia({
+  video: { videoKind: { exact: "depth" } },
+});
+```
+
+The draft also showed requesting a color stream and a depth stream from the same
+`groupId` so authors could pair the two. This was an evolution from the older
+2015 working-draft shape that had `depth: true` constraints and
+`stream.getDepthTracks()`.
+
+The scoped source slices for the final discontinued draft live in
+[LLP 0018](./0018-mediacapture-depth-spec-slices.spec.md).
+
+Primary sources:
+
+- W3C discontinued-draft announcement:
+  https://www.w3.org/news/2022/media-capture-depth-stream-extensions-published-as-a-discontinued-draft/
+- Final editor's draft with `videoKind`:
+  https://w3c.github.io/mediacapture-depth/
+- Older 2015 working draft with `depth: true`:
+  https://w3c.github.io/mediacapture-depth/releases/WD2.html
+
+### Why it stalled
+
+The official reason is "lack of implementation momentum." The archived issue
+tracker suggests why the API surface never hardened:
+
+- Depth needed more than camera-style constraints. Open issue #174 asked to
+  re-add camera/depth intrinsics and related mobile camera metadata. That is a
+  sign that a useful depth API needs geometry data, not only a stream.
+- Accurate reprojection still had unresolved semantics. Issue #80 discussed
+  whether depth values were measured along the optical axis or optical ray, and
+  whether that should be a constraint or fixed by spec.
+- Recording and still capture were unclear. Issue #173 noted
+  `MediaRecorder`/`ImageCapture.takePhoto()` producing empty depth blobs, and a
+  maintainer observed that the platform lacked a standard web-compatible image
+  format for 16-bit depth.
+- WebXR alignment was already visible. Issue #167 asked whether the Media
+  Capture depth transform naming should align with WebXR.
+- The draft had already struggled in candidate-review preparation in 2016:
+  issue #133 recorded a reviewer saying it was not ready for broad review.
+
+Inference: the draft did not fail because the JavaScript spelling was bad. It
+failed because depth capture crosses into geometry, calibration, precision,
+encoding, privacy, and GPU/CPU access semantics that were not converging across
+independent implementations.
+
+### Merit in implementing `videoKind: "depth"`
+
+There is some merit in showing it as standards archaeology: "here is the
+abandoned web shape, implemented experimentally on one native platform." That
+could be useful in a comparison screen or research note.
+
+There is little merit in presenting it as part of this repo's W3C camera API
+implementation:
+
+- It would not demonstrate portable browser code, because current browsers do
+  not expose the discontinued draft as a dependable API.
+- It would expand the test surface beyond this repo's WPT-backed Media Capture
+  subset into an abandoned draft with no maintained conformance story.
+- A convincing implementation would need the unsettled pieces above:
+  calibration metadata, RGB/depth alignment, units, invalid/confidence pixels,
+  and GPU/CPU transfer semantics.
+
+If this app ever implements the `videoKind: "depth"` spelling, it should be a
+disabled-by-default experiment over the existing native LiDAR source, labeled as
+"Discontinued Media Capture Depth draft", not a default `standard-camera`
+feature.
+
+### WebXR depth
+
+WebXR depth sensing is the active standards-family direction for XR sessions,
+but adopting WebXR would pull in XR session lifecycle, pose spaces, permissions,
+and rendering semantics that are intentionally outside this repo's tiny
+`getUserMedia` experiment.
+
+WebXR depth is technically the better standards model for AR depth. It defines a
+`depth-sensing` session feature, raw vs. smooth depth, CPU vs. GPU usage,
+`float32`/`unsigned-short`/packed formats, transforms from view coordinates to
+depth buffer coordinates, `getDepthInMeters()`, and privacy guidance for
+limiting or blocking detailed scene geometry.
+
+It is still not the better implementation target for this repo right now:
+
+- The app would need a meaningful subset of `navigator.xr`, `XRSession`,
+  `XRFrame`, `XRView`, reference spaces, poses/projection matrices, and an XR
+  render loop before the depth module is honest.
+- The WebXR depth module is specified around WebGL bindings and
+  `XRWebGLDepthInformation`; this demo is intentionally WebGPU/WGSL.
+- Implementing WebXR would no longer show "benefits of implementing the W3C
+  camera API." It would show "Expo can host an iOS WebXR-style runtime," which
+  is a different and much larger project.
+
+Primary source:
+
+- W3C WebXR Depth Sensing Module:
+  https://www.w3.org/TR/webxr-depth-sensing-1/
+
+### WebXR surface for this demo only
+
+If we ignore general WebXR ambitions and evaluate only the current LiDAR Depth
+Studio demo, the demo needs a much smaller functional surface:
+
+The full proposed WebXR-shaped API surface is specified in
+[LLP 0013](./0013-webxr-lidar-depth-api.spec.md). This section is the short
+evaluation summary for the current demo.
+
+1. A user-triggered start/stop for an exclusive AR camera session.
+2. A support check that distinguishes simulator, non-LiDAR devices, and LiDAR
+   devices.
+3. A per-frame camera image aligned with the view shown on screen.
+4. A per-frame depth buffer aligned with that camera image.
+5. Depth values in meters, preferably `float32`, with invalid pixels represented
+   as `0`.
+6. A mapping from screen/view coordinates to depth-buffer coordinates.
+7. Enough CPU access to sample center depth and compute the closer-than-target
+   readout.
+8. Enough GPU access to upload camera and depth data into WebGPU textures.
+
+The demo does not need the following WebXR features: controller/input sources,
+hit testing, anchors, planes, mesh reconstruction, bounded spaces, stereo/multi-
+view rendering, DOM overlays, WebXR layers, or world-space UI.
+
+The smallest WebXR-shaped API that resembles the current demo would look like:
+
+```ts
+const supported = await navigator.xr.isSessionSupported("immersive-ar");
+const session = await navigator.xr.requestSession("immersive-ar", {
+  requiredFeatures: ["depth-sensing", "camera-access"],
+  depthSensing: {
+    usagePreference: ["cpu-optimized"],
+    dataFormatPreference: ["float32"],
+    depthTypeRequest: ["smooth"],
+    matchDepthView: true,
+  },
+});
+const referenceSpace = await session.requestReferenceSpace("viewer");
+session.requestAnimationFrame((time, frame) => {
+  const pose = frame.getViewerPose(referenceSpace);
+  const view = pose?.views[0];
+  if (!view) return;
+  const depth = frame.getDepthInformation(view); // XRCPUDepthInformation
+  const center = depth?.getDepthInMeters(0.5, 0.5) ?? 0;
+});
+```
+
+That surface is useful as design vocabulary, but it is not enough to implement
+the existing WebGPU demo with only standardized WebXR APIs:
+
+- WebXR Depth Sensing has a CPU path (`XRCPUDepthInformation.data`) that maps
+  well to the current `Float32Array` upload into `r32float`.
+- The WebXR GPU depth path is explicitly `XRWebGLDepthInformation` through
+  `XRWebGLBinding`, while this demo is intentionally `react-native-wgpu` +
+  WGSL.
+- Raw camera pixels are not part of the WebXR AR module itself. They come from
+  the separate WebXR Raw Camera Access Community Group draft via
+  `view.camera` and `XRWebGLBinding.getCameraImage(camera)`, again as an opaque
+  WebGL texture.
+- The AR module says immersive AR compositing must not automatically grant
+  camera streams, intrinsics, real-world geometry, or similar information; the
+  page must request those features explicitly. That is the right privacy model,
+  but it means a minimal facade that simply hands JS `colorData` bytes is not
+  actually WebXR-compatible.
+
+So the implementation choices are:
+
+- **Keep the current native sidecar.** Best fit for this demo. It exposes exactly
+  the RGB/depth bytes the WebGPU renderer needs and keeps the W3C camera story
+  focused on `getUserMedia`.
+- **Add WebXR vocabulary to the sidecar payload.** Good incremental improvement:
+  include fields such as `depthType: "smooth"`, `depthUsage:
+  "cpu-optimized"`, `depthDataFormat: "float32"`, `rawValueToMeters: 1`, and a
+  `normDepthBufferFromNormView` transform when ARKit calibration is wired
+  through. This borrows the useful WebXR model without claiming `navigator.xr`.
+- **Implement a disabled WebXR-shaped experiment.** Possible, but it should be
+  labeled research. A credible version would implement `navigator.xr`,
+  `XRSession`, `XRFrame`, `XRView`, `XRCPUDepthInformation`, and probably raw
+  camera access. It would still be non-standard unless it either uses WebGL
+  bindings or defines a separate WebGPU binding story.
+- **Implement full WebXR depth.** Not justified for this app. It would turn the
+  repo into an XR runtime project and would still not naturally feed the current
+  WebGPU pipeline without additional WebGPU/WebXR binding work.
+
+Recommendation for this demo: keep the native sidecar as the production path,
+borrow WebXR naming/metadata where it improves clarity, and do not expose
+`navigator.xr` unless the repo explicitly starts a separate XR-runtime research
+track.
+
+Additional primary source:
+
+- WebXR Raw Camera Access Module:
+  https://immersive-web.github.io/raw-camera-access/
+
+The scoped WebXR source slices live in [LLP 0014](./0014-webxr-device-api-spec-slices.spec.md),
+[LLP 0015](./0015-webxr-ar-module-spec-slices.spec.md),
+[LLP 0016](./0016-webxr-depth-sensing-spec-slices.spec.md), and
+[LLP 0017](./0017-webxr-raw-camera-access-spec-slices.spec.md).
+
+For this app, the right connection is therefore: keep the W3C camera API clean
+for ordinary RGB capture, expose LiDAR as an explicit iOS native extension, and
+feed its frames into web-shaped WebGPU code beside the `getUserMedia` demos.
+
+## Why not `getUserMedia` depth
+
+Depth is not just another camera resolution or facing mode. A useful depth API
+needs to define coordinate spaces, RGB/depth alignment, timestamps, camera
+intrinsics, units, confidence/invalid pixels, privacy limits for scene geometry,
+and consumer APIs for GPU and CPU access. The current Media Capture subset in
+this repo only needs ordinary `audio` and `video` `MediaStreamTrack`s plus the
+constrainable properties required by WPT-style camera tests.
+
+Re-adding the discontinued `videoKind: "depth"` shape would also create a weak
+demo signal: it would showcase a private extension that browser code cannot
+count on, instead of proving that existing browser camera code can run unchanged
+on native. If the project ever wants to incubate depth seriously, that should be
+a separate research/standards track with explicit privacy and geometry semantics,
+not a silent expansion of the standard-camera v1 scope.
+
+## Goals
+
+- **Show the benefit of web plus native mobile.** The demo must make the native
+  sensor obvious: LiDAR depth should drive the picture, not merely decorate an
+  RGB camera feed.
+- **Keep the bridge narrow.** Native code owns ARKit session setup and exposes
+  only compact depth-frame data plus diagnostics. WebGPU owns rendering.
+- **Keep W3C scope clean.** The LiDAR API is not added to
+  `navigator.mediaDevices`, `MediaStreamTrack`, or the spec subset in LLP 0001.
+  It is an explicit demo extension on the native module.
+
+## Non-goals
+
+- **Not a W3C Media Capture feature.** LiDAR depth frames are out of scope for
+  the v1 `getUserMedia` subset.
+- **Not ARKit rendering.** ARKit may track and produce depth, but SceneKit,
+  RealityKit, and native Metal rendering are intentionally avoided so WebGPU is
+  the visible rendering layer.
+- **Not a full AR app.** Anchors, planes, meshing, hit testing, persistence, and
+  world reconstruction are left for future demos.
+
+## Demo: LiDAR depth field
+
+**Pitch:** Native ARKit LiDAR depth frames become a WebGPU point-cloud style
+depth and occlusion visualization in real time.
+
+**UX.**
+
+1. Open the demo on a LiDAR-capable iPhone.
+2. The app starts an ARKit world-tracking session with scene-depth semantics.
+3. The screen shows the live ARKit camera image as the preview background.
+4. WebGPU renders a split Compare viewport: live camera on the left and the
+   native LiDAR depth texture on the right. Depth mode expands the depth field,
+   and Focus mode uses the same depth texture for depth-of-field.
+5. A small status strip reports support, camera frame size, depth frame size,
+   frame count, center depth, selected target distance, observed depth range,
+   and a closer-than-target percentage sampled from the same native depth
+   texture that drives WebGPU depth cues.
+6. The selected focus/target distance can be pinned to the current center-depth
+   sample, so native LiDAR measurement places the WebGPU effect at the surface
+   under the reticle instead of relying only on fixed presets.
+
+**Architecture.**
+
+```
+ARWorldTrackingConfiguration + sceneDepth
+   ↓
+ARFrame.capturedImage + ARFrame.sceneDepth.depthMap
+   ↓
+StandardCamera native extension: 720p BGRA preview bytes + tight Float32 depth bytes
+   ↓
+JS swizzles preview bytes into WebGPU rgba8unorm + r32float textures
+   ↓
+WGSL fragment shader samples RGB + depth → comparison, depth, and focus views
+   ↓
+GPUCanvasContext.present()
+```
+
+## Native extension shape
+
+The native module exposes four demo-only calls:
+
+- `getLiDARDepthCapabilities()` reports support, simulator/device status, and
+  whether the ARKit scene-depth semantic is available.
+- `startLiDARDepthAsync()` starts the ARKit session and resolves with the same
+  capability payload.
+- `stopLiDARDepth()` pauses the ARKit session.
+- `getLatestLiDARDepthFrame()` returns the latest tight-packed Float32 depth
+  frame plus a 960x720 BGRA ARKit camera preview, or `null` while no frame is
+  available.
+
+ARKit and AVFoundation must hand camera ownership over deterministically. The
+demo must not rely on fixed sleeps between stopping a `getUserMedia` stream and
+starting ARKit, or between pausing ARKit and letting AVFoundation resume. The
+context-level LiDAR start path first stops the active standard stream, then
+awaits the native capture source's serialized release point before calling
+`startLiDARDepthAsync()`. The native LiDAR start promise resolves only after
+ARKit has produced a first scene-depth frame, so JS `lidarStatus: "running"`
+means both camera ownership and depth delivery are proven. The stop path awaits
+ARKit pause before clearing the external camera lock.
+
+Runtime ARKit failures and interruptions are native session-state transitions,
+not merely missing frames. The native sidecar reports `starting`, `running`,
+`interrupted`, `failed`, and `stopped` state through its capability payload and
+module events so the shared camera context can keep AVFoundation locked while
+ARKit is interrupted, and can release the lock on failure or stop.
+
+The frame object contains:
+
+- `width`, `height`
+- `depthData`: `Uint8Array` containing `width * height` little-endian
+  Float32 depth meters
+- `depthFormat`: `"r32float"`
+- `colorWidth`, `colorHeight`
+- `colorData`: optional `Uint8Array` containing `colorWidth * colorHeight * 4`
+  BGRA camera preview bytes
+- `colorFormat`: optional `"bgra8unorm"`
+- `frameNumber`
+- `minDepth`, `maxDepth`, `meanDepth`
+
+## Implementation status
+
+The first implementation is present as `src/app/(tabs)/(demo)/lidar-depth.tsx`,
+`modules/standard-camera/ios/LiDARDepthSource.swift`, and the four demo-only
+module calls in `StandardCameraModule.swift`. It builds on the iOS simulator and
+the WPT runner remains green for the applicable Media Capture subset.
+
+The route's Start/Stop affordance is intentionally driven through
+`CameraContext`, alongside the shared `getUserMedia` camera state. ARKit and
+AVFoundation compete for the same iOS camera device, so the context treats the
+LiDAR session as an external camera owner: starting LiDAR stops and locks the
+standard stream, while stopping LiDAR releases that lock and lets the standard
+camera resume only if the user had not explicitly stopped it.
+
+Physical LiDAR validation is still pending. The route can be launched with
+`?autorun=1` for non-interactive validation; the first live native frame logs a
+`LIDAR_DEPTH_LIVE` record with frame number, camera/depth dimensions, depth
+range, center depth, and closer-than-target ratio. The remaining proof is to run
+this route on a LiDAR-capable iPhone and confirm that frame numbers rise, the
+WebGPU canvas visibly reacts to near/far geometry, and Pin center changes the
+selected target distance from a live ARKit depth sample.
+
+## Validation
+
+A useful first version is complete when:
+
+1. It builds on iOS after adding ARKit to the local module podspec.
+2. It reports unsupported instead of crashing on simulator/non-LiDAR devices.
+3. It runs on a LiDAR-capable physical device and reports rising frame numbers.
+4. The WebGPU canvas shows the live camera preview, visibly changes when the
+   phone points at near vs far geometry, the Compare viewport shows the native
+   depth texture beside the camera view, and Focus mode blurs out-of-target
+   geometry from the same native depth texture.
+5. The closer-than-target readout rises when a real object enters the selected
+   target distance, proving the native LiDAR depth frame is active even when
+   the camera image alone would look unchanged.
+6. Pinning to the center depth changes the selected focus/target distance to
+   the latest valid LiDAR center sample.
+7. The demo catalog labels it as native LiDAR plus WebGPU, not as W3C
+   `getUserMedia`.
+
+## Future directions
+
+- Occlusion demo: web-rendered objects disappear behind real geometry.
+- Depth bokeh: blur far surfaces in WebGPU using the native depth texture.
+- Measurement overlay: sample depth under crosshair and show approximate range.
+- Mesh mode: estimate normals from the depth map and relight the scene in WGSL.

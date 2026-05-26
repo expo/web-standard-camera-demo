@@ -73,8 +73,6 @@ internal final class CaptureSource {
       if session.isRunning {
         session.stopRunning()
       }
-      // @ref LLP 0009#audio-session-configuration — release the system audio
-      // session so other apps can resume playback when the last reference goes.
       if hadAudio {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
       }
@@ -100,12 +98,42 @@ internal final class CaptureSource {
     lock.unlock()
     liveTracks.remove(track)
     if shouldStop {
-      let session = self.session
+      let source = self
       MediaStream.sessionQueue.async {
-        if session.isRunning {
-          session.stopRunning()
-        }
+        source.stopSessionAndDeactivateAudioIfNeeded()
       }
+    }
+  }
+
+  // @ref LLP 0012#native-extension-shape — ARKit cannot take the camera until
+  // the AVFoundation source has actually reached the serialized stop point on
+  // `MediaStream.sessionQueue`.
+  func waitForRelease(completion: @escaping (Bool) -> Void) {
+    let source = self
+    MediaStream.sessionQueue.async {
+      let released = !source.hasLiveTracks
+      if released {
+        source.stopSessionAndDeactivateAudioIfNeeded()
+      }
+      completion(released)
+    }
+  }
+
+  private var hasLiveTracks: Bool {
+    lock.lock()
+    let count = liveTrackCount
+    lock.unlock()
+    return count > 0
+  }
+
+  private func stopSessionAndDeactivateAudioIfNeeded() {
+    if session.isRunning {
+      session.stopRunning()
+    }
+    // @ref LLP 0009#audio-session-configuration — release the system audio
+    // session so other apps can resume playback when the last reference goes.
+    if audioDevice != nil {
+      try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
   }
 

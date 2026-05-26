@@ -50,7 +50,19 @@ function facingOfDevice(label: string): 'user' | 'environment' | null {
 
 export default function HomeScreen(): React.JSX.Element {
   const theme = useTheme();
-  const { stream, status, error, constraints, settings, devices, userStopped, start, stop, applyConstraints } = useCamera();
+  const {
+    stream,
+    status,
+    error,
+    constraints,
+    settings,
+    devices,
+    userStopped,
+    externalLocked,
+    start,
+    stop,
+    applyConstraints,
+  } = useCamera();
   const videoRef = React.useRef<HTMLVideoElement>(null);
 
   // Mirror the context stream onto the local Video element. The element only
@@ -73,12 +85,18 @@ export default function HomeScreen(): React.JSX.Element {
   // screens that want the camera ask explicitly. Honor an explicit user Stop
   // so this effect doesn't fight the Stop button.
   React.useEffect(() => {
-    if (userStopped) return;
-    if (!stream && status !== 'requesting' && status !== 'error') {
+    if (userStopped || externalLocked) return;
+    if (
+      !stream &&
+      status !== 'requesting' &&
+      status !== 'starting' &&
+      status !== 'stopping' &&
+      status !== 'error'
+    ) {
       void start();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream, status, userStopped]);
+  }, [stream, status, userStopped, externalLocked]);
 
   // Resolve the user's current facing intent from explicit state or the
   // resolved track settings. `deviceId` selection can imply either side.
@@ -132,7 +150,7 @@ export default function HomeScreen(): React.JSX.Element {
 
       <View style={styles.controls}>
         {!stream ? (
-          <Button title="Start camera" onPress={() => void start()} />
+          <Button title="Start camera" disabled={externalLocked} onPress={() => void start()} />
         ) : (
           <Button title="Stop camera" onPress={stop} />
         )}

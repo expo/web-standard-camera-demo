@@ -75,13 +75,29 @@ table in `testharness.ts`:
   these with the rationale from the table as the message — readers can
   distinguish "browser-only" from "feature outside our scope".
 
-The runner derives the environment via `detectEnvironment()` (calls
-`enumerateDevices()`, which is permission-free) plus the existing
-`gUM({video})` probe, then pre-skips any test whose requirement isn't met
-with a clear message ("skipped: requires a real camera device"). This
-classification is also surfaced in `WPT_DONE` so the CLI and in-app UI can
-display "X applicable on simulator / Y total" rather than "13 passed / 36
-skipped" — the latter reads as broken even though it's expected.
+The runner derives the environment from two `gUM` probes — `{video:true}`
+and `{audio:true}` — issued at run start, before any test bodies execute.
+The probes serve two purposes: on a real device they trigger iOS's camera
+and microphone permission prompts up front (so the user grants both before
+a test body opens a stream and the prompt would otherwise appear mid-suite),
+and they give an authoritative answer for whether each capture kind is
+usable here. The pre-run header (rendered before the user taps Run) still
+uses `detectEnvironment()` (which calls `enumerateDevices()` and is
+permission-free) as a best-effort initial display, but the screen replaces
+it with the probe-derived env via the runner's `onEnvironment` callback as
+soon as the probes resolve. This matters for audio in particular: on iOS,
+`AVCaptureDevice.default(for: .audio)` returns `nil` until AVAudioSession
+has been configured, so `enumerateDevices()` reports `hasMicrophone:false`
+on first launch even with mic permission already granted. Without the audio
+probe, every mic-required test would be pre-skipped as "deviceMissing" and
+the user would see them tallied only in the final `WPT_DONE` summary rather
+than actually executed.
+
+Tests whose requirement isn't met by the resolved env are pre-skipped with a
+clear message ("skipped: requires a real camera device"). The classification
+is also surfaced in `WPT_DONE` so the CLI and in-app UI can display "X
+applicable on simulator / Y total" rather than "13 passed / 36 skipped" —
+the latter reads as broken even though it's expected.
 
 The runtime `NotFoundError` safety net stays in place: if a test was
 misclassified as `'always'` but turns out to depend on a camera, it still
@@ -108,6 +124,45 @@ Located in `modules/standard-camera/src/testing/wpt/`:
 - `MediaStreamTrack-mute.ts` — covers `track.muted`, `mute` / `unmute` events, the empty-label-after-stop invariant, and the stop-stops-session step from LLP 0003. The mute/unmute path is exercised via a test-only native hook (`stream._native.__simulateInterruptionForTesting`) that posts a synthetic `AVCaptureSession.wasInterruptedNotification`.
 
 Adding a new test: drop a file under `testing/wpt/`, import it from `testing/index.ts`, and add a one-line entry in this LLP.
+
+## Static test registration
+
+Every test must call `test()` / `promise_test()` / `async_test()` at
+module-load time. The runner sets `registrationLocked = true` immediately
+before the test loop begins, and `registerTest` throws if it sees a call
+from within a running test body or a helper invoked from one. The throw
+fails the offending test but does not corrupt the suite; the loop just
+continues.
+
+This is a deliberate deviation from upstream WPT, which permits
+discover-then-register patterns where a parent test queries the device's
+runtime capabilities and registers a sub-test per discovered property via
+`test()` calls inside its own callback. We disallow it for two reasons:
+
+1. The in-app runner pre-renders the full list of test rows on screen
+   mount. A test that doesn't exist yet can't have a row, so the
+   `applicable / total` counter drifts upward as the suite runs — the
+   user-visible "total kept counting after the suite finished" symptom
+   that motivated this rule.
+2. TDD against a feature that doesn't work yet (audio support, in
+   practice) wants every expected test to show up as `pending → fail`
+   immediately, not "you have to actually open a stream before we know
+   what to assert."
+
+The one file that previously used the upstream pattern,
+`MediaStreamTrack-getCapabilities.ts`, is adapted (not verbatim) to
+expand `testCapabilities(capabilities, property, prefix)` into
+pre-registered per-property sub-tests at module load. A single setup
+`promise_test` per category (audio track / video track / audio device /
+video device) opens the stream, snapshots `getCapabilities()` into
+module-scope state, and the per-property sub-tests consume that
+snapshot. The setup runs first by registration order; if it throws, all
+dependent sub-tests rethrow the same error so they all surface the
+concrete cause.
+
+When porting a new WPT file that uses the discover-then-register pattern,
+flatten it the same way. The static-registration error message points
+back to this section.
 
 ## The simulator does not have a camera device
 
@@ -152,7 +207,7 @@ As of 2026-05-22 the canonical green-test claim is "49/49 on iPhone 15 Pro / iOS
 `scripts/test-ios.ts`:
 
 1. Resolve an iOS 26 runtime. Prefer one already installed; error clearly otherwise.
-2. Create or boot a device named `standard-camera-test` of type `iPhone 16 Pro` on that runtime.
+2. Create or boot a device named `standard-camera-app` of type `iPhone 17 Pro` on that runtime.
 3. Grant camera privacy: `xcrun simctl privacy <UDID> grant camera dev.ide.standardcameraapp`. (The simulator's synthetic camera will satisfy capture.)
 4. Build and install the app:
    - `expo prebuild --platform ios --clean` if `ios/` directory is missing or stale (hash-tracked)

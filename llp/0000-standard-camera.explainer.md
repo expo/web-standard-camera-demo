@@ -6,7 +6,7 @@
 **Role:** Root
 **Author:** James Ide
 **Date:** 2026-05-19 (audio added 2026-05-22)
-**Related:** 0001, 0005, 0006, 0007, 0009
+**Related:** 0001, 0005, 0006, 0007, 0009, 0012, 0013, 0014, 0015, 0016, 0017, 0018
 
 ## Summary
 
@@ -27,6 +27,12 @@ This is a learning exercise more than a production library. The hypothesis being
 
 - Android (call it out in the module manifest; no Kotlin)
 - `getDisplayMedia`, `MediaRecorder`
+- Media Capture depth tracks / `videoKind: "depth"` from the discontinued W3C
+  Media Capture Depth Stream Extensions draft. Native LiDAR depth can power
+  demos, but it is not exposed through this repo's `getUserMedia` subset.
+- WebXR / WebXR depth sensing. That is the more active standards family for AR
+  depth, but it is an XR runtime surface, not a camera API extension. LLP 0013
+  specifies a research-only WebXR-shaped API for the LiDAR demo.
 - Web platform output of the module
 - Permissions UI beyond the native iOS prompts (driven by `NSCameraUsageDescription` + `NSMicrophoneUsageDescription`)
 
@@ -94,7 +100,15 @@ See [LLP 0005](./0005-ios-native-mapping.decision.md) for the details of the iOS
 │   ├── 0006-navigator-polyfill.decision.md
 │   ├── 0007-in-app-wpt-runner.guide.md
 │   ├── 0008-w3c-spec-text.spec.md     verbatim spec source-of-truth
-│   └── 0009-audio-ios-mapping.decision.md
+│   ├── 0009-audio-ios-mapping.decision.md
+│   ├── 0010-webgpu-camera-demos.plan.md
+│   ├── 0012-lidar-webgpu-depth-demo.plan.md
+│   ├── 0013-webxr-lidar-depth-api.spec.md
+│   ├── 0014-webxr-device-api-spec-slices.spec.md
+│   ├── 0015-webxr-ar-module-spec-slices.spec.md
+│   ├── 0016-webxr-depth-sensing-spec-slices.spec.md
+│   ├── 0017-webxr-raw-camera-access-spec-slices.spec.md
+│   └── 0018-mediacapture-depth-spec-slices.spec.md
 ├── modules/
 │   └── standard-camera/               local Expo module
 └── scripts/
@@ -104,7 +118,12 @@ See [LLP 0005](./0005-ios-native-mapping.decision.md) for the details of the iOS
 ## References
 
 - [W3C: Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/) — primary normative spec
+- [W3C: Media Capture Depth Stream Extensions](https://www.w3.org/TR/mediacapture-depth/) - discontinued depth-track extension evaluated in LLP 0012
 - [HTML living standard: `HTMLMediaElement.srcObject`](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject)
+- [W3C: WebXR Device API](https://www.w3.org/TR/webxr/) - upstream XR API shape for the research-only LiDAR proposal
+- [W3C: WebXR Augmented Reality Module](https://www.w3.org/TR/webxr-ar-module-1/) - upstream AR session shape for the research-only LiDAR proposal
+- [W3C: WebXR Depth Sensing Module](https://www.w3.org/TR/webxr-depth-sensing-1/) - upstream depth feature shape for the research-only LiDAR proposal
+- [Immersive Web: WebXR Raw Camera Access](https://immersive-web.github.io/raw-camera-access/) - camera-pixel draft evaluated for the research-only LiDAR proposal
 - [`web-platform-tests/wpt` — `mediacapture-streams/`](https://github.com/web-platform-tests/wpt/tree/master/mediacapture-streams) — the tests we adapt
 - [LLP project](https://github.com/ccheever/llp)
 - [Expo SDK 56 beta release notes](https://staging.expo.dev/changelog/sdk-56-beta)

@@ -64,6 +64,7 @@ import './local/enumerate-multi-device';
 import './local/facingMode-switch';
 import './local/frameRate-resolution';
 import './local/MediaStream-construction';
+import './local/MediaStreamTrack-disabled-video';
 import './local/MediaStreamTrack-mute';
 
 // WPT — not applicable in React Native. These depend on browser-platform

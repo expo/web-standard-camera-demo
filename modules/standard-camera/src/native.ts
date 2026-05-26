@@ -82,6 +82,13 @@ export interface NativeMediaStream {
   // @ref LLP 0008#dom-mediastream-clone
   clone(): NativeMediaStream;
 
+  /**
+   * @internal Demo-only handoff hook. Stops this stream's native tracks and
+   * resolves after AVFoundation has reached the serialized capture release
+   * point so ARKit can safely take over the camera.
+   */
+  __stopTracksAndWaitForCaptureReleaseAsync(): Promise<void>;
+
   /** @internal Test-only hook. Posts a synthetic AVCaptureSession interruption. */
   __simulateInterruptionForTesting(reasonCode: number, ended: boolean): void;
 }
@@ -100,6 +107,19 @@ interface NativeStandardCameraModule {
   __systemLogForTesting(message: string): void;
   /** Read-only diagnostics. Permission lookups do NOT trigger iOS prompts. */
   getDiagnostics(): NativeDiagnostics;
+  /**
+   * @internal Demo-only LiDAR extension. This is intentionally not part of the
+   * W3C Media Capture surface; see LLP 0012.
+   */
+  getLiDARDepthCapabilities(): NativeLiDARDepthCapabilities;
+  startLiDARDepthAsync(): Promise<NativeLiDARDepthCapabilities>;
+  stopLiDARDepthAsync(): Promise<void>;
+  stopLiDARDepth(): void;
+  getLatestLiDARDepthFrame(): NativeLiDARDepthFrame | null;
+  addListener(
+    eventName: 'onLiDARDepthSessionState',
+    listener: (event: NativeLiDARDepthSessionEvent) => void
+  ): EventSubscription;
 }
 
 export type AuthorizationStatus = 'authorized' | 'denied' | 'not-determined' | 'restricted' | 'unknown';
@@ -117,6 +137,49 @@ export interface NativeDiagnostics {
   readonly isSimulator: boolean;
   readonly cameraAuthorization: AuthorizationStatus;
   readonly microphoneAuthorization: AuthorizationStatus;
+}
+
+export type NativeLiDARDepthSessionState =
+  | 'idle'
+  | 'starting'
+  | 'running'
+  | 'interrupted'
+  | 'failed'
+  | 'stopped';
+
+export interface NativeLiDARDepthCapabilities {
+  readonly supported: boolean;
+  readonly running: boolean;
+  readonly state?: NativeLiDARDepthSessionState;
+  readonly sessionId?: number;
+  readonly frameNumber?: number;
+  readonly sceneDepth: boolean;
+  readonly smoothedSceneDepth: boolean;
+  readonly reason?: string;
+}
+
+export interface NativeLiDARDepthSessionEvent {
+  readonly sessionId: number;
+  readonly state: NativeLiDARDepthSessionState;
+  readonly frameNumber?: number;
+  readonly reason?: string;
+}
+
+export interface NativeLiDARDepthFrame {
+  readonly width: number;
+  readonly height: number;
+  /** `width * height * 4` bytes, Float32 depth in meters, no row padding. */
+  readonly depthData: Uint8Array;
+  readonly depthFormat: 'r32float';
+  /** Low-resolution ARKit camera preview paired with the depth frame, when available. */
+  readonly colorWidth?: number;
+  readonly colorHeight?: number;
+  readonly colorData?: Uint8Array;
+  readonly colorFormat?: 'bgra8unorm';
+  readonly frameNumber: number;
+  readonly minDepth: number;
+  readonly maxDepth: number;
+  readonly meanDepth: number;
 }
 
 export default requireNativeModule<NativeStandardCameraModule>('StandardCamera');

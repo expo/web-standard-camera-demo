@@ -1,5 +1,9 @@
+import { Host, Picker, Text as UIText } from '@expo/ui/swift-ui';
+import { pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import * as Device from 'expo-device';
+import { SymbolView } from 'expo-symbols';
 import * as React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
@@ -14,7 +18,7 @@ struct RenderUniforms {
   time: f32,
   label: f32,
   confidence: f32,
-  _pad0: f32,
+  rotate: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: RenderUniforms;
@@ -40,21 +44,18 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOut {
   return out;
 }
 
-fn labelColor(label: f32) -> vec3f {
-  if (label < 0.5) { return vec3f(0.35, 0.62, 1.0); }
-  if (label < 1.5) { return vec3f(1.0, 0.47, 0.18); }
-  if (label < 2.5) { return vec3f(0.18, 0.78, 0.92); }
-  if (label < 3.5) { return vec3f(0.95, 0.95, 0.95); }
-  return vec3f(0.25, 1.0, 0.58);
+fn previewUv(uv: vec2f) -> vec2f {
+  if (u.rotate < 0.5) {
+    return uv;
+  }
+  return vec2f(uv.y, 1.0 - uv.x);
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
-  let c = textureSample(srcTex, srcSampler, clamp(in.uv, vec2f(0.0), vec2f(1.0))).rgb;
-  let scan = 0.04 * sin((in.uv.y + u.time * 0.18) * 190.0);
-  let tint = labelColor(u.label);
-  let mixed = mix(c, tint, clamp(u.confidence * 0.18, 0.0, 0.22));
-  return vec4f(clamp(mixed + scan, vec3f(0.0), vec3f(1.0)), 1.0);
+  let uv = previewUv(in.uv);
+  let c = textureSample(srcTex, srcSampler, clamp(uv, vec2f(0.0), vec2f(1.0))).rgb;
+  return vec4f(c, 1.0);
 }
 `;
 
@@ -127,11 +128,13 @@ fn classify() {
 `;
 
 const SYNTHETIC_SIZE = 256;
+const SYNTHETIC_FALLBACK_DELAY_MS = 3000;
 const FRAME_UPLOAD_INTERVAL_MS = 100;
 const INFERENCE_INTERVAL_MS = 450;
 const RELAXED_CAMERA_RETRY_MS = 2500;
+const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
 const SCORE_FLOATS = 8;
-const DEMO_CAPTURE_CONSTRAINTS = { width: 640, height: 480, frameRate: 30 } as const;
+const DEMO_CAPTURE_CONSTRAINTS = { width: 1280, height: 720, frameRate: 30 } as const;
 const RELAXED_CAPTURE_CONSTRAINTS = { frameRate: 30 } as const;
 
 const LABELS = [
@@ -144,6 +147,11 @@ const LABELS = [
 
 interface Frame {
   data: Uint8Array;
+  height: number;
+  width: number;
+}
+
+interface FrameDimensions {
   height: number;
   width: number;
 }
@@ -177,8 +185,9 @@ export default function NeuralLensScreen(): React.JSX.Element {
     error: cameraError,
     constraints,
     settings,
+    userStopped,
+    externalLocked,
     start,
-    stop,
     applyConstraints,
   } = useCamera();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
@@ -186,6 +195,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
   const [fps, setFps] = React.useState('0.0');
   const [frameSize, setFrameSize] = React.useState('pending');
+  const [frameDimensions, setFrameDimensions] = React.useState<FrameDimensions | null>(null);
   const [prediction, setPrediction] = React.useState<Prediction>(INITIAL_PREDICTION);
   const [lastFrameNumber, setLastFrameNumber] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -196,11 +206,18 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
   const rafRef = React.useRef<number | null>(null);
   const lastGrabErrorRef = React.useRef<string | null>(null);
+  const frameDimensionsRef = React.useRef<FrameDimensions | null>(null);
   const frameSizeRef = React.useRef('pending');
   const predictionRef = React.useRef(prediction);
+  const preserveCameraPreviewUntilRef = React.useRef(0);
   const sourceRef = React.useRef(source);
   const didAutoStartCameraRef = React.useRef(false);
   const didRetryRelaxedCameraRef = React.useRef(false);
+  // On real hardware we always suppress the synthetic test pattern so the
+  // brief startup flash and the post-Stop frame both look intentional. On
+  // the simulator we keep synthetic as the visual. Device.isDevice is
+  // stable for the process lifetime, so a single initialization is enough.
+  const suppressSyntheticRef = React.useRef(Device.isDevice);
   const settingsFacing =
     settings?.facingMode === 'user' || settings?.facingMode === 'environment'
       ? settings.facingMode
@@ -213,20 +230,42 @@ export default function NeuralLensScreen(): React.JSX.Element {
   }, []);
 
   const setFrameInfo = React.useCallback((width: number, height: number): void => {
+    const previous = frameDimensionsRef.current;
+    if (!previous || previous.width !== width || previous.height !== height) {
+      const nextDimensions = { height, width };
+      frameDimensionsRef.current = nextDimensions;
+      setFrameDimensions(nextDimensions);
+    }
     const next = `${width}x${height}`;
     if (frameSizeRef.current === next) return;
     frameSizeRef.current = next;
     setFrameSize(next);
   }, []);
 
-  const resetFrameState = React.useCallback((): void => {
+  const resetFrameState = React.useCallback((options?: { preserveCameraPreview?: boolean }): void => {
+    setGrabError(null);
+    if (options?.preserveCameraPreview && sourceRef.current === 'camera') {
+      preserveCameraPreviewUntilRef.current = Date.now() + CAMERA_SWITCH_PREVIEW_HOLD_MS;
+      return;
+    }
+    preserveCameraPreviewUntilRef.current = 0;
     sourceRef.current = 'pending';
+    frameDimensionsRef.current = null;
     frameSizeRef.current = 'pending';
     setSource('pending');
+    setFrameDimensions(null);
     setFrameSize('pending');
     setLastFrameNumber(null);
-    setGrabError(null);
   }, [setGrabError]);
+
+  React.useEffect(() => {
+    if (stream || (cameraStatus !== 'idle' && cameraStatus !== 'stopping' && cameraStatus !== 'ended')) {
+      return;
+    }
+    didRetryRelaxedCameraRef.current = false;
+    setCaptureProfile('demo');
+    resetFrameState();
+  }, [cameraStatus, resetFrameState, stream]);
 
   const retryRelaxedCamera = React.useCallback((): void => {
     if (didRetryRelaxedCameraRef.current) return;
@@ -247,15 +286,21 @@ export default function NeuralLensScreen(): React.JSX.Element {
     sourceRef.current = source;
   }, [source]);
 
+  // Auto-start only when there is no live stream — see shader-lens for the
+  // rationale. We still mark the capture profile as 'demo' for the HUD; the
+  // relaxed-fallback effect handles the case where Home's chosen mode can't
+  // deliver frames the classifier expects.
   React.useEffect(() => {
     if (didAutoStartCameraRef.current) return;
-    if (cameraStatus === 'requesting' || cameraStatus === 'starting') return;
+    if (userStopped || externalLocked) return;
+    if (cameraStatus === 'requesting' || cameraStatus === 'starting' || cameraStatus === 'stopping') return;
     didAutoStartCameraRef.current = true;
     setCaptureProfile('demo');
+    if (stream) return;
     resetFrameState();
-    void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
+    void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraStatus]);
+  }, [cameraStatus, userStopped, externalLocked, stream]);
 
   React.useEffect(() => {
     if (didRetryRelaxedCameraRef.current || source === 'camera' || cameraStatus !== 'error' || stream) {
@@ -444,6 +489,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
                 const bitmap = await imageCapture.grabFrame();
                 frame = { data: bitmap._data, height: bitmap.height, width: bitmap.width };
                 frameSource = 'camera';
+                preserveCameraPreviewUntilRef.current = 0;
                 lastSeenFrameNumber = bitmap._frameNumber;
                 bitmap.close();
                 setGrabError(null);
@@ -452,37 +498,52 @@ export default function NeuralLensScreen(): React.JSX.Element {
               }
             }
 
-            if (!frame) {
+            if (
+              !frame &&
+              renderBindGroup &&
+              sourceRef.current === 'camera' &&
+              now < preserveCameraPreviewUntilRef.current
+            ) {
+              lastUpload = now;
+            } else if (
+              !frame &&
+              !suppressSyntheticRef.current &&
+              now - startedAt >= SYNTHETIC_FALLBACK_DELAY_MS
+            ) {
               fillTestPattern(syntheticPixels, SYNTHETIC_SIZE, elapsed);
               frame = { data: syntheticPixels, height: SYNTHETIC_SIZE, width: SYNTHETIC_SIZE };
+            } else if (!frame) {
+              lastUpload = now;
             }
             if (cancelled) return;
 
-            if (frameSource !== lastReportedSource) {
-              lastReportedSource = frameSource;
-              sourceRef.current = frameSource;
-              setSource(frameSource);
-              if (__DEV__) {
-                // eslint-disable-next-line no-console
-                console.log(
-                  `NEURAL_LENS_SOURCE ${JSON.stringify({
-                    height: frame.height,
-                    source: frameSource,
-                    width: frame.width,
-                  })}`
-                );
+            if (frame) {
+              if (frameSource !== lastReportedSource || sourceRef.current !== frameSource) {
+                lastReportedSource = frameSource;
+                sourceRef.current = frameSource;
+                setSource(frameSource);
+                if (__DEV__) {
+                  // eslint-disable-next-line no-console
+                  console.log(
+                    `NEURAL_LENS_SOURCE ${JSON.stringify({
+                      height: frame.height,
+                      source: frameSource,
+                      width: frame.width,
+                    })}`
+                  );
+                }
               }
-            }
 
-            setFrameInfo(frame.width, frame.height);
-            ensureTexture(frame.width, frame.height);
-            device.queue.writeTexture(
-              { texture: cameraTexture! },
-              frame.data,
-              { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
-              { width: frame.width, height: frame.height }
-            );
-            lastUpload = now;
+              setFrameInfo(frame.width, frame.height);
+              ensureTexture(frame.width, frame.height);
+              device.queue.writeTexture(
+                { texture: cameraTexture! },
+                frame.data,
+                { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+                { width: frame.width, height: frame.height }
+              );
+              lastUpload = now;
+            }
           }
 
           if (!renderBindGroup) {
@@ -500,7 +561,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
               elapsed,
               currentPrediction.labelIndex,
               currentPrediction.confidence,
-              0,
+              texWidth > texHeight ? 1 : 0,
             ])
           );
 
@@ -573,11 +634,21 @@ export default function NeuralLensScreen(): React.JSX.Element {
     };
   }, [adapter, device, ref, setFrameInfo, setGrabError]);
 
-  const cameraOn = stream != null;
-  const canvasSide = Math.max(260, Math.min(windowWidth - 32, windowHeight - 520));
+  const targetPreviewAspect = DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
+  const previewAspect = frameDimensions
+    ? frameDimensions.width > frameDimensions.height
+      ? frameDimensions.height / frameDimensions.width
+      : frameDimensions.width / frameDimensions.height
+    : targetPreviewAspect;
+  const previewMaxHeight = Math.max(300, windowHeight - 500);
+  const previewMaxWidth = Math.max(240, windowWidth - 32);
+  const previewStageWidth = Math.max(240, Math.min(previewMaxWidth, previewMaxHeight * targetPreviewAspect));
+  const previewStageHeight = previewStageWidth / targetPreviewAspect;
+  const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
+  const previewHeight = previewWidth / previewAspect;
   const activeLabel = LABELS[prediction.labelIndex] ?? LABELS[0];
   const cameraFacing = constraints.facingMode ?? settingsFacing ?? 'environment';
-  const captureProfileLabel = captureProfile === 'demo' ? 'demo 640x480@30' : 'relaxed @30';
+  const captureProfileLabel = captureProfile === 'demo' ? 'demo 1280x720@30' : 'relaxed @30';
   const reportedFrameRate =
     typeof settings?.frameRate === 'number' ? `${Math.round(settings.frameRate)} fps` : 'fps pending';
   const cameraSettingsLine =
@@ -591,107 +662,102 @@ export default function NeuralLensScreen(): React.JSX.Element {
     (facingMode: 'user' | 'environment'): void => {
       didRetryRelaxedCameraRef.current = false;
       setCaptureProfile('demo');
-      resetFrameState();
-      applyConstraints({ ...DEMO_CAPTURE_CONSTRAINTS, facingMode });
+      resetFrameState({ preserveCameraPreview: true });
+      // Don't override the user's chosen resolution — applyConstraints
+      // merges into the stored constraints, so passing only `facingMode`
+      // keeps whatever width/height/frameRate Home had.
+      applyConstraints({ facingMode });
     },
     [applyConstraints, resetFrameState]
   );
-  const startDemoCamera = React.useCallback((): void => {
-    didRetryRelaxedCameraRef.current = false;
-    setCaptureProfile('demo');
-    resetFrameState();
-    void start({ ...constraints, ...DEMO_CAPTURE_CONSTRAINTS });
-  }, [constraints, resetFrameState, start]);
+  const showStoppedPlaceholder = Device.isDevice && source !== 'camera';
 
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.content}
-      contentInsetAdjustmentBehavior="automatic">
-      <Canvas ref={ref} style={[styles.canvas, { height: canvasSide, width: canvasSide }]} />
-
-      <View style={styles.controls}>
-        <View style={styles.controlRow}>
-          <Pressable
-            onPress={() => setFacing('environment')}
-            style={[styles.chip, cameraFacing === 'environment' ? styles.chipActive : null]}>
-            <Text style={[styles.chipText, cameraFacing === 'environment' ? styles.chipTextActive : null]}>
-              Back
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setFacing('user')}
-            style={[styles.chip, cameraFacing === 'user' ? styles.chipActive : null]}>
-            <Text style={[styles.chipText, cameraFacing === 'user' ? styles.chipTextActive : null]}>
-              Front
-            </Text>
-          </Pressable>
-        </View>
-
-        <Pressable
-          onPress={() => (cameraOn ? stop() : startDemoCamera())}
-          style={[styles.button, styles.fullButton]}>
-          <Text style={styles.buttonText}>{cameraOn ? 'Stop camera' : 'Start camera'}</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.predictionPanel}>
-        <Text style={[styles.predictionLabel, { color: activeLabel.color }]}>{activeLabel.name}</Text>
-        <Text style={styles.predictionMeta}>{Math.round(prediction.confidence * 100)}% confidence</Text>
-        <View style={styles.captureStatus}>
-          <Text
-            style={[
-              styles.captureBadge,
-              source === 'camera' ? styles.captureBadgeLive : styles.captureBadgeFallback,
-            ]}>
-            {sourceLabel}
-          </Text>
-          <Text style={styles.captureText}>request: {captureProfileLabel}</Text>
-          <Text style={styles.captureText}>camera: {cameraStatus} · {cameraSettingsLine}</Text>
-          <Text style={styles.captureText}>
-            uploaded: {frameSize} · iOS frames: {lastFrameNumber ?? 'pending'}
-          </Text>
-        </View>
-        <View style={styles.bars}>
-          {LABELS.map((label, index) => (
-            <View key={label.name} style={styles.barRow}>
-              <Text style={styles.barLabel}>{label.name}</Text>
-              <View style={styles.barTrack}>
-                <View
-                  style={[
-                    styles.barFill,
-                    {
-                      backgroundColor: label.color,
-                      width: `${Math.round((prediction.probabilities[index] ?? 0) * 100)}%`,
-                    },
-                  ]}
-                />
-              </View>
+    <>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        contentInsetAdjustmentBehavior="automatic">
+        <View style={[styles.previewStage, { height: previewStageHeight, width: previewStageWidth }]}>
+          <Canvas ref={ref} style={[styles.canvas, { height: previewHeight, width: previewWidth }]} />
+          {showStoppedPlaceholder ? (
+            <View pointerEvents="none" style={styles.stoppedOverlay}>
+              <SymbolView
+                name="video.slash.fill"
+                size={56}
+                weight="semibold"
+                tintColor="#94a3b8"
+              />
             </View>
-          ))}
+          ) : null}
         </View>
-      </View>
 
-      <View style={styles.hud}>
-        <Text style={styles.hudText}>Neural lens · {status}</Text>
-        <Text style={styles.hudSub}>
-          source: {source} · frame: {frameSize} · fps: {fps} · camera: {cameraStatus}
-        </Text>
-        <Text style={styles.hudSub}>
-          features: brightness {prediction.features.brightness.toFixed(2)} · contrast{' '}
-          {prediction.features.contrast.toFixed(2)} · edge {prediction.features.edge.toFixed(2)}
-        </Text>
-        {lastFrameNumber !== null && cameraOn ? (
-          <Text style={styles.hudSub}>iOS frames delivered: {lastFrameNumber}</Text>
-        ) : null}
-        {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
-        {lastGrabError && source !== 'camera' ? (
-          <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
-        ) : null}
-        {inferenceError ? <Text style={styles.hudError}>inference: {inferenceError}</Text> : null}
-        {error ? <Text style={styles.hudError}>{error}</Text> : null}
-      </View>
-    </ScrollView>
+        <View style={styles.controls}>
+          <Host style={styles.pickerHost}>
+            <Picker
+              modifiers={[pickerStyle('segmented')]}
+              label="Camera"
+              selection={cameraFacing}
+              onSelectionChange={(value) => setFacing(value as 'user' | 'environment')}>
+              <UIText modifiers={[tag('environment')]}>Back</UIText>
+              <UIText modifiers={[tag('user')]}>Front</UIText>
+            </Picker>
+          </Host>
+        </View>
+
+        <View style={styles.predictionPanel}>
+          <Text style={[styles.predictionLabel, { color: activeLabel.color }]}>{activeLabel.name}</Text>
+          <Text style={styles.predictionMeta}>{Math.round(prediction.confidence * 100)}% confidence</Text>
+          <View style={styles.captureStatus}>
+            <Text
+              style={[
+                styles.captureBadge,
+                source === 'camera' ? styles.captureBadgeLive : styles.captureBadgeFallback,
+              ]}>
+              {sourceLabel}
+            </Text>
+            <Text style={styles.captureText}>camera: {cameraSettingsLine}</Text>
+            <Text style={styles.captureText}>request: {captureProfileLabel}</Text>
+            <Text style={styles.captureText}>
+              uploaded: {frameSize} · iOS frames: {lastFrameNumber ?? 'pending'}
+            </Text>
+          </View>
+          <View style={styles.bars}>
+            {LABELS.map((label, index) => (
+              <View key={label.name} style={styles.barRow}>
+                <Text style={styles.barLabel}>{label.name}</Text>
+                <View style={styles.barTrack}>
+                  <View
+                    style={[
+                      styles.barFill,
+                      {
+                        backgroundColor: label.color,
+                        width: `${Math.round((prediction.probabilities[index] ?? 0) * 100)}%`,
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={styles.hud}>
+          <Text style={styles.hudText}>Neural lens · {status}</Text>
+          <Text style={styles.hudSub}>render: {fps} fps · source: {source} · uploaded: {frameSize}</Text>
+          <Text style={styles.hudSub}>
+            features: brightness {prediction.features.brightness.toFixed(2)} · contrast{' '}
+            {prediction.features.contrast.toFixed(2)} · edge {prediction.features.edge.toFixed(2)}
+          </Text>
+          {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
+          {lastGrabError && source !== 'camera' ? (
+            <Text style={styles.hudSub}>grabFrame: {lastGrabError}</Text>
+          ) : null}
+          {inferenceError ? <Text style={styles.hudError}>inference: {inferenceError}</Text> : null}
+          {error ? <Text style={styles.hudError}>{error}</Text> : null}
+        </View>
+      </ScrollView>
+    </>
   );
 }
 
@@ -751,6 +817,20 @@ const styles = StyleSheet.create({
   },
   canvas: {
     backgroundColor: '#080b12',
+  },
+  previewStage: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  stoppedOverlay: {
+    alignItems: 'center',
+    backgroundColor: '#000',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
   },
   predictionPanel: {
     alignSelf: 'stretch',
@@ -819,48 +899,12 @@ const styles = StyleSheet.create({
   },
   controls: {
     alignSelf: 'stretch',
-    gap: 10,
+    gap: 12,
     paddingHorizontal: 16,
   },
-  controlRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  chip: {
-    backgroundColor: 'rgba(255, 255, 255, 0.11)',
-    borderRadius: 8,
-    minHeight: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  chipActive: {
-    backgroundColor: '#f8fafc',
-  },
-  chipText: {
-    color: '#cbd5e1',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  chipTextActive: {
-    color: '#0f172a',
-  },
-  button: {
-    alignItems: 'center',
-    backgroundColor: '#60a5fa',
-    borderRadius: 8,
-    justifyContent: 'center',
-    minHeight: 40,
-    paddingHorizontal: 12,
-  },
-  fullButton: {
+  pickerHost: {
     alignSelf: 'stretch',
-  },
-  buttonText: {
-    color: '#07111f',
-    fontSize: 14,
-    fontWeight: '800',
-    textAlign: 'center',
+    height: 34,
   },
   hud: {
     alignSelf: 'stretch',

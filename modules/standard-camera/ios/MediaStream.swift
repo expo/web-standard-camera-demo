@@ -74,6 +74,57 @@ internal final class MediaStream: SharedObject {
     return MediaStream(id: UUID().uuidString, tracks: clonedTracks)
   }
 
+  // @ref LLP 0012#native-extension-shape — Demo-only ownership handoff helper.
+  // It preserves MediaStreamTrack.stop()'s synchronous readyState transition,
+  // then resolves only after the underlying CaptureSource has passed through
+  // the serialized AVFoundation stop point.
+  func stopTracksAndWaitForCaptureRelease(completion: @escaping (Bool) -> Void) {
+    let sources = uniqueCaptureSources()
+    for track in tracks {
+      track.stop()
+    }
+    guard !sources.isEmpty else {
+      MediaStream.sessionQueue.async {
+        completion(true)
+      }
+      return
+    }
+
+    let group = DispatchGroup()
+    let resultLock = NSLock()
+    var allReleased = true
+    for source in sources {
+      group.enter()
+      source.waitForRelease { released in
+        if !released {
+          resultLock.lock()
+          allReleased = false
+          resultLock.unlock()
+        }
+        group.leave()
+      }
+    }
+    group.notify(queue: .main) {
+      resultLock.lock()
+      let released = allReleased
+      resultLock.unlock()
+      completion(released)
+    }
+  }
+
+  private func uniqueCaptureSources() -> [CaptureSource] {
+    var seen = Set<ObjectIdentifier>()
+    var sources: [CaptureSource] = []
+    for track in tracks {
+      guard let source = track.source else { continue }
+      let id = ObjectIdentifier(source)
+      if seen.insert(id).inserted {
+        sources.append(source)
+      }
+    }
+    return sources
+  }
+
   // The first video track's CaptureSource owns the AVCaptureSession that the
   // <Video> view's preview layer should attach to. Returns nil if there are
   // no native-backed video tracks (i.e., a script-constructed MediaStream

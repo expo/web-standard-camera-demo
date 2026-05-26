@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Button, Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Canvas, useCanvasRef, useDevice } from 'react-native-wgpu';
 
 import { useCamera } from '@/contexts/CameraContext';
@@ -114,18 +114,26 @@ interface Frame {
 export default function CubeOfCamerasScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
-  const { stream, status: cameraStatus, error: cameraError, userStopped, start, stop } = useCamera();
+  const { stream, status: cameraStatus, error: cameraError, userStopped, externalLocked, start } = useCamera();
 
   // Defense-in-depth start-on-mount: the provider auto-starts at app launch,
   // but Fast Refresh can strand that effect. Honor an explicit user Stop so
-  // this effect doesn't fight the Stop button.
+  // this effect doesn't fight the Stop button. Also bail while `externalLocked`
+  // so we don't fight ARKit (the LiDAR demo) for the AVCaptureDevice when its
+  // screen sits above ours in the stack.
   React.useEffect(() => {
-    if (userStopped) return;
-    if (!stream && cameraStatus !== 'requesting' && cameraStatus !== 'error') {
+    if (userStopped || externalLocked) return;
+    if (
+      !stream &&
+      cameraStatus !== 'requesting' &&
+      cameraStatus !== 'starting' &&
+      cameraStatus !== 'stopping' &&
+      cameraStatus !== 'error'
+    ) {
       void start();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream, cameraStatus, userStopped]);
+  }, [stream, cameraStatus, userStopped, externalLocked]);
   const [status, setStatus] = React.useState('initializing');
   const [source, setSource] = React.useState<'pending' | 'camera' | 'synthetic'>('pending');
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
@@ -422,7 +430,10 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     };
   }, [device, adapter, ref]);
 
-  const cameraOn = stream != null;
+  // Driven by the status machine, not `stream != null`, so an externally
+  // ended track (status='ended', stream still set) doesn't leave the nav
+  // button claiming "Stop" against a dead camera.
+  const cameraOn = cameraStatus === 'playing';
   const subtitle = !cameraOn
     ? 'Camera stopped — synthetic frames standing in. Tap Start camera to share the live feed with the Home tab too.'
     : source === 'camera'
@@ -437,13 +448,6 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
       contentContainerStyle={styles.scrollContent}
       contentInsetAdjustmentBehavior="automatic">
       <Canvas ref={ref} style={styles.canvas} />
-      <View style={styles.controls}>
-        <Button
-          title={cameraOn ? 'Stop camera' : 'Start camera'}
-          onPress={() => (cameraOn ? stop() : void start())}
-          color="#60a5fa"
-        />
-      </View>
       <View style={styles.hud}>
         <Text style={styles.hudText}>Cube of cameras · {status}</Text>
         <Text style={styles.hudSub}>{subtitle}</Text>
@@ -563,11 +567,6 @@ const styles = StyleSheet.create({
   canvas: {
     width: CANVAS_SIDE,
     height: CANVAS_SIDE,
-  },
-  controls: {
-    alignSelf: 'stretch',
-    paddingHorizontal: 16,
-    paddingTop: 12,
   },
   hud: {
     paddingHorizontal: 16,

@@ -182,13 +182,34 @@ export default function RunTestsScreen(): React.JSX.Element {
   // start of every run. Drives the "X applicable / Y total" header so users
   // on the simulator don't see a high skip count and assume the suite is
   // broken — it just isn't relevant to a device-less host.
-  const [environment, setEnvironment] = React.useState<TestEnvironment | null>(null);
+  const [environment, setEnvironmentRaw] = React.useState<TestEnvironment | null>(null);
+  // Wrap setEnvironment to log every transition with a short stack trace so
+  // we can tell whether a stale value from the mount-time `detectEnvironment`
+  // is overwriting the authoritative probe-derived env from `runAllTests`.
+  const setEnvironment = React.useCallback((next: TestEnvironment | null): void => {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[wpt:debug] screen setEnvironment(${JSON.stringify(next)}) from ${
+        (new Error().stack ?? '').split('\n').slice(2, 4).join(' | ')
+      }`
+    );
+    setEnvironmentRaw(next);
+  }, []);
 
   const total = rows.length;
   const applicability = React.useMemo(
     () => (environment ? computeApplicability(rows, environment) : null),
     [rows, environment]
   );
+  // Log every applicability recomputation so we can pin down exactly when
+  // the "needs a microphone" count flips. Pair with the `setEnvironment`
+  // log above to attribute the change to a specific caller.
+  React.useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[wpt:debug] screen applicability=${JSON.stringify(applicability)} env=${JSON.stringify(environment)}`
+    );
+  }, [applicability, environment]);
 
   // Buffered update path. `onStart` / `onResult` write the row patch into a
   // ref-backed Map (very cheap — no setState, no render). A timer drains the
@@ -238,8 +259,19 @@ export default function RunTestsScreen(): React.JSX.Element {
     ac.abort();
   }, []);
 
+  // Parsed once from the deep link so both autorun and the Run button apply
+  // the same filter. Read inside `run` via the ref so changing the URL
+  // mid-session doesn't invalidate the memoized callback.
+  const url = Linking.useLinkingURL();
+  const onlyRef = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    const m = url ? /[?&]only=([^&]+)/.exec(url) : null;
+    onlyRef.current = m ? decodeURIComponent(m[1]) : undefined;
+  }, [url]);
+
   const run = React.useCallback(async () => {
     if (!videoRef.current) return;
+    const only = onlyRef.current;
     runAbortRef.current?.abort();
     const ac = new AbortController();
     runAbortRef.current = ac;
@@ -247,12 +279,12 @@ export default function RunTestsScreen(): React.JSX.Element {
     const t0 = now();
     notifyTestRunStart();
     setRunning(true);
-    // Refresh the environment detection right before running so the in-app
-    // header matches what `runAllTests` will actually skip — and pass the
-    // same environment into the runner so the two views stay consistent.
-    const env = await testing.detectEnvironment();
-    setEnvironment(env);
-    // Reset every row back to 'pending' so a re-run starts fresh.
+    // Reset every row back to 'pending' so a re-run starts fresh. The header's
+    // applicability counts will refresh once `runAllTests` finishes its gUM
+    // probes and reports the authoritative env via `onEnvironment` — that's
+    // the only reliable signal on iOS, because `enumerateDevices()` can
+    // report `hasMicrophone:false` pre-AVAudioSession even with mic
+    // permission granted.
     setRows((prev) => prev.map((r) => ({ ...r, status: 'pending', message: undefined, durationMs: undefined })));
     perf.setRowsCommits++;
     setCompleted(0);
@@ -267,10 +299,11 @@ export default function RunTestsScreen(): React.JSX.Element {
     const periodicId = setInterval(() => perfDump(`tick t=${Math.round(now() - t0)}ms`), 1000);
 
     await testing.runAllTests(undefined, {
-      environment: env,
+      onEnvironment: setEnvironment,
       signal: ac.signal,
       resetEnvironment: resetTestGlobals,
       resetFile: resetTestFile,
+      only,
       onStart: (entry, i) => {
         perf.onStartCalls++;
         const prev = pendingUpdatesRef.current.get(i);
@@ -307,7 +340,9 @@ export default function RunTestsScreen(): React.JSX.Element {
   }, [flushPending, scheduleFlush]);
 
   // Auto-run: focused route AND URL has autorun=1 (see test:ios CLI).
-  const url = Linking.useLinkingURL();
+  // `?only=<substring>` filters the run to test names containing the value
+  // (case-insensitive); applied via the `onlyRef` read inside `run`, so the
+  // Run header button uses the same filter.
   const [isFocused, setIsFocused] = React.useState(false);
   useFocusEffect(
     React.useCallback(() => {

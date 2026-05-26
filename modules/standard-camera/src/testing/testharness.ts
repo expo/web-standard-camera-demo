@@ -394,6 +394,14 @@ type TestEntry = {
 const tests: TestEntry[] = [];
 const _harnessSetup: { [k: string]: unknown } = {};
 
+// Flips to true once `runAllTests` enters the test loop. `registerTest` throws
+// while locked so that dynamic late-registration patterns (a parent test that
+// queries the device, then `test(...)` for each discovered capability) fail
+// loudly instead of silently growing the suite mid-run. Every test must be
+// registered at module-load time so the UI can show the full list up front —
+// see LLP 0007#static-test-registration.
+let registrationLocked = false;
+
 function defaultName(): string {
   // Some WPT bodies omit the name argument. Per upstream testharness.js the
   // name defaults to a sequential "Test N" label scoped to the current file.
@@ -408,6 +416,13 @@ function registerTest(
   fn: TestFn,
   type: TestEntry['type']
 ): void {
+  if (registrationLocked) {
+    throw new Error(
+      `Test "${name}" tried to register during a run (source=${currentSourceFile ?? '<none>'}). ` +
+        `All tests must register at module-load time so the in-app list reflects the full suite up front. ` +
+        `Move this registration out of a test body / helper — see LLP 0007#static-test-registration.`
+    );
+  }
   const { requirement, reason } = classifyTest(name, currentSourceFile);
   tests.push({
     name,
@@ -741,6 +756,13 @@ function isEnvironmentSkip(e: unknown): boolean {
 // swallow the original NotFoundError.
 let noCameraEnvironment = false;
 
+// Same idea for audio. Pre-permission and pre-AVAudioSession on iOS,
+// `AVCaptureDevice.default(for: .audio)` can return nil even when a mic
+// exists — so `enumerateDevices()` reports `hasMicrophone:false` and the UI
+// would otherwise pre-skip every mic test. The audio probe in runAllTests
+// corrects that.
+let noMicrophoneEnvironment = false;
+
 /** A test as registered, before it has run. Used by the UI to pre-list the
  *  whole suite so users can see progress through it. */
 export interface PendingTest {
@@ -762,10 +784,18 @@ export interface RunOptions {
   onStart?: (entry: PendingTest, index: number, total: number) => void;
   /** Called after each test produces a result. */
   onResult?: (result: TestResult, index: number, total: number) => void;
-  /** Feature-detected environment. When omitted the runner probes via gUM at
-   *  the start of the suite. Passing it explicitly lets the UI use the same
-   *  applicability counts it displays. */
-  environment?: TestEnvironment;
+  /** Called once the runner has finished its `gUM` probes for video and audio
+   *  and knows authoritatively which capture devices are usable here. The UI
+   *  uses this to refresh its applicability display — the pre-run env from
+   *  `enumerateDevices()` is unreliable for audio on iOS (see
+   *  `noMicrophoneEnvironment`), so this is the canonical signal. */
+  onEnvironment?: (env: TestEnvironment) => void;
+  /** Substring filter (case-insensitive) over test names. Tests whose name
+   *  doesn't contain `only` are skip-emitted with a "filtered out" message
+   *  rather than executed — useful for fast TDD iteration on a single test
+   *  without rebuilding the suite registration. Set via `?only=...` on the
+   *  deep link the runner screen reads. */
+  only?: string;
   /** Aborts the run. The loop drops the in-flight test (its promise keeps
    *  resolving in the background — individual test bodies don't observe a
    *  signal — but the runner ignores the result and bails out before the
@@ -794,14 +824,25 @@ export async function detectEnvironment(): Promise<TestEnvironment> {
       navigator?: { mediaDevices?: { enumerateDevices?: () => Promise<{ kind: string }[]> } };
     }).navigator?.mediaDevices;
     if (!md?.enumerateDevices) {
+      // eslint-disable-next-line no-console
+      console.log('[wpt:debug] detectEnvironment: no navigator.mediaDevices.enumerateDevices');
       return { hasCamera: false, hasMicrophone: false };
     }
     const devices = await md.enumerateDevices();
-    return {
+    const env = {
       hasCamera: devices.some((d) => d.kind === 'videoinput'),
       hasMicrophone: devices.some((d) => d.kind === 'audioinput'),
     };
-  } catch {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[wpt:debug] detectEnvironment: ${JSON.stringify(env)} from devices=${JSON.stringify(
+        devices.map((d) => d.kind)
+      )}`
+    );
+    return env;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log(`[wpt:debug] detectEnvironment threw: ${(e as Error).name}: ${(e as Error).message}`);
     return { hasCamera: false, hasMicrophone: false };
   }
 }
@@ -962,38 +1003,88 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
   options.resetFile?.();
   options.resetEnvironment?.();
 
-  // Probe whether any camera is present so the AssertionError sentinels in
-  // WPT bodies that swallow NotFoundError can still be recognized as
-  // environment-skips. The probe is intentionally minimal — a single
-  // gUM({video:true}) — and isolated from the test environment reset.
-  let env = options.environment;
+  // Probe both video and audio via gUM. Two reasons:
+  //   1. On a real device the probes trigger iOS's permission prompts at run
+  //      start, so the user grants both permissions up front rather than
+  //      dismissing prompts mid-suite.
+  //   2. They give us authoritative `noCameraEnvironment` /
+  //      `noMicrophoneEnvironment` answers — `enumerateDevices()` on iOS
+  //      reports `hasMicrophone:false` until AVAudioSession has been
+  //      configured, so any pre-run env derived from enumerate alone would
+  //      pre-skip every mic test on first launch even with mic permission
+  //      already granted.
+  // The probes are isolated from the test environment reset above.
+  const mediaDevices = (
+    navigator as unknown as {
+      mediaDevices: {
+        getUserMedia: (
+          c: { video?: boolean; audio?: boolean }
+        ) => Promise<{ getTracks: () => { stop: () => void }[] }>;
+      };
+    }
+  ).mediaDevices;
+  // eslint-disable-next-line no-console
+  console.log('[wpt:debug] runAllTests: video probe start');
   try {
-    const probeStream = await (
-      navigator as unknown as {
-        mediaDevices: { getUserMedia: (c: { video: boolean }) => Promise<{ getTracks: () => { stop: () => void }[] }> };
-      }
-    ).mediaDevices.getUserMedia({ video: true });
+    const probeStream = await mediaDevices.getUserMedia({ video: true });
     for (const t of probeStream.getTracks()) t.stop();
     noCameraEnvironment = false;
+    // eslint-disable-next-line no-console
+    console.log('[wpt:debug] runAllTests: video probe ok');
   } catch (e) {
     noCameraEnvironment = (e as { name?: string })?.name === 'NotFoundError';
+    // eslint-disable-next-line no-console
+    console.log(
+      `[wpt:debug] runAllTests: video probe err name=${(e as Error).name} msg=${(e as Error).message} → noCameraEnvironment=${noCameraEnvironment}`
+    );
   }
-  // If the caller didn't tell us the environment, derive it from the probe
-  // (which is authoritative for cameras) plus a permission-free enumerate
-  // probe for the microphone.
-  if (!env) {
-    const detected = await detectEnvironment();
-    env = {
-      hasCamera: !noCameraEnvironment,
-      hasMicrophone: detected.hasMicrophone,
-    };
+  // eslint-disable-next-line no-console
+  console.log('[wpt:debug] runAllTests: audio probe start');
+  try {
+    const probeStream = await mediaDevices.getUserMedia({ audio: true });
+    for (const t of probeStream.getTracks()) t.stop();
+    noMicrophoneEnvironment = false;
+    // eslint-disable-next-line no-console
+    console.log('[wpt:debug] runAllTests: audio probe ok');
+  } catch (e) {
+    noMicrophoneEnvironment = (e as { name?: string })?.name === 'NotFoundError';
+    // eslint-disable-next-line no-console
+    console.log(
+      `[wpt:debug] runAllTests: audio probe err name=${(e as Error).name} msg=${(e as Error).message} → noMicrophoneEnvironment=${noMicrophoneEnvironment}`
+    );
   }
+  // The probes are the authoritative source for env. We don't accept a
+  // caller-supplied environment here because the screen's pre-run
+  // `enumerateDevices()` answer for audio is unreliable on iOS (see above).
+  const env: TestEnvironment = {
+    hasCamera: !noCameraEnvironment,
+    hasMicrophone: !noMicrophoneEnvironment,
+  };
+  // eslint-disable-next-line no-console
+  console.log(`[wpt:debug] runAllTests: probed env=${JSON.stringify(env)} (passing to onEnvironment)`);
+  options.onEnvironment?.(env);
+  // Re-enumerate after the probes to see whether the audio probe configured
+  // AVAudioSession in a way that flips enumerate's hasMicrophone answer. If
+  // it doesn't, the iOS-side detection logic has a deeper issue than just
+  // permission timing.
+  const postProbeDetect = await detectEnvironment();
+  // eslint-disable-next-line no-console
+  console.log(
+    `[wpt:debug] runAllTests: post-probe enumerate detect=${JSON.stringify(postProbeDetect)}`
+  );
 
   const results: TestResult[] = [];
   const total = tests.length;
   let previousSource: string | null | undefined = undefined;
+  // Snapshot the total before the loop so we can iterate a fixed-length suite.
+  // `registrationLocked` below will throw if a test body calls `test(...)` /
+  // `promise_test(...)` mid-run, so this should hold trivially — but we use
+  // the snapshot anyway as a belt-and-suspenders guard against the loop
+  // observing a longer `tests.length` if some path slips past the lock.
+  registrationLocked = true;
 
-  for (let i = 0; i < tests.length; i++) {
+  try {
+  for (let i = 0; i < total; i++) {
     if (options.signal?.aborted) {
       break;
     }
@@ -1012,6 +1103,24 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
       i,
       total
     );
+
+    // Substring filter (case-insensitive). Skip-emit non-matching tests so
+    // the pill's pass/fail counts stay consistent — the runner still emits
+    // a result per test, just with status='skip' and a clear message.
+    if (options.only && !entry.name.toLowerCase().includes(options.only.toLowerCase())) {
+      const result: TestResult = {
+        name: entry.name,
+        status: 'skip',
+        message: `filtered out (only=${options.only})`,
+        durationMs: 0,
+        source: entry.source,
+        group: entry.group,
+      };
+      results.push(result);
+      emit(`WPT_RESULT: ${JSON.stringify(result)}`);
+      options.onResult?.(result, i, total);
+      continue;
+    }
 
     // Pre-skip tests whose requirement isn't met by the current environment
     // (out-of-scope, or device-required without the matching device). The
@@ -1120,12 +1229,23 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     await new Promise<void>((r) => setTimeout(r, 8));
     currentTestHandle = null;
   }
+  } finally {
+    // Release the lock so a re-run can start cleanly. Module-load
+    // registrations from any newly-imported files would still be allowed
+    // between runs, though in practice all WPT/local files are imported
+    // once at startup.
+    registrationLocked = false;
+  }
 
   // Split skipped into "out-of-scope" (permanently inapplicable) vs
   // "deviceMissing" (would run on a real device) so the CLI / UI can show
   // "applicable" counts that don't conflate the two. `applicable` is the
   // number we actually attempted to run.
+  // eslint-disable-next-line no-console
+  console.log(`[wpt:debug] runAllTests: building summary with env=${JSON.stringify(env)}`);
   const applicability = summarizeApplicability(env);
+  // eslint-disable-next-line no-console
+  console.log(`[wpt:debug] runAllTests: applicability=${JSON.stringify(applicability)}`);
   const summary = {
     passed: results.filter((r) => r.status === 'pass').length,
     failed: results.filter((r) => r.status === 'fail').length,

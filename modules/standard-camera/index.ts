@@ -7,7 +7,14 @@ import 'event-target-polyfill';
 
 export { JS_BUILD_TIME } from './src/build-info';
 export { default as NativeStandardCamera } from './src/native';
-export type { AuthorizationStatus, NativeDiagnostics } from './src/native';
+export type {
+  AuthorizationStatus,
+  NativeDiagnostics,
+  NativeLiDARDepthCapabilities,
+  NativeLiDARDepthFrame,
+  NativeLiDARDepthSessionEvent,
+  NativeLiDARDepthSessionState,
+} from './src/native';
 export { DOMException } from './src/DOMException';
 export { ImageCapture } from './src/ImageCapture';
 export type { CameraImageBitmap } from './src/ImageCapture';

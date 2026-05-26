@@ -41,6 +41,21 @@ The Demo tab should open to a catalog, not directly to one showcase. The point i
 
 The catalog route is intentionally part of the demo app rather than README-only documentation: the person holding the phone should be able to choose the story they want to tell in the moment without rebuilding the app.
 
+## Global camera controls
+
+Demo route Start/Stop controls are owned by the demo stack layout, not by each
+screen body. The `CameraContext` exposes a global hardware phase (`stopped`,
+`starting`, `started`, `stopping`) derived from the shared `getUserMedia`
+stream and from the native LiDAR/ARKit extension. That lets the navigation bar
+render the correct control immediately during a route push, before the demo
+screen has mounted and before any per-screen WebGPU state has initialized.
+
+The LiDAR route is part of this same control plane even though it is not a W3C
+camera demo: ARKit and the AVFoundation session behind `getUserMedia` compete
+for the same iOS camera hardware. Starting LiDAR first tears down and locks out
+the standard camera; stopping LiDAR releases that lock so the shared standard
+camera can auto-resume only when the user had not explicitly stopped it.
+
 ## Validated foundations
 
 These were spiked and verified before this LLP was written.
@@ -140,20 +155,20 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 ### Demo 3: Tiny WebGPU classifier
 
-**Pitch:** A small camera-fed classifier runs entirely in WGSL compute. It samples the live camera texture, emits class scores, and overlays the top label on the preview without loading any WebAssembly-backed ML runtime.
+**Pitch:** A small camera-fed classifier runs entirely in WGSL compute. It samples the live camera texture and reports the top label beside the preview without loading any WebAssembly-backed ML runtime.
 
 **Why this demo.** It answers the no-WASM AI question directly. ONNX Runtime WebGPU and Transformers.js are blocked by their WebAssembly layer in Hermes, but WebGPU compute itself works. This demo keeps the AI scope intentionally tiny so the runtime story is true: JavaScript orchestrates WebGPU, WGSL does inference, and JS reads back only final scores.
 
 **UX.**
 
-1. Open the demo. The camera preview appears with a subtle tint from the current class.
+1. Open the demo. The camera preview appears unfiltered; the current class is reported outside the image.
 2. A prediction panel shows the top scene label and confidence bars.
 3. Back/front controls reuse the same camera constraint path as the other demos.
 4. On simulators with no camera, an animated synthetic texture keeps the inference path visible.
 
 **Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, applies fixed model weights, and writes class logits into a storage buffer. A `MAP_READ` buffer copies back only eight floats: five logits plus three feature readouts.
 
-**Status:** First version implemented as `neural-lens`. It prefers the demo-sized capture profile used by the shader lens, then retries once with a relaxed camera request if real frames do not arrive. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
+**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
 
 **Complexity:** Low. No model download, no tokenizer, no runtime dependency. The main risk is GPU buffer readback support in `react-native-wgpu`, which is validated by the route smoke test.
 

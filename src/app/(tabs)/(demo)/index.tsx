@@ -17,19 +17,10 @@ export default function DemoCatalogScreen(): React.JSX.Element {
       <View style={styles.header}>
         <Text style={[styles.eyebrow, { color: theme.textSecondary }]}>Web APIs on Expo</Text>
         <Text style={[styles.subtitle, { color: theme.text }]}>
-          Choose the proof point for the conversation: camera frames rendered, transformed, or
-          classified through WebGPU without a WASM runtime.
+          A suite of demos showcasing camera frames rendered, transformed, or classified through
+          the Media Capture and WebGPU APIs.
         </Text>
       </View>
-
-      <DemoChoiceCard
-        accentColor="#60a5fa"
-        description="A spinning WebGPU cube textured with frames from the shared camera stream."
-        detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL"
-        href="/cube"
-        status="ready"
-        title="Cube of cameras"
-      />
 
       <DemoChoiceCard
         accentColor="#f59e0b"
@@ -47,6 +38,24 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         href="/neural-lens"
         status="ready"
         title="Neural lens"
+      />
+
+      <DemoChoiceCard
+        accentColor="#2dd4bf"
+        description="Native ARKit camera plus LiDAR depth rendered as WebGPU contours and occlusion."
+        detail="ARKit RGB + sceneDepth -> GPUTextures -> WGSL fusion"
+        href="/lidar-depth"
+        status="experimental"
+        title="LiDAR depth"
+      />
+
+      <DemoChoiceCard
+        accentColor="#60a5fa"
+        description="A spinning WebGPU cube textured with frames from the shared camera stream."
+        detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL"
+        href="/cube"
+        status="ready"
+        title="Cube of cameras"
       />
     </ScrollView>
   );

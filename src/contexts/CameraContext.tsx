@@ -1,26 +1,54 @@
 import * as Linking from 'expo-linking';
 import * as React from 'react';
 
+import {
+  NativeStandardCamera,
+  type NativeLiDARDepthCapabilities,
+  type NativeLiDARDepthSessionEvent,
+} from '../../modules/standard-camera';
+
 // Single owner of the app's camera MediaStream. Both the Home preview and the
 // Demo tab's WebGPU cube consume from this provider so they (a) don't fight
 // over the AVCaptureSession and (b) reflect the same Start / Stop state.
 // Home's constraint pickers live here too — picking a new device, resolution,
 // or frame rate hot-swaps the stream and every consumer sees the change.
 //
-// The shape mirrors what Home already used: idle → requesting → playing /
-// error → idle. Pickers funnel through `applyConstraints` so the merge
-// semantics live in one place. The provider auto-starts the camera once on
-// app launch unless the app was opened via a run-tests deep link (so the WPT
-// runner gets a clean AVCaptureSession). After that, Start / Stop is driven
-// by whichever tab the user is on.
+// The standard camera state mirrors what Home already used: idle → requesting
+// → playing / error → stopping → idle. The derived `hardware` state collapses
+// that plus the LiDAR ARKit state into stopped / starting / started / stopping
+// so navigation chrome can render the right control from frame zero of a push.
+// Pickers funnel through `applyConstraints` so the merge semantics live in one
+// place. The provider auto-starts the camera once on app launch unless the app
+// was opened via a run-tests deep link (so the WPT runner gets a clean
+// AVCaptureSession). After that, Start / Stop is driven by whichever tab the
+// user is on.
 
 export type CameraStatus =
   | 'idle'
   | 'requesting'
   | 'starting'
   | 'playing'
+  | 'stopping'
   | 'ended'
   | 'error';
+
+export type CameraHardwareOwner = 'standard' | 'lidar' | null;
+export type CameraHardwarePhase = 'stopped' | 'starting' | 'started' | 'stopping';
+export type LiDARCameraStatus =
+  | 'idle'
+  | 'starting'
+  | 'running'
+  | 'interrupted'
+  | 'stopping'
+  | 'stopped'
+  | 'unsupported'
+  | 'error';
+type AutoStartGate = 'pending' | 'allowed' | 'blocked-by-tests';
+
+export interface CameraHardwareState {
+  owner: CameraHardwareOwner;
+  phase: CameraHardwarePhase;
+}
 
 export interface CameraConstraints {
   deviceId?: string;
@@ -33,6 +61,7 @@ export interface CameraConstraints {
 export interface CameraContextValue {
   stream: MediaStream | null;
   status: CameraStatus;
+  hardware: CameraHardwareState;
   error: string | null;
   constraints: CameraConstraints;
   settings: MediaTrackSettings | null;
@@ -44,11 +73,32 @@ export interface CameraContextValue {
    */
   userStopped: boolean;
   /**
+   * True while some other subsystem (currently the LiDAR demo's ARKit
+   * session) owns the AVCaptureDevice exclusively. Auto-start is suppressed
+   * while this is set, and any active getUserMedia stream is torn down on
+   * `lockExternal()`. Distinct from `userStopped` so leaving the LiDAR demo
+   * doesn't strand the rest of the app in a "user explicitly stopped" state.
+   */
+  externalLocked: boolean;
+  lidarStatus: LiDARCameraStatus;
+  lidarCapabilities: NativeLiDARDepthCapabilities | null;
+  lidarError: string | null;
+  /**
    * Open the camera with the merged constraints (or the current stored
    * constraints if none provided). Hot-swaps a running stream if one exists.
    */
   start: (next?: CameraConstraints) => Promise<void>;
   stop: () => void;
+  /**
+   * Tear down the getUserMedia stream so another subsystem can take the
+   * AVCaptureDevice (ARKit), and gate the auto-start effect off until
+   * `unlockExternal()` runs. Does not touch `userStopped`, so when the lock
+   * lifts the camera resumes for users who hadn't explicitly stopped.
+   */
+  lockExternal: () => Promise<void>;
+  unlockExternal: () => void;
+  startLiDAR: () => Promise<NativeLiDARDepthCapabilities | null>;
+  stopLiDAR: () => Promise<void>;
   /**
    * Merge a partial constraints patch into the active constraints and
    * restart the stream so consumers immediately see the change. `deviceId`
@@ -59,6 +109,7 @@ export interface CameraContextValue {
 }
 
 const DEFAULT_CONSTRAINTS: CameraConstraints = { facingMode: 'environment' };
+const CAMERA_HARDWARE_RELEASE_DELAY_MS = 150;
 
 // Module-load trace so we can confirm fresh JS reached the phone — appears
 // at the top of the JS evaluation, before any React renders.
@@ -69,6 +120,23 @@ const initialUrlPromise = Linking.getInitialURL();
 
 function isTestsLaunchUrl(url: string | null): boolean {
   return url != null && /(?:^|[/?:#])run-tests(?:$|[/?#&])/.test(url);
+}
+
+type ReleasableNativeStream = {
+  _native?: {
+    __stopTracksAndWaitForCaptureReleaseAsync?: () => Promise<void>;
+  };
+};
+
+async function stopTracksAndWaitForCaptureRelease(stream: MediaStream): Promise<void> {
+  const nativeStream = (stream as unknown as ReleasableNativeStream)._native;
+  if (nativeStream?.__stopTracksAndWaitForCaptureReleaseAsync) {
+    await nativeStream.__stopTracksAndWaitForCaptureReleaseAsync();
+    return;
+  }
+  for (const track of stream.getTracks()) {
+    track.stop();
+  }
 }
 
 const CameraContext = React.createContext<CameraContextValue | null>(null);
@@ -83,26 +151,47 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   // Track explicit user intent so stop() isn't immediately undone by the
   // stream-state-driven auto-start effect.
   const [userStopped, setUserStopped] = React.useState(false);
-  const [autoStartGated, setAutoStartGated] = React.useState(false);
+  // Set by another subsystem (ARKit/LiDAR) that needs the AVCaptureDevice.
+  // The auto-start effect bails while this is true and `lockExternal()`
+  // tears down any live track so the lock-holder can acquire the device.
+  const [externalLocked, setExternalLocked] = React.useState(false);
+  const [lidarStatus, setLiDARStatus] = React.useState<LiDARCameraStatus>('idle');
+  const [lidarCapabilities, setLiDARCapabilities] =
+    React.useState<NativeLiDARDepthCapabilities | null>(null);
+  const [lidarError, setLiDARError] = React.useState<string | null>(null);
+  const [autoStartGate, setAutoStartGate] = React.useState<AutoStartGate>('pending');
 
   const streamRef = React.useRef<MediaStream | null>(null);
   const startRequestRef = React.useRef(0);
+  const lidarRequestRef = React.useRef(0);
+  const activeLiDARSessionIdRef = React.useRef<number | null>(null);
+  const standardStopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = React.useRef(true);
 
   React.useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (standardStopTimerRef.current) {
+        clearTimeout(standardStopTimerRef.current);
+        standardStopTimerRef.current = null;
+      }
       const live = streamRef.current;
       if (live) {
         for (const t of live.getTracks()) t.stop();
         streamRef.current = null;
       }
+      NativeStandardCamera.stopLiDARDepth();
     };
   }, []);
 
   const stop = React.useCallback((): void => {
-    startRequestRef.current += 1;
+    const stopRequestId = startRequestRef.current + 1;
+    startRequestRef.current = stopRequestId;
+    if (standardStopTimerRef.current) {
+      clearTimeout(standardStopTimerRef.current);
+      standardStopTimerRef.current = null;
+    }
     const live = streamRef.current;
     streamRef.current = null;
     if (live) {
@@ -111,13 +200,124 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     if (mountedRef.current) {
       setStreamState(null);
       setSettings(null);
-      setStatus('idle');
+      setStatus('stopping');
       setUserStopped(true);
+      standardStopTimerRef.current = setTimeout(() => {
+        standardStopTimerRef.current = null;
+        if (!mountedRef.current || stopRequestId !== startRequestRef.current) return;
+        setStatus('idle');
+      }, CAMERA_HARDWARE_RELEASE_DELAY_MS);
     }
   }, []);
 
+  const lockExternal = React.useCallback(async (): Promise<void> => {
+    // Invalidate any in-flight start() so its post-await setState calls bail.
+    startRequestRef.current += 1;
+    if (standardStopTimerRef.current) {
+      clearTimeout(standardStopTimerRef.current);
+      standardStopTimerRef.current = null;
+    }
+    const live = streamRef.current;
+    streamRef.current = null;
+    if (mountedRef.current) {
+      setStreamState(null);
+      setSettings(null);
+      setStatus('idle');
+      setExternalLocked(true);
+    }
+    if (live) {
+      await stopTracksAndWaitForCaptureRelease(live);
+    }
+  }, []);
+
+  const unlockExternal = React.useCallback((): void => {
+    if (mountedRef.current) {
+      setExternalLocked(false);
+    }
+  }, []);
+
+  // @ref LLP 0012#native-extension-shape — The LiDAR demo owns ARKit through
+  // a demo-only native extension, but its camera ownership still lives in the
+  // same global control plane as the getUserMedia demos so nav buttons render
+  // correctly before the screen body mounts.
+  const startLiDAR = React.useCallback(async (): Promise<NativeLiDARDepthCapabilities | null> => {
+    const requestId = lidarRequestRef.current + 1;
+    lidarRequestRef.current = requestId;
+    activeLiDARSessionIdRef.current = null;
+    setLiDARError(null);
+    setLiDARStatus('starting');
+
+    try {
+      const caps = NativeStandardCamera.getLiDARDepthCapabilities();
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.log(`LIDAR_DEPTH_CAPS ${JSON.stringify(caps)}`);
+      }
+      if (!mountedRef.current || requestId !== lidarRequestRef.current) return null;
+      setLiDARCapabilities(caps);
+      if (!caps.supported) {
+        setLiDARStatus('unsupported');
+        setLiDARError(caps.reason ?? 'LiDAR scene depth is unavailable on this device');
+        unlockExternal();
+        return caps;
+      }
+
+      await lockExternal();
+      if (!mountedRef.current || requestId !== lidarRequestRef.current) {
+        unlockExternal();
+        return null;
+      }
+
+      const started = await NativeStandardCamera.startLiDARDepthAsync();
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.log(`LIDAR_DEPTH_START ${JSON.stringify(started)}`);
+      }
+      if (!mountedRef.current || requestId !== lidarRequestRef.current) {
+        void NativeStandardCamera.stopLiDARDepthAsync();
+        return null;
+      }
+      activeLiDARSessionIdRef.current = started.sessionId ?? null;
+      setLiDARCapabilities(started);
+      setLiDARStatus('running');
+      return started;
+    } catch (e) {
+      if (!mountedRef.current || requestId !== lidarRequestRef.current) return null;
+      setLiDARStatus('error');
+      setLiDARError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+      unlockExternal();
+      return null;
+    }
+  }, [lockExternal, unlockExternal]);
+
+  const stopLiDAR = React.useCallback(async (): Promise<void> => {
+    lidarRequestRef.current += 1;
+    if (!mountedRef.current) return;
+    setLiDARStatus((previous) =>
+      previous === 'idle' || previous === 'stopped' || previous === 'unsupported' || previous === 'error'
+        ? 'stopped'
+        : 'stopping'
+    );
+    try {
+      await NativeStandardCamera.stopLiDARDepthAsync();
+    } finally {
+      activeLiDARSessionIdRef.current = null;
+      if (!mountedRef.current) return;
+      setLiDARStatus('stopped');
+      setLiDARCapabilities((previous) =>
+        previous ? { ...previous, running: false, state: 'stopped', frameNumber: 0 } : previous
+      );
+      unlockExternal();
+    }
+  }, [unlockExternal]);
+
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {
+      if (externalLocked) return;
+      if (standardStopTimerRef.current) {
+        clearTimeout(standardStopTimerRef.current);
+        standardStopTimerRef.current = null;
+      }
       const effective = next ?? constraints;
       const requestId = startRequestRef.current + 1;
       startRequestRef.current = requestId;
@@ -185,7 +385,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         setStatus('error');
       }
     },
-    [constraints]
+    [constraints, externalLocked]
   );
 
   const applyConstraints = React.useCallback(
@@ -225,18 +425,130 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     };
   }, [stream]);
 
+  React.useEffect(() => {
+    const subscription = NativeStandardCamera.addListener(
+      'onLiDARDepthSessionState',
+      (event: NativeLiDARDepthSessionEvent) => {
+        if (!mountedRef.current) return;
+        const activeSessionId = activeLiDARSessionIdRef.current;
+        if (activeSessionId !== null && event.sessionId !== activeSessionId) return;
+
+        if (event.state === 'running') {
+          activeLiDARSessionIdRef.current = event.sessionId;
+          setLiDARError(null);
+          setLiDARCapabilities((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  running: true,
+                  state: 'running',
+                  sessionId: event.sessionId,
+                  frameNumber: event.frameNumber,
+                }
+              : previous
+          );
+          setLiDARStatus('running');
+          return;
+        }
+
+        if (event.state === 'interrupted') {
+          activeLiDARSessionIdRef.current = event.sessionId;
+          setLiDARError(event.reason ?? 'ARKit scene depth session was interrupted');
+          setLiDARCapabilities((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  running: false,
+                  state: 'interrupted',
+                  sessionId: event.sessionId,
+                  frameNumber: event.frameNumber,
+                  reason: event.reason,
+                }
+              : previous
+          );
+          setLiDARStatus('interrupted');
+          return;
+        }
+
+        if (event.state === 'starting') {
+          setLiDARError(null);
+          setLiDARCapabilities((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  running: false,
+                  state: 'starting',
+                  sessionId: event.sessionId,
+                  frameNumber: event.frameNumber,
+                }
+              : previous
+          );
+          setLiDARStatus('starting');
+          return;
+        }
+
+        if (event.state === 'failed') {
+          activeLiDARSessionIdRef.current = null;
+          setLiDARCapabilities((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  running: false,
+                  state: 'failed',
+                  sessionId: event.sessionId,
+                  frameNumber: event.frameNumber,
+                  reason: event.reason,
+                }
+              : previous
+          );
+          setLiDARStatus('error');
+          setLiDARError(event.reason ?? 'ARKit scene depth session failed');
+          unlockExternal();
+          return;
+        }
+
+        if (event.state === 'stopped') {
+          activeLiDARSessionIdRef.current = null;
+          setLiDARCapabilities((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  running: false,
+                  state: 'stopped',
+                  sessionId: event.sessionId,
+                  frameNumber: event.frameNumber,
+                }
+              : previous
+          );
+          setLiDARStatus('stopped');
+          unlockExternal();
+        }
+      }
+    );
+    return () => {
+      subscription.remove();
+    };
+  }, [unlockExternal]);
+
   // Resolve the run-tests-deeplink gate once on first mount. Until it's
   // resolved we hold off on auto-starting so a tests deeplink reliably skips
   // the camera. Subsequent JS reloads keep the resolved value.
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const initialUrl = await initialUrlPromise;
-      if (cancelled) return;
-      const gated = isTestsLaunchUrl(initialUrl);
-      // eslint-disable-next-line no-console
-      console.log(`CAMERA_CTX gate resolved isTestsLaunch=${gated} initialUrl=${initialUrl}`);
-      setAutoStartGated(gated);
+      try {
+        const initialUrl = await initialUrlPromise;
+        if (cancelled) return;
+        const gated = isTestsLaunchUrl(initialUrl);
+        // eslint-disable-next-line no-console
+        console.log(`CAMERA_CTX gate resolved isTestsLaunch=${gated} initialUrl=${initialUrl}`);
+        setAutoStartGate(gated ? 'blocked-by-tests' : 'allowed');
+      } catch (e) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.log(`CAMERA_CTX gate failed; allowing auto-start ${String(e)}`);
+        setAutoStartGate('allowed');
+      }
     })();
     return () => {
       cancelled = true;
@@ -245,18 +557,75 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
   // Auto-start whenever there's no live stream and the user hasn't explicitly
   // stopped. Driven by state (not a ref) so HMR can't strand the launch
-  // intent. Idempotent thanks to the `status === 'requesting'` guard.
+  // intent. Idempotent thanks to the transition-state guard.
+  // Suppressed while `externalLocked` so we don't fight ARKit/LiDAR for the
+  // AVCaptureDevice during their session.
   React.useEffect(() => {
-    if (autoStartGated || userStopped) return;
-    if (stream || status === 'requesting') return;
+    if (autoStartGate !== 'allowed' || userStopped || externalLocked) return;
+    if (stream || status === 'requesting' || status === 'starting' || status === 'stopping') return;
     // eslint-disable-next-line no-console
     console.log(`CAMERA_CTX auto-start firing (status=${status})`);
     void start();
-  }, [autoStartGated, userStopped, stream, status, start]);
+  }, [autoStartGate, userStopped, externalLocked, stream, status, start]);
+
+  const hardware: CameraHardwareState = React.useMemo(() => {
+    if (lidarStatus === 'starting') return { owner: 'lidar', phase: 'starting' };
+    if (lidarStatus === 'running' || lidarStatus === 'interrupted') {
+      return { owner: 'lidar', phase: 'started' };
+    }
+    if (lidarStatus === 'stopping') return { owner: 'lidar', phase: 'stopping' };
+    if (externalLocked) return { owner: 'lidar', phase: 'stopping' };
+    if (status === 'requesting' || status === 'starting') {
+      return { owner: 'standard', phase: 'starting' };
+    }
+    if (status === 'playing') return { owner: 'standard', phase: 'started' };
+    if (status === 'stopping') return { owner: 'standard', phase: 'stopping' };
+    return { owner: null, phase: 'stopped' };
+  }, [externalLocked, lidarStatus, status]);
 
   const value: CameraContextValue = React.useMemo(
-    () => ({ stream, status, error, constraints, settings, devices, userStopped, start, stop, applyConstraints }),
-    [stream, status, error, constraints, settings, devices, userStopped, start, stop, applyConstraints]
+    () => ({
+      stream,
+      status,
+      hardware,
+      error,
+      constraints,
+      settings,
+      devices,
+      userStopped,
+      externalLocked,
+      lidarStatus,
+      lidarCapabilities,
+      lidarError,
+      start,
+      stop,
+      lockExternal,
+      unlockExternal,
+      startLiDAR,
+      stopLiDAR,
+      applyConstraints,
+    }),
+    [
+      stream,
+      status,
+      hardware,
+      error,
+      constraints,
+      settings,
+      devices,
+      userStopped,
+      externalLocked,
+      lidarStatus,
+      lidarCapabilities,
+      lidarError,
+      start,
+      stop,
+      lockExternal,
+      unlockExternal,
+      startLiDAR,
+      stopLiDAR,
+      applyConstraints,
+    ]
   );
 
   return <CameraContext.Provider value={value}>{children}</CameraContext.Provider>;

@@ -15,8 +15,8 @@ import { unlink } from 'node:fs/promises';
 
 const APP_BUNDLE_ID = 'dev.ide.standardcameraapp';
 const URL_SCHEME = 'standardcameraapp';
-const DEFAULT_DEVICE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro';
-const TEST_DEVICE_NAME = 'standard-camera-test';
+const DEFAULT_DEVICE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro';
+const TEST_DEVICE_NAME = 'standard-camera-app';
 const LOG_TIMEOUT_MS = 300_000;
 const VERBOSE = process.env.VERBOSE === '1';
 
