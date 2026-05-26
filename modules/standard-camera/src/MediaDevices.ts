@@ -534,11 +534,23 @@ function pickString(c: ConstrainDOMString): string | undefined {
   return undefined;
 }
 
+// @ref LLP 0008#video-properties — Collapse a `ConstrainULong` / `ConstrainDouble`
+// into a single scalar the native side can act on. The flat shape doesn't
+// distinguish `exact` / `ideal` / `min` / `max`; `flattenVideo` already
+// validates `{exact: X}` upstream where the spec requires hard rejection on
+// unsatisfiable values, so the native side treats the resulting scalar as
+// a best-effort target (the closest-format picker scores against it). The
+// preference order is: `exact` (hard requirement caller already validated),
+// `ideal` (preferred), `max` (ceiling — pick the format that satisfies ≤),
+// `min` (floor). WPT's `{ width: { max: 30 } }` and `{ frameRate: { max: 5 } }`
+// tests depend on `max` reaching the native picker.
 function pickNumber(c: ConstrainULong | ConstrainDouble): number | undefined {
   if (typeof c === 'number') return c;
   if (c && typeof c === 'object') {
     if (typeof c.exact === 'number') return c.exact;
     if (typeof c.ideal === 'number') return c.ideal;
+    if (typeof (c as { max?: unknown }).max === 'number') return (c as { max: number }).max;
+    if (typeof (c as { min?: unknown }).min === 'number') return (c as { min: number }).min;
   }
   return undefined;
 }

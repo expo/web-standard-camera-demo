@@ -21,6 +21,13 @@ internal struct FlatVideoConstraints: Record {
   @Field var height: Int?
   @Field var frameRate: Double?
   @Field var aspectRatio: Double?
+  // @ref LLP 0008#video-properties — One of `"none"` / `"crop-and-scale"`.
+  // JS-side `flattenVideo` already rejects any other `{exact}` value with
+  // OverconstrainedError; native trusts the value here. When
+  // `"crop-and-scale"` is set together with `width` / `height`, FrameSink
+  // applies a center-crop + bilinear rescale (see LLP 0001's
+  // "`resizeMode: \"crop-and-scale\"` is in scope" callout).
+  @Field var resizeMode: String?
 }
 
 // @ref LLP 0009#audio-build-session — Flat audio constraints from JS. The
@@ -371,9 +378,9 @@ private func buildCaptureSession(
           session.addOutput(frameSink.output)
         }
 
-        let dims = CMVideoFormatDescriptionGetDimensions(videoDevice.activeFormat.formatDescription)
-        let width = Int(dims.width)
-        let height = Int(dims.height)
+        let nativeDims = CMVideoFormatDescriptionGetDimensions(videoDevice.activeFormat.formatDescription)
+        let nativeWidth = Int(nativeDims.width)
+        let nativeHeight = Int(nativeDims.height)
         let configuredDuration = videoDevice.activeVideoMinFrameDuration
         let frameRate: Double = {
           if configuredDuration.isValid && configuredDuration.value > 0 {
@@ -381,15 +388,48 @@ private func buildCaptureSession(
           }
           return videoDevice.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
         }()
+
+        // @ref LLP 0008#video-properties — Resolve the actual `resizeMode`
+        // and the target dimensions the source will deliver. The default
+        // when the caller didn't specify `resizeMode` is `'crop-and-scale'`,
+        // matching how desktop browsers honour `width` / `height` ideals
+        // (the WPT `GUM-required-constraint-with-ideal-value` test asserts
+        // the picked width equals the ideal, which on iPhone is only
+        // reachable by cropping down from the closest native format).
+        // `resizeMode: 'none'` is an explicit opt-out — when set, the
+        // session runs at the native format and `getSettings()` reports
+        // the device-native dimensions, even if `width` / `height` are
+        // also constrained.
+        let requestedResizeMode = videoConstraints.resizeMode
+        let cropTarget: (width: Int, height: Int)? = {
+          guard requestedResizeMode != "none" else { return nil }
+          if videoConstraints.width == nil && videoConstraints.height == nil { return nil }
+          return computeCropTarget(
+            sourceWidth: nativeWidth,
+            sourceHeight: nativeHeight,
+            requestedWidth: videoConstraints.width,
+            requestedHeight: videoConstraints.height,
+            requestedAspectRatio: videoConstraints.aspectRatio
+          )
+        }()
+        let actualResizeMode = cropTarget != nil ? "crop-and-scale" : (requestedResizeMode ?? "none")
+        let outWidth = cropTarget?.width ?? nativeWidth
+        let outHeight = cropTarget?.height ?? nativeHeight
+        if let cropTarget {
+          frameSink.setCropTargetSize(CGSize(width: cropTarget.width, height: cropTarget.height))
+        } else {
+          frameSink.setCropTargetSize(nil)
+        }
+
         videoSettings = [
           "deviceId": videoDevice.uniqueID,
           "groupId": videoDevice.uniqueID,
           "facingMode": positionToFacingMode(videoDevice.position),
-          "width": width,
-          "height": height,
+          "width": outWidth,
+          "height": outHeight,
           "frameRate": frameRate,
-          "aspectRatio": Double(width) / Double(max(height, 1)),
-          "resizeMode": "none",
+          "aspectRatio": Double(outWidth) / Double(max(outHeight, 1)),
+          "resizeMode": actualResizeMode,
         ]
         videoConnection = frameSink.output.connection(with: .video)
       }
@@ -562,6 +602,44 @@ private func pickActiveFormat(
 
   guard let chosen = bestFormat else { return nil }
   return (chosen, bestRate)
+}
+
+// @ref LLP 0008#video-properties — Resolve the target output dimensions
+// for a `resizeMode: "crop-and-scale"` request. Constraints come in as
+// flat scalars (basic / ideal / max collapsed by `flattenVideo` on the JS
+// side), so we honor whichever of `width` / `height` / `aspectRatio` the
+// caller specified and fill in the rest from the source. Capped at the
+// source dimensions to keep the path strictly down-scale (we never upscale
+// past the device's native frame). Returns nil when the resolved target
+// matches the source exactly — no point opting into the crop+scale stage
+// if nothing changes.
+private func computeCropTarget(
+  sourceWidth: Int,
+  sourceHeight: Int,
+  requestedWidth: Int?,
+  requestedHeight: Int?,
+  requestedAspectRatio: Double?
+) -> (width: Int, height: Int)? {
+  guard sourceWidth > 0, sourceHeight > 0 else { return nil }
+  let sourceAspect = Double(sourceWidth) / Double(sourceHeight)
+  let aspect: Double = {
+    if let r = requestedAspectRatio, r > 0 { return r }
+    if let w = requestedWidth, let h = requestedHeight, w > 0, h > 0 {
+      return Double(w) / Double(h)
+    }
+    return sourceAspect
+  }()
+  var w = requestedWidth.map { min($0, sourceWidth) } ?? 0
+  var h = requestedHeight.map { min($0, sourceHeight) } ?? 0
+  if w == 0 && h == 0 {
+    return nil
+  }
+  if w == 0 { w = max(1, Int((Double(h) * aspect).rounded())) }
+  if h == 0 { h = max(1, Int((Double(w) / aspect).rounded())) }
+  w = min(w, sourceWidth)
+  h = min(h, sourceHeight)
+  if w == sourceWidth && h == sourceHeight { return nil }
+  return (w, h)
 }
 
 private func positionToFacingMode(_ position: AVCaptureDevice.Position) -> String {

@@ -1091,7 +1091,12 @@ export async function runAllTests(_unused?: { video: HTMLVideoElement }, options
     // Substring filter (case-insensitive). Skip-emit non-matching tests so
     // the pill's pass/fail counts stay consistent — the runner still emits
     // a result per test, just with status='skip' and a clear message.
-    if (options.only && !entry.name.toLowerCase().includes(options.only.toLowerCase())) {
+    // Tests whose name starts with `'Setup '` are exempt from the filter:
+    // they populate shared snapshot state that filtered-in sub-tests
+    // depend on (see MediaStreamTrack-getCapabilities.ts), and skipping a
+    // setup turns every dependent sub-test into a "snapshot not populated"
+    // failure unrelated to what the filter was meant to exercise.
+    if (options.only && !entry.name.toLowerCase().includes(options.only.toLowerCase()) && !entry.name.startsWith('Setup ')) {
       const result: TestResult = {
         name: entry.name,
         status: 'skip',

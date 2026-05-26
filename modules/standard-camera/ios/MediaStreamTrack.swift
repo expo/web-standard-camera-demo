@@ -177,8 +177,10 @@ internal final class MediaStreamTrack: SharedObject {
       "aspectRatio": ["min": minAspect, "max": maxAspect],
       "frameRate": ["min": minFps, "max": maxFps],
       "facingMode": [facing],
-      // We don't support cropping; report 'none' only.
-      "resizeMode": ["none"],
+      // @ref LLP 0008#video-properties — Both spec values are in scope per
+      // LLP 0001. `'none'` is the device-native path; `'crop-and-scale'`
+      // opts in to the FrameSink crop+scale stage (CaptureSource.swift).
+      "resizeMode": ["none", "crop-and-scale"],
       "deviceId": device.uniqueID,
       "groupId": device.uniqueID,
     ]

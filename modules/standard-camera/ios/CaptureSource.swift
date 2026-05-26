@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 
 // @ref LLP 0003#stream-clone — Reference-counted holder of the AVCaptureSession
@@ -303,6 +304,20 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   // grabFrame just keeps re-reading the same retained buffer.
   private var frameCounter: UInt64 = 0
 
+  // @ref LLP 0008#video-properties — When set (by `buildCaptureSession` for
+  // `resizeMode: 'crop-and-scale'` streams that also have `width`/`height`
+  // constraints), every delivered sample buffer is center-cropped to the
+  // source's nearest aspect-matching rect and bilinear-scaled to this size
+  // before being retained. `getLatestFrame()` / `grabFrame()` then see the
+  // cropped pixels; the source's native AVCaptureDevice format is selected
+  // by the existing `pickActiveFormat` path (which picks the smallest
+  // format consistent with the request and lets us crop down from there).
+  private var cropTargetSize: CGSize?
+  // CVPixelBufferPool sized to `cropTargetSize` so we avoid per-frame
+  // allocations on the capture thread. Recreated whenever `cropTargetSize`
+  // changes.
+  private var cropTargetPool: CVPixelBufferPool?
+
   /// Called on the main thread once after the first sample arrives.
   /// Reset to nil after firing (one-shot). Set again to listen for the next
   /// stream attachment, which happens after the previous stream is stopped.
@@ -323,6 +338,37 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     hasFiredFirstFrame = false
   }
 
+  // Called by `buildCaptureSession` when the caller requested
+  // `resizeMode: 'crop-and-scale'` with explicit `width` / `height`. nil
+  // disables cropping (passthrough). Allocating the pixel-buffer pool here
+  // means the per-frame path inside `captureOutput` never touches the
+  // memory allocator.
+  func setCropTargetSize(_ size: CGSize?) {
+    bufferLock.lock()
+    defer { bufferLock.unlock() }
+    cropTargetSize = size
+    cropTargetPool = nil
+    guard let size, size.width > 0, size.height > 0 else { return }
+    let w = Int(size.width.rounded())
+    let h = Int(size.height.rounded())
+    let pixelAttrs: [String: Any] = [
+      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+      kCVPixelBufferWidthKey as String: w,
+      kCVPixelBufferHeightKey as String: h,
+      kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
+    ]
+    var pool: CVPixelBufferPool?
+    let status = CVPixelBufferPoolCreate(
+      kCFAllocatorDefault,
+      [kCVPixelBufferPoolMinimumBufferCountKey as String: 3 as CFNumber] as CFDictionary,
+      pixelAttrs as CFDictionary,
+      &pool
+    )
+    if status == kCVReturnSuccess {
+      cropTargetPool = pool
+    }
+  }
+
   /// Returns the most recently received pixel buffer, its dimensions, and a
   /// monotonic frame counter (incremented on every iOS sample-buffer
   /// delivery). nil when no frame has arrived yet. The buffer is retained;
@@ -341,9 +387,19 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     didOutput sampleBuffer: CMSampleBuffer,
     from connection: AVCaptureConnection
   ) {
-    if let pb = CMSampleBufferGetImageBuffer(sampleBuffer) {
+    if let source = CMSampleBufferGetImageBuffer(sampleBuffer) {
       bufferLock.lock()
-      latestPixelBuffer = pb
+      let target = cropTargetSize
+      let pool = cropTargetPool
+      bufferLock.unlock()
+      let toStore: CVPixelBuffer
+      if let target, let pool, let cropped = cropAndScale(source: source, to: target, pool: pool) {
+        toStore = cropped
+      } else {
+        toStore = source
+      }
+      bufferLock.lock()
+      latestPixelBuffer = toStore
       frameCounter &+= 1
       bufferLock.unlock()
     }
@@ -352,6 +408,74 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     DispatchQueue.main.async { [weak self] in
       self?.onFirstFrame?()
     }
+  }
+
+  // @ref LLP 0008#video-properties — Center-crop the source buffer to the
+  // largest rect matching the target aspect ratio, then bilinear-scale to
+  // the target size. Returns nil if any of the vImage / CV calls fail; the
+  // caller falls back to passthrough so a crop-and-scale glitch never
+  // produces no frames (the source's native dimensions are still spec-valid
+  // under `resizeMode: "none"` semantics).
+  private func cropAndScale(
+    source: CVPixelBuffer,
+    to target: CGSize,
+    pool: CVPixelBufferPool
+  ) -> CVPixelBuffer? {
+    let srcW = CVPixelBufferGetWidth(source)
+    let srcH = CVPixelBufferGetHeight(source)
+    let tgtW = Int(target.width.rounded())
+    let tgtH = Int(target.height.rounded())
+    guard srcW > 0, srcH > 0, tgtW > 0, tgtH > 0 else { return nil }
+
+    // Compute the largest center-anchored crop matching the target aspect.
+    let srcAspect = CGFloat(srcW) / CGFloat(srcH)
+    let tgtAspect = target.width / target.height
+    let cropW: Int
+    let cropH: Int
+    if srcAspect > tgtAspect {
+      // Source is wider — crop horizontally.
+      cropH = srcH
+      cropW = max(1, Int((CGFloat(srcH) * tgtAspect).rounded()))
+    } else {
+      // Source is taller (or equal) — crop vertically.
+      cropW = srcW
+      cropH = max(1, Int((CGFloat(srcW) / tgtAspect).rounded()))
+    }
+    let cropX = (srcW - cropW) / 2
+    let cropY = (srcH - cropH) / 2
+
+    CVPixelBufferLockBaseAddress(source, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(source, .readOnly) }
+    guard let srcBase = CVPixelBufferGetBaseAddress(source) else { return nil }
+    let srcRowBytes = CVPixelBufferGetBytesPerRow(source)
+    // Walk forward to the crop's top-left pixel. Keep `rowBytes` set to the
+    // SOURCE row stride so vImage steps over the right amount per row even
+    // though we're only reading a window.
+    let cropStart = srcBase.advanced(by: cropY * srcRowBytes + cropX * 4)
+    var srcImage = vImage_Buffer(
+      data: cropStart,
+      height: vImagePixelCount(cropH),
+      width: vImagePixelCount(cropW),
+      rowBytes: srcRowBytes
+    )
+
+    var destPb: CVPixelBuffer?
+    let createStatus = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &destPb)
+    guard createStatus == kCVReturnSuccess, let dest = destPb else { return nil }
+    CVPixelBufferLockBaseAddress(dest, [])
+    defer { CVPixelBufferUnlockBaseAddress(dest, []) }
+    guard let destBase = CVPixelBufferGetBaseAddress(dest) else { return nil }
+    let destRowBytes = CVPixelBufferGetBytesPerRow(dest)
+    var destImage = vImage_Buffer(
+      data: destBase,
+      height: vImagePixelCount(tgtH),
+      width: vImagePixelCount(tgtW),
+      rowBytes: destRowBytes
+    )
+
+    let err = vImageScale_ARGB8888(&srcImage, &destImage, nil, vImage_Flags(kvImageNoFlags))
+    guard err == kvImageNoError else { return nil }
+    return dest
   }
 }
 

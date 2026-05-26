@@ -129,9 +129,52 @@ class StubElement extends EventTarget {
 // possible. We can't actually mount a React component synchronously here, so
 // we return a stub that supports the spec-shaped surface. Tests that need a
 // real preview should use the globally-installed `video` element instead.
+//
+// @ref LLP 0008#video-properties — On `srcObject = stream`, derive
+// `videoWidth` / `videoHeight` from the first video track's settings (which
+// already accounts for `resizeMode: "crop-and-scale"` delivering cropped
+// dimensions, per `MediaDevices.swift`'s videoSettings) and queue the
+// loadedmetadata / loadeddata sequence in a microtask so callers can await
+// them. `play()` waits for that sequence to land before resolving so WPT's
+// `await video.play(); assert_equals(video.videoWidth, X)` pattern works.
 class StubVideoElement extends StubElement {
+  #pendingLoad: Promise<void> | null = null;
   constructor() {
     super('video');
+    Object.defineProperty(this, 'srcObject', {
+      get: () => this.#srcObject,
+      set: (value: MediaStream | null) => this.#setSrcObject(value),
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  #srcObject: MediaStream | null = null;
+  #setSrcObject(value: MediaStream | null): void {
+    if (value === this.#srcObject) return;
+    this.#srcObject = value;
+    this.readyState = 0;
+    this.videoWidth = 0;
+    this.videoHeight = 0;
+    if (!value) {
+      this.#pendingLoad = null;
+      return;
+    }
+    this.#pendingLoad = Promise.resolve().then(() => {
+      if (this.#srcObject !== value) return;
+      const track = value.getVideoTracks?.()[0];
+      const settings = track?.getSettings?.() as { width?: number; height?: number } | undefined;
+      this.videoWidth = settings?.width ?? 0;
+      this.videoHeight = settings?.height ?? 0;
+      this.readyState = 4; // HAVE_ENOUGH_DATA
+      this.dispatchEvent(new Event('loadedmetadata'));
+      this.dispatchEvent(new Event('loadeddata'));
+    });
+  }
+  override play(): Promise<void> {
+    const pending = this.#pendingLoad;
+    return (pending ?? Promise.resolve()).then(() => {
+      this.paused = false;
+    });
   }
 }
 

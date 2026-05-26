@@ -71,6 +71,13 @@ export interface HTMLVideoElement extends EventTarget {
   // @ref LLP 0004#duration
   readonly duration: number;
 
+  // @ref LLP 0008#video-properties — Intrinsic dimensions of the displayed
+  // video. For a MediaStream, these track the first video track's
+  // settings — including the cropped dimensions when `resizeMode:
+  // 'crop-and-scale'` is active. 0 before metadata is loaded.
+  readonly videoWidth: number;
+  readonly videoHeight: number;
+
   // @ref LLP 0004#currentTime
   currentTime: number;
 
@@ -263,6 +270,32 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   // @ref LLP 0004#readystate
   get readyState(): 0 | 1 | 2 | 3 | 4 { return this.__readyState; }
 
+  // @ref LLP 0008#video-properties — `HTMLVideoElement.videoWidth` /
+  // `videoHeight` report the *intrinsic* dimensions of the displayed video.
+  // For a MediaStream source those are the settings of the first video
+  // track (which already accounts for `resizeMode: 'crop-and-scale'`
+  // delivered cropped dimensions, per `MediaDevices.swift`'s videoSettings).
+  // Spec: 0 before metadata is loaded, then the source's dimensions.
+  // WPT's `Tests that setting a required constraint with an ideal value in
+  // getUserMedia works` asserts `video.videoWidth === track.getSettings().width`.
+  get videoWidth(): number {
+    if (this.__readyState < HAVE_METADATA) return 0;
+    return this.#trackSettingsNumber('width');
+  }
+  get videoHeight(): number {
+    if (this.__readyState < HAVE_METADATA) return 0;
+    return this.#trackSettingsNumber('height');
+  }
+
+  #trackSettingsNumber(key: 'width' | 'height'): number {
+    const stream = this.__srcObject;
+    if (!stream) return 0;
+    const tracks = stream.getVideoTracks?.() ?? [];
+    const settings = tracks[0]?.getSettings?.() as { width?: number; height?: number } | undefined;
+    const v = settings?.[key];
+    return typeof v === 'number' ? v : 0;
+  }
+
   // @ref LLP 0004#duration
   get duration(): number { return this.__duration; }
 
@@ -315,6 +348,22 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
 
   async play(): Promise<void> {
     await this.__native?.playAsync();
+    // @ref LLP 0008#video-properties — Wait for `loadeddata` (which fires
+    // off the FrameSink's first sample callback, see VideoView.swift) so
+    // `videoWidth` / `videoHeight` are non-zero by the time `await play()`
+    // resolves. Browsers do this implicitly; the WPT
+    // `GUM-required-constraint-with-ideal-value` test depends on it.
+    // If the readyState is already HAVE_METADATA-or-better (because we
+    // attached to an already-running source), this short-circuits.
+    if (this.__readyState < HAVE_METADATA) {
+      await new Promise<void>((resolve) => {
+        const onLoaded = (): void => {
+          this.removeEventListener('loadeddata', onLoaded);
+          resolve();
+        };
+        this.addEventListener('loadeddata', onLoaded);
+      });
+    }
     this.__paused = false;
     this.__playStartMs = Date.now();
     this.__startTimeUpdates();
