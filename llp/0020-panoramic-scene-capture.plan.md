@@ -70,7 +70,8 @@ Implemented:
 - Export: after explicit Capture, writes an ASCII `.ply` model into the app
   Documents directory before opening any optional share sheet, reports the
   Files-visible filename/size, and relies on iOS document sharing so the
-  Documents directory is visible in Files.
+  Documents directory is visible in Files. Optional share-sheet failure or
+  dismissal does not turn an already-written Files export into a save failure.
 - Deterministic model tests: the pure reconstruction/export helpers live in
   `src/lib/panoramic-scene-model.ts` and are covered by Bun tests for depth
   unprojection, column-major transforms, BGRA color sampling, voxel fusion,

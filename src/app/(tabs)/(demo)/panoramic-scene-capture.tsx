@@ -360,11 +360,19 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       if (!available) {
         return;
       }
-      await Sharing.shareAsync(file.uri, {
-        dialogTitle: 'Save scene model',
-        mimeType: 'model/ply',
-        UTI: 'public.data',
-      });
+      try {
+        await Sharing.shareAsync(file.uri, {
+          dialogTitle: 'Save scene model',
+          mimeType: 'model/ply',
+          UTI: 'public.data',
+        });
+      } catch (shareError) {
+        setError(
+          `Share sheet did not complete; file remains saved to Files. ${
+            shareError instanceof Error ? `${shareError.name}: ${shareError.message}` : String(shareError)
+          }`
+        );
+      }
       setSaveInfo(filesLocation);
     } catch (e) {
       setSaveInfo('save failed');
