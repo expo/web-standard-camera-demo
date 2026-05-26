@@ -131,18 +131,30 @@ export class MediaDevices extends EventTarget {
     // Collapse each kind to a single representative pre-grant. WPT's
     // enumerateDevices test asserts audioinput precedes videoinput in the
     // returned list, so emit in that order.
+    //
+    // The synthetic denial set populated by `setMediaPermission('denied')`
+    // models the spec's "blocked by Permissions-Policy" case, where the
+    // document permanently can't use the kind: `enumerateDevices` then
+    // omits the kind entirely (not the pre-grant "one empty entry"
+    // representation). The upstream `MediaDevices-enumerateDevices-not-
+    // allowed-{camera,mic}` tests assert exactly this.
+    const denied = testDeniedCheck?.() ?? { camera: false, microphone: false };
     const out: typeof raw = [];
-    if (hasGrantedAudio) {
-      out.push(...raw.filter((d) => d.kind === 'audioinput'));
-    } else {
-      const firstAudio = raw.find((d) => d.kind === 'audioinput');
-      if (firstAudio) out.push(firstAudio);
+    if (!denied.microphone) {
+      if (hasGrantedAudio) {
+        out.push(...raw.filter((d) => d.kind === 'audioinput'));
+      } else {
+        const firstAudio = raw.find((d) => d.kind === 'audioinput');
+        if (firstAudio) out.push(firstAudio);
+      }
     }
-    if (hasGrantedVideo) {
-      out.push(...raw.filter((d) => d.kind === 'videoinput'));
-    } else {
-      const firstVideo = raw.find((d) => d.kind === 'videoinput');
-      if (firstVideo) out.push(firstVideo);
+    if (!denied.camera) {
+      if (hasGrantedVideo) {
+        out.push(...raw.filter((d) => d.kind === 'videoinput'));
+      } else {
+        const firstVideo = raw.find((d) => d.kind === 'videoinput');
+        if (firstVideo) out.push(firstVideo);
+      }
     }
     raw = out;
     const InputDeviceInfoCls = (globalThis as unknown as {

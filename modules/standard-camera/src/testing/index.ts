@@ -61,6 +61,8 @@ import './wpt/parallel-capture-requests';
 // Project-local tests covering behavior outside the WPT corpus.
 import './local/deviceId-pick';
 import './local/enumerate-multi-device';
+import './local/enumerateDevices-not-allowed-camera';
+import './local/enumerateDevices-not-allowed-mic';
 import './local/facingMode-switch';
 import './local/frameRate-resolution';
 import './local/MediaStream-construction';
