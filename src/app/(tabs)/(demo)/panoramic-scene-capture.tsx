@@ -375,23 +375,24 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setError(null);
     setSaveInfo('writing .ply');
     try {
-      const available = await Sharing.isAvailableAsync();
-      if (!available) {
-        throw new Error('System file sharing is unavailable on this platform.');
-      }
       const filename = modelFileName();
       const file = new File(Paths.document, filename);
       const ply = serializeModelAsPly(model);
       file.create({ overwrite: true });
       file.write(ply);
       const savedSize = file.exists ? file.size : ply.length;
-      setSaveInfo(`Documents: ${filename} (${formatBytes(savedSize)})`);
+      const filesLocation = formatFilesLocation(filename, savedSize);
+      setSaveInfo(filesLocation);
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        return;
+      }
       await Sharing.shareAsync(file.uri, {
         dialogTitle: 'Save scene model',
         mimeType: 'model/ply',
         UTI: 'public.data',
       });
-      setSaveInfo(`export ready: ${filename} (${formatBytes(savedSize)})`);
+      setSaveInfo(filesLocation);
     } catch (e) {
       setSaveInfo('save failed');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -1277,6 +1278,10 @@ function formatBytes(bytes: number): string {
   if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
   const mib = kib / 1024;
   return `${mib.toFixed(mib >= 10 ? 1 : 2)} MB`;
+}
+
+function formatFilesLocation(filename: string, bytes: number): string {
+  return `Files: standard-camera-app/${filename} (${formatBytes(bytes)})`;
 }
 
 function formatPercent(value: number): string {

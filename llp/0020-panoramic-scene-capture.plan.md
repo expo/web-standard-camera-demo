@@ -54,11 +54,9 @@ Implemented:
   `PANORAMIC_CAPTURE_METRICS` JSON line for physical-device validation.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
-- Export: writes an ASCII `.ply` model into the app Documents directory,
-  reports the exported filename/size, and opens the system share sheet. The iOS
-  app enables document sharing so the Documents directory is visible in Files;
-  returning from the share sheet is not treated as proof that the user selected
-  Files.
+- Export: writes an ASCII `.ply` model into the app Documents directory before
+  opening any optional share sheet, reports the Files-visible filename/size, and
+  relies on iOS document sharing so the Documents directory is visible in Files.
 
 Not yet implemented:
 
