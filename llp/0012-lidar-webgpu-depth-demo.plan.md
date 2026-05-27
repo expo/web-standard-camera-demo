@@ -409,7 +409,13 @@ the global provider or offscreen native-tab scenes, so WebXR/LiDAR demos do not
 pay for an unrelated AVFoundation startup before ARKit can take the camera. The
 shared standard-camera provider still SHOULD coalesce duplicate default
 `getUserMedia` starts from focused route-level start effects; only explicit
-constraint changes should supersede an in-flight start.
+constraint changes should supersede an in-flight start. The external camera
+lock MUST be represented by synchronous provider state as well as React state:
+focused routes may hold stale `start()` closures across native-tab transitions,
+so `start()` MUST check a ref-backed external lock before opening
+AVFoundation. Otherwise a route-level auto-start can reopen the standard camera
+after WebXR has acquired ARKit, starving the WebXR frame pump after the first
+scene-depth frames.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,

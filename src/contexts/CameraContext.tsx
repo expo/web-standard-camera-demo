@@ -153,6 +153,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const startRequestRef = React.useRef(0);
   const startInFlightRef = React.useRef(false);
   const activeLiDARSessionIdRef = React.useRef<number | null>(null);
+  const externalLockedRef = React.useRef(false);
   const standardStopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = React.useRef(true);
 
@@ -201,6 +202,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
   const lockExternal = React.useCallback(async (): Promise<void> => {
     // Invalidate any in-flight start() so its post-await setState calls bail.
+    externalLockedRef.current = true;
     startRequestRef.current += 1;
     startInFlightRef.current = false;
     if (standardStopTimerRef.current) {
@@ -234,6 +236,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   }, []);
 
   const unlockExternal = React.useCallback((): void => {
+    externalLockedRef.current = false;
     if (mountedRef.current) {
       setExternalLocked(false);
     }
@@ -250,7 +253,10 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {
-      if (externalLocked) return;
+      if (externalLockedRef.current) {
+        console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(next ?? constraints)}`);
+        return;
+      }
       const effective = next ?? constraints;
       if (startInFlightRef.current && next == null && !streamRef.current) {
         console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
@@ -260,12 +266,18 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         clearTimeout(standardStopTimerRef.current);
         standardStopTimerRef.current = null;
       }
+      if (externalLockedRef.current) {
+        console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
+        return;
+      }
       const requestId = startRequestRef.current + 1;
       startRequestRef.current = requestId;
       // @ref LLP 0012#camera-ownership-handoff — Provider auto-start and
       // screen-level start-on-mount can fire before React commits `requesting`.
       // Coalesce duplicate default starts so a WebXR/LiDAR handoff does not
-      // immediately queue two AVFoundation getUserMedia requests.
+      // immediately queue two AVFoundation getUserMedia requests. The external
+      // lock is mirrored in a ref so stale focused-route closures cannot
+      // reopen AVFoundation after WebXR has locked the camera for ARKit.
       startInFlightRef.current = true;
       const previous = streamRef.current;
       if (previous) {
@@ -338,7 +350,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         }
       }
     },
-    [constraints, externalLocked]
+    [constraints]
   );
 
   const applyConstraints = React.useCallback(
