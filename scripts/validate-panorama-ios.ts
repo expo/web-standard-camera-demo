@@ -1513,10 +1513,18 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
 
   const framePump = seen.PANORAMIC_XR_FRAME_PUMP_PROFILE;
   if (framePump) {
+    const arFrameNumber = numberField(framePump, 'arFrameNumber');
+    const depthFrameArFrameNumber = numberField(framePump, 'depthFrameArFrameNumber');
+    const depthFrameLag = arFrameNumber > 0 && depthFrameArFrameNumber > 0
+      ? Math.max(0, arFrameNumber - depthFrameArFrameNumber)
+      : 0;
+    const depthARFrameDetail = depthFrameArFrameNumber > 0
+      ? `, depth AR frame ${depthFrameArFrameNumber} lag ${depthFrameLag}`
+      : '';
     lines.push(
       `XR frame pump: ${stringField(framePump, 'reason') || 'unknown'}, ` +
       `depth frame ${numberField(framePump, 'latestFrameNumber')} delivered ${numberField(framePump, 'lastDeliveredFrameNumber')}, ` +
-      `AR frame ${numberField(framePump, 'arFrameNumber')} (+${numberField(framePump, 'arFrameDelta')}), ` +
+      `AR frame ${arFrameNumber} (+${numberField(framePump, 'arFrameDelta')})${depthARFrameDetail}, ` +
       `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}, ` +
       `delivered polls ${numberField(framePump, 'deliveredFramePolls')}, ` +
       `stale polls ${numberField(framePump, 'staleFramePolls')}`
@@ -1557,6 +1565,22 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     const staleFramePolls = numberField(framePump, 'staleFramePolls');
     const reason = stringField(framePump, 'reason') || 'unknown';
     if (deliveredFramePolls <= 0 && (noFramePolls > 0 || staleFramePolls > 0)) {
+      const arFrameDelta = numberField(framePump, 'arFrameDelta');
+      const depthFrameDelta = numberField(framePump, 'depthFrameDelta');
+      if (staleFramePolls > 0 && arFrameDelta > 0 && depthFrameDelta <= 0) {
+        const arFrameNumber = numberField(framePump, 'arFrameNumber');
+        const depthFrameArFrameNumber = numberField(framePump, 'depthFrameArFrameNumber');
+        const depthFrameLag = arFrameNumber > 0 && depthFrameArFrameNumber > 0
+          ? Math.max(0, arFrameNumber - depthFrameArFrameNumber)
+          : 0;
+        const depthSourceDetail = depthFrameArFrameNumber > 0
+          ? `; last depth came from AR frame ${depthFrameArFrameNumber}, lag ${depthFrameLag}`
+          : '';
+        const depthMissDetail = numberField(framePump, 'depthMisses') > 0 || numberField(framePump, 'consecutiveDepthMisses') > 0
+          ? `, depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}`
+          : '';
+        return `First-frame diagnosis: ARKit camera frames are still arriving (+${arFrameDelta}), but WebXR scene-depth snapshots are stuck on depth frame ${numberField(framePump, 'latestFrameNumber')}${depthSourceDetail}${depthMissDetail}; this points to native scene-depth starvation rather than JS keyframe rejection`;
+      }
       return `First-frame diagnosis: WebXR native frame delivery stalled (${reason}; no-frame ${noFramePolls}, stale ${staleFramePolls}) before the app could add more surfels`;
     }
     if (deliveredFramePolls > 1) {

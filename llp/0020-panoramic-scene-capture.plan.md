@@ -161,7 +161,11 @@ Implemented:
   before any keyframe is accepted and again when the user stops scanning, so a
   profile-only physical-device run can diagnose pose misses, depth misses,
   precheck skips, and rejection reasons even when Preview/Capture is never
-  reached. The route accepts `?autorun=1` for physical-device profiling runs so
+  reached. Validator summaries SHOULD compare WebXR depth-frame counters with
+  ARKit frame counters so a one-keyframe scan can be classified as JS keyframe
+  rejection, full native frame-pump starvation, or native scene-depth
+  starvation while ARKit camera frames continue. The route accepts `?autorun=1`
+  for physical-device profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
   the normal Start Scan control for manual use. Live
   snapshot publishing uses adaptive backoff after 10k retained samples and

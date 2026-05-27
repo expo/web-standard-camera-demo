@@ -665,6 +665,39 @@ test('panorama validator distinguishes delivered WebXR frames from stale polling
   );
 });
 
+test('panorama validator distinguishes ARKit frame delivery from stale scene-depth snapshots', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 1,
+      retainedSamples: 781,
+      surfelCount: 781,
+    },
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      arFrameDelta: 72,
+      arFrameNumber: 76,
+      consecutiveDepthMisses: 70,
+      deliveredFramePolls: 0,
+      depthFrameArFrameNumber: 4,
+      depthFrameDelta: 0,
+      depthMisses: 70,
+      lastDeliveredFrameNumber: 1,
+      latestFrameNumber: 1,
+      noFramePolls: 0,
+      reason: 'stale-frame',
+      staleFramePolls: 89,
+    },
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'XR frame pump: stale-frame, depth frame 1 delivered 1, AR frame 76 (+72), depth AR frame 4 lag 72, depth misses 70 consecutive 70, delivered polls 0, stale polls 89'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: ARKit camera frames are still arriving (+72), but WebXR scene-depth snapshots are stuck on depth frame 1; last depth came from AR frame 4, lag 72, depth misses 70 consecutive 70; this points to native scene-depth starvation rather than JS keyframe rejection'
+  );
+});
+
 test('panorama validator diagnoses native frame starvation after the first surfel batch', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
