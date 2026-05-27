@@ -427,7 +427,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       const ply = serializeModelAsPly(capturedModel);
       file.create({ overwrite: true });
       file.write(ply);
-      const savedSize = file.exists ? file.size : ply.length;
+      const savedSize = file.exists ? file.size : 0;
+      if (savedSize <= 0) {
+        throw new Error('PLY export was not written to Files.');
+      }
       const filesLocation = formatFilesLocation(filename, savedSize);
       setSaveInfo(filesLocation);
       logExportMetrics(capturedModel, file.uri, filename, savedSize);

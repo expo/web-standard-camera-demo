@@ -74,7 +74,8 @@ Implemented:
   canvas size, presentation format, model revision, keyframe count, surfel
   count, and quality percentages.
 - Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
-  Files-visible path, file URI, byte count, keyframe count, and surfel count.
+  Files-visible path, file URI, byte count, keyframe count, and surfel count
+  only after the Documents file exists and reports a nonzero size.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
 - Scan preview: an explicit Preview action builds a temporary WebGPU model
