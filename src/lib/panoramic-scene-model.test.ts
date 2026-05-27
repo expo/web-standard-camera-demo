@@ -217,9 +217,12 @@ test('serializeModelAsPly emits vertex colors and normals for Files export', () 
 
   expect(ply).toContain('format ascii 1.0\n');
   expect(ply).toContain('element vertex 1\n');
+  expect(ply).toContain('property float radius\n');
   expect(ply).toContain('property float nx\n');
+  expect(ply).toContain('property float weight\n');
+  expect(ply).toContain('property float observations\n');
   expect(ply).toContain('property uchar red\n');
-  expect(ply).toContain('0.00000 0.00000 -1.00000 0.00000 1.00000 0.00000 255 128 0\n');
+  expect(ply).toContain('0.00000 0.00000 -1.00000 1.00000 0.00000 1.00000 0.00000 1.00000 1.00000 255 128 0\n');
   expect(ply.endsWith('\n')).toBe(true);
 });
 
