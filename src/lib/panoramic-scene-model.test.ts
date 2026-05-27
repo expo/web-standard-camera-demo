@@ -9,16 +9,21 @@ import {
   derivePanoramicCaptureControls,
   formatFilesLocation,
   invertMatrix4,
+  liveModelSnapshotIntervalMs,
   makeModelViewProjection,
   MAX_KEYFRAMES,
   MAX_SURFELS,
   MIN_KEYFRAME_SURFELS,
+  modelSurfelPointScalePx,
+  nextSurfelBufferCapacityBytes,
   panoramicCoverageKey,
   panoramicCoveragePercent,
   sampleDepthMeters,
   sampleCameraColor,
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
+  shouldPublishLiveModelSnapshot,
+  SURFEL_STRIDE_BYTES,
   SURFEL_STRIDE_FLOATS,
   transformPoint,
   unprojectViewSample,
@@ -295,6 +300,71 @@ test('derivePanoramicCaptureControls keeps preview scan-only and save capture-on
     canSave: false,
     transitioning: true,
   });
+});
+
+test('live model snapshot publishing backs off as retained samples grow', () => {
+  expect(liveModelSnapshotIntervalMs(9999, 0)).toBe(320);
+  expect(liveModelSnapshotIntervalMs(10000, 0)).toBe(760);
+  expect(liveModelSnapshotIntervalMs(25000, 0)).toBe(1250);
+  expect(liveModelSnapshotIntervalMs(45000, 0)).toBe(1800);
+  expect(liveModelSnapshotIntervalMs(12000, 260)).toBe(1300);
+
+  expect(shouldPublishLiveModelSnapshot({
+    hasPublishedModel: false,
+    keyframes: 1,
+    lastPublishedAtMs: 0,
+    lastPublishedKeyframes: 0,
+    lastPublishedRawSampleCount: 0,
+    nowMs: 1000,
+    previousBuildMs: 0,
+    rawSampleCount: 1200,
+  })).toMatchObject({ publish: true, reason: 'initial' });
+
+  expect(shouldPublishLiveModelSnapshot({
+    hasPublishedModel: true,
+    keyframes: 4,
+    lastPublishedAtMs: 1000,
+    lastPublishedKeyframes: 4,
+    lastPublishedRawSampleCount: 12000,
+    nowMs: 2000,
+    previousBuildMs: 0,
+    rawSampleCount: 12000,
+  })).toMatchObject({ publish: false, reason: 'unchanged' });
+
+  expect(shouldPublishLiveModelSnapshot({
+    hasPublishedModel: true,
+    keyframes: 5,
+    lastPublishedAtMs: 1000,
+    lastPublishedKeyframes: 4,
+    lastPublishedRawSampleCount: 12000,
+    nowMs: 1500,
+    previousBuildMs: 0,
+    rawSampleCount: 13500,
+  })).toMatchObject({ intervalMs: 760, publish: false, reason: 'throttled' });
+
+  expect(shouldPublishLiveModelSnapshot({
+    hasPublishedModel: true,
+    keyframes: 5,
+    lastPublishedAtMs: 1000,
+    lastPublishedKeyframes: 4,
+    lastPublishedRawSampleCount: 12000,
+    nowMs: 1800,
+    previousBuildMs: 0,
+    rawSampleCount: 13500,
+  })).toMatchObject({ intervalMs: 760, publish: true, reason: 'stale' });
+});
+
+test('surfel buffer capacity grows in coarse chunks for WebGPU reuse', () => {
+  expect(nextSurfelBufferCapacityBytes(0)).toBe(0);
+  expect(nextSurfelBufferCapacityBytes(SURFEL_STRIDE_BYTES)).toBe(256 * 1024);
+  expect(nextSurfelBufferCapacityBytes(256 * 1024)).toBe(256 * 1024);
+  expect(nextSurfelBufferCapacityBytes(256 * 1024 + 1)).toBe(512 * 1024);
+});
+
+test('dense surfel models render with smaller splats', () => {
+  expect(modelSurfelPointScalePx(10000)).toBeCloseTo(3.4, 6);
+  expect(modelSurfelPointScalePx(40000)).toBeCloseTo(1.7, 6);
+  expect(modelSurfelPointScalePx(72000)).toBeCloseTo(1.7, 6);
 });
 
 test('serializeModelAsPly emits vertex colors and normals for Files export', () => {

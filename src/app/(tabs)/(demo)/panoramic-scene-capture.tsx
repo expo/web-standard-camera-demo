@@ -44,13 +44,17 @@ import {
   MAX_KEYFRAMES,
   MAX_SURFELS,
   MIN_KEYFRAME_SURFELS,
+  modelSurfelPointScalePx,
+  nextSurfelBufferCapacityBytes,
   panoramicCoverageKey,
   panoramicCoveragePercent,
   performanceNow,
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
+  shouldPublishLiveModelSnapshot,
   SURFEL_STRIDE_BYTES,
   type CaptureModel,
+  type LiveModelSnapshotPublishDecision,
   type KeyframeSnapshot,
   type PanoramicCaptureStatus,
   type SurfelFusionAccumulator,
@@ -75,10 +79,6 @@ const QUAD_VERTEX_COUNT = 6;
 const COMMAND_BUTTON_GAP = 8;
 const COMMAND_BUTTON_HEIGHT = 38;
 const COMMAND_BUTTON_NATIVE_CHROME_WIDTH = 36;
-const LIVE_MODEL_BUILD_INTERVAL_MS = 320;
-// @ref LLP 0020#webgpu-rendering - Dense surfel captures should render as
-// small camera-facing splats rather than oversized point sprites.
-const MODEL_SURFEL_POINT_SCALE_PX = 3.4;
 const MODEL_VIEW_MODES = [
   { label: 'Color', value: 0 },
   { label: 'Depth', value: 1 },
@@ -191,7 +191,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const captureInFlightRef = React.useRef(false);
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
-  const lastLiveModelBuildMsRef = React.useRef(0);
+  const lastLiveModelBuildDurationMsRef = React.useRef(0);
+  const lastLiveModelKeyframesRef = React.useRef(0);
+  const lastLiveModelPublishedAtMsRef = React.useRef(0);
+  const lastLiveModelRawSampleCountRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
   const modelViewModeRef = React.useRef<ModelViewMode>(0);
@@ -306,7 +309,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     coverageSectorsRef.current = new Set();
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
-    lastLiveModelBuildMsRef.current = 0;
+    lastLiveModelBuildDurationMsRef.current = 0;
+    lastLiveModelKeyframesRef.current = 0;
+    lastLiveModelPublishedAtMsRef.current = 0;
+    lastLiveModelRawSampleCountRef.current = 0;
     surfelCountRef.current = 0;
     modelViewModeRef.current = 0;
     publishModel(null);
@@ -473,20 +479,38 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
     const now = performanceNow();
     const hasPublishedModel = modelRef.current !== null;
-    if (hasPublishedModel && now - lastLiveModelBuildMsRef.current < LIVE_MODEL_BUILD_INTERVAL_MS) {
+    // @ref LLP 0020#performance-constraints - Live scan feedback backs off as
+    // retained samples and build cost grow; Preview/Capture still force a full
+    // model build at the user boundary.
+    const publishDecision = shouldPublishLiveModelSnapshot({
+      hasPublishedModel,
+      keyframes: keyframeCountRef.current,
+      lastPublishedAtMs: lastLiveModelPublishedAtMsRef.current,
+      lastPublishedKeyframes: lastLiveModelKeyframesRef.current,
+      lastPublishedRawSampleCount: lastLiveModelRawSampleCountRef.current,
+      nowMs: now,
+      previousBuildMs: lastLiveModelBuildDurationMsRef.current,
+      rawSampleCount: fusionRef.current.rawSampleCount,
+    });
+    if (!publishDecision.publish) {
       return false;
     }
-    lastLiveModelBuildMsRef.current = now;
     const nextModel = buildPreviewModel();
     if (!nextModel || nextModel.surfelCount === 0) {
       return false;
     }
+    lastLiveModelBuildDurationMsRef.current = nextModel.buildMs;
+    lastLiveModelKeyframesRef.current = keyframeCountRef.current;
+    lastLiveModelPublishedAtMsRef.current = performanceNow();
+    lastLiveModelRawSampleCountRef.current = fusionRef.current.rawSampleCount;
     // @ref LLP 0020#performance-constraints - During scan, publish throttled
     // fused snapshots for live WebGPU feedback; avoid rebuilding on every XR
     // frame as retained samples grow.
     publishModel(nextModel, { recenter: !hasPublishedModel });
-    setModelInfo(`live: ${formatModelInfo(nextModel)}`);
-    logLiveModelProfile(nextModel);
+    setModelInfo(
+      `live: ${formatModelInfo(nextModel)} - refresh ${nextModel.buildMs.toFixed(1)}ms/${publishDecision.intervalMs}ms`
+    );
+    logLiveModelProfile(nextModel, publishDecision);
     return true;
   }
 
@@ -732,6 +756,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
         });
         let surfelBuffer: GPUBuffer | null = null;
+        let surfelBufferCapacityBytes = 0;
         let depthTexture: GPUTexture | null = null;
         let lastModelRevision = -1;
         let renderedCapturedModelRevision = -1;
@@ -747,15 +772,34 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           });
         };
 
-        const rebuildSurfelBuffer = (nextModel: CaptureModel | null): void => {
-          surfelBuffer?.destroy();
-          surfelBuffer = null;
-          if (!nextModel || nextModel.surfelCount === 0) return;
-          surfelBuffer = device.createBuffer({
-            size: Math.max(nextModel.surfels.byteLength, SURFEL_STRIDE_BYTES),
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-          });
+        const uploadSurfelBuffer = (nextModel: CaptureModel | null, modelRevision: number): void => {
+          if (!nextModel || nextModel.surfelCount === 0) {
+            surfelBuffer?.destroy();
+            surfelBuffer = null;
+            surfelBufferCapacityBytes = 0;
+            return;
+          }
+          const uploadStart = performanceNow();
+          const requiredBytes = nextModel.surfels.byteLength;
+          const nextCapacityBytes = nextSurfelBufferCapacityBytes(requiredBytes);
+          let allocated = false;
+          if (!surfelBuffer || requiredBytes > surfelBufferCapacityBytes) {
+            surfelBuffer?.destroy();
+            surfelBuffer = device.createBuffer({
+              size: nextCapacityBytes,
+              usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            });
+            surfelBufferCapacityBytes = nextCapacityBytes;
+            allocated = true;
+          }
           device.queue.writeBuffer(surfelBuffer, 0, nextModel.surfels);
+          logModelUploadProfile(
+            nextModel,
+            modelRevision,
+            performanceNow() - uploadStart,
+            allocated,
+            surfelBufferCapacityBytes
+          );
         };
 
         rebuildDepthTexture(width, height);
@@ -766,7 +810,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           const currentModelRevision = modelRevisionRef.current;
           if (currentModelRevision !== lastModelRevision) {
             lastModelRevision = currentModelRevision;
-            rebuildSurfelBuffer(currentModel);
+            uploadSurfelBuffer(currentModel, currentModelRevision);
           }
 
           const elapsed = performanceNow() / 1000;
@@ -778,8 +822,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           );
           const uniforms = new Float32Array(20);
           uniforms.set(viewProjection, 0);
-          uniforms[16] = MODEL_SURFEL_POINT_SCALE_PX / Math.max(width, 1);
-          uniforms[17] = MODEL_SURFEL_POINT_SCALE_PX / Math.max(height, 1);
+          // @ref LLP 0020#webgpu-rendering - Dense surfel captures render as
+          // smaller camera-facing splats to reduce overdraw on device GPUs.
+          const pointScalePx = modelSurfelPointScalePx(currentModel?.surfelCount ?? 0);
+          uniforms[16] = pointScalePx / Math.max(width, 1);
+          uniforms[17] = pointScalePx / Math.max(height, 1);
           uniforms[18] = elapsed;
           uniforms[19] = modelViewModeRef.current;
           device.queue.writeBuffer(uniformBuffer, 0, uniforms);
@@ -1258,12 +1305,34 @@ function logRenderMetrics(
   }));
 }
 
-function logLiveModelProfile(model: CaptureModel): void {
+function logLiveModelProfile(
+  model: CaptureModel,
+  publishDecision: LiveModelSnapshotPublishDecision
+): void {
   console.log('PANORAMIC_LIVE_MODEL_PROFILE', JSON.stringify({
     buildMs: Number(model.buildMs.toFixed(2)),
+    intervalMs: publishDecision.intervalMs,
     keyframes: model.keyframes,
+    reason: publishDecision.reason,
     rawSampleCount: model.rawSampleCount,
     surfelCount: model.surfelCount,
+  }));
+}
+
+function logModelUploadProfile(
+  model: CaptureModel,
+  modelRevision: number,
+  uploadMs: number,
+  allocated: boolean,
+  capacityBytes: number
+): void {
+  console.log('PANORAMIC_MODEL_UPLOAD_PROFILE', JSON.stringify({
+    allocated,
+    capacityBytes,
+    modelRevision,
+    surfelBytes: model.surfels.byteLength,
+    surfelCount: model.surfelCount,
+    uploadMs: Number(uploadMs.toFixed(2)),
   }));
 }
 

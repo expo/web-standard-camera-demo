@@ -69,7 +69,10 @@ Implemented:
   `PANORAMIC_KEYFRAME_PROFILE`; scan mode maintains an incremental voxel-fusion
   map and publishes throttled `PANORAMIC_LIVE_MODEL_PROFILE` snapshots for
   realtime WebGPU feedback. The full model is not rebuilt on every XR frame, so
-  live capture work avoids the earlier quadratic point-history path.
+  live capture work avoids the earlier quadratic point-history path. Live
+  snapshot publishing uses adaptive backoff after 10k retained samples and
+  reports the selected refresh interval in telemetry; manual Preview and final
+  Capture still force full model builds.
 - Lazy WebXR payloads: native XR animation-frame polling returns frame metadata
   first and defers CPU depth copies plus camera preview rendering until
   `XRCPUDepthInformation.data` or `XRCPUCameraBinding.getCameraImage()` is
@@ -78,6 +81,9 @@ Implemented:
   nonempty surfel buffer, the viewer logs `PANORAMIC_RENDER_METRICS` with the
   canvas size, presentation format, model revision, keyframe count, surfel
   count, and quality percentages.
+- WebGPU upload telemetry: model revisions log `PANORAMIC_MODEL_UPLOAD_PROFILE`
+  with upload time, surfel byte count, and whether a larger reusable vertex
+  buffer had to be allocated.
 - Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
   Files-visible path, file URI, byte count, keyframe count, and surfel count
   only after the Documents file exists and reports a nonzero size.
@@ -490,7 +496,8 @@ For surfels:
 - enable depth testing
 - size each splat from surfel radius and camera distance, clamped to a small
   screen-space range so dense captures read as surfaces instead of oversized
-  blobs
+  blobs; after roughly 10k rendered surfels, reduce the base splat size as
+  density grows to limit fragment overdraw on device GPUs
 - shade with camera color, optional normal lighting, and a subtle confidence
   fade; color mode should still apply a low luminance floor so black or
   unavailable camera pixels do not make the surfel cloud disappear
@@ -579,6 +586,13 @@ The first version should optimize for predictable device behavior:
 - cap memory by keyframe count and point count
 - prefer `bgra8unorm` over JS BGRA-to-RGBA conversion
 - avoid full-resolution CPU texture atlasing in the scan loop
+- during live scan, back off fused model snapshot rebuilds as retained samples
+  pass 10k/25k/45k or as previous build time grows; this keeps realtime
+  feedback responsive while preserving explicit Preview/Capture as the full
+  model build boundaries
+- reuse WebGPU surfel vertex buffers with coarse capacity growth instead of
+  destroying and reallocating a tightly sized buffer for every live model
+  revision
 - profile on a physical LiDAR device with `WEBGPU_DEMO_PROFILE`-style logs
 
 Suggested first caps:

@@ -14,6 +14,15 @@ export const PANORAMIC_COVERAGE_PITCH_BINS = 3;
 export const PANORAMIC_COVERAGE_PITCH_RANGE_DEG = 60;
 export const SURFEL_STRIDE_FLOATS = 12;
 export const SURFEL_STRIDE_BYTES = SURFEL_STRIDE_FLOATS * 4;
+export const LIVE_MODEL_BASE_INTERVAL_MS = 320;
+export const LIVE_MODEL_10K_INTERVAL_MS = 760;
+export const LIVE_MODEL_25K_INTERVAL_MS = 1250;
+export const LIVE_MODEL_45K_INTERVAL_MS = 1800;
+export const LIVE_MODEL_MAX_BUILD_PRESSURE_INTERVAL_MS = 2200;
+export const SURFEL_BUFFER_CAPACITY_GRANULARITY_BYTES = 256 * 1024;
+export const MODEL_SURFEL_BASE_POINT_SCALE_PX = 3.4;
+export const MODEL_SURFEL_DENSE_POINT_SCALE_MIN_PX = 1.7;
+export const MODEL_SURFEL_DENSE_POINT_SCALE_THRESHOLD = 10000;
 
 export type Vec3 = [number, number, number];
 
@@ -65,6 +74,23 @@ export interface PanoramicCaptureControlState {
   capturedModelAvailable: boolean;
   transitioning: boolean;
   unsupported: boolean;
+}
+
+export interface LiveModelSnapshotPublishInput {
+  hasPublishedModel: boolean;
+  keyframes: number;
+  lastPublishedAtMs: number;
+  lastPublishedKeyframes: number;
+  lastPublishedRawSampleCount: number;
+  nowMs: number;
+  previousBuildMs: number;
+  rawSampleCount: number;
+}
+
+export interface LiveModelSnapshotPublishDecision {
+  intervalMs: number;
+  publish: boolean;
+  reason: 'initial' | 'no-keyframes' | 'stale' | 'throttled' | 'unchanged';
 }
 
 export interface KeyframeSnapshot {
@@ -126,6 +152,66 @@ export function derivePanoramicCaptureControls({
     transitioning,
     unsupported: status === 'unsupported',
   };
+}
+
+export function liveModelSnapshotIntervalMs(rawSampleCount: number, previousBuildMs: number): number {
+  const sampleCount = Math.max(0, rawSampleCount);
+  const samplePressureInterval = sampleCount >= 45000
+    ? LIVE_MODEL_45K_INTERVAL_MS
+    : sampleCount >= 25000
+      ? LIVE_MODEL_25K_INTERVAL_MS
+      : sampleCount >= 10000
+        ? LIVE_MODEL_10K_INTERVAL_MS
+        : LIVE_MODEL_BASE_INTERVAL_MS;
+  const buildPressureInterval = previousBuildMs > 0
+    ? clamp(previousBuildMs * 5, LIVE_MODEL_BASE_INTERVAL_MS, LIVE_MODEL_MAX_BUILD_PRESSURE_INTERVAL_MS)
+    : LIVE_MODEL_BASE_INTERVAL_MS;
+  return Math.round(Math.max(samplePressureInterval, buildPressureInterval));
+}
+
+export function shouldPublishLiveModelSnapshot({
+  hasPublishedModel,
+  keyframes,
+  lastPublishedAtMs,
+  lastPublishedKeyframes,
+  lastPublishedRawSampleCount,
+  nowMs,
+  previousBuildMs,
+  rawSampleCount,
+}: LiveModelSnapshotPublishInput): LiveModelSnapshotPublishDecision {
+  const intervalMs = liveModelSnapshotIntervalMs(rawSampleCount, previousBuildMs);
+  if (keyframes <= 0 || rawSampleCount <= 0) {
+    return { intervalMs, publish: false, reason: 'no-keyframes' };
+  }
+  if (!hasPublishedModel) {
+    return { intervalMs, publish: true, reason: 'initial' };
+  }
+  if (keyframes <= lastPublishedKeyframes && rawSampleCount <= lastPublishedRawSampleCount) {
+    return { intervalMs, publish: false, reason: 'unchanged' };
+  }
+  if (nowMs - lastPublishedAtMs < intervalMs) {
+    return { intervalMs, publish: false, reason: 'throttled' };
+  }
+  return { intervalMs, publish: true, reason: 'stale' };
+}
+
+export function nextSurfelBufferCapacityBytes(requiredBytes: number): number {
+  if (!Number.isFinite(requiredBytes) || requiredBytes <= 0) return 0;
+  const bytes = Math.max(SURFEL_STRIDE_BYTES, Math.ceil(requiredBytes));
+  return Math.ceil(bytes / SURFEL_BUFFER_CAPACITY_GRANULARITY_BYTES) *
+    SURFEL_BUFFER_CAPACITY_GRANULARITY_BYTES;
+}
+
+export function modelSurfelPointScalePx(surfelCount: number): number {
+  if (!Number.isFinite(surfelCount) || surfelCount <= MODEL_SURFEL_DENSE_POINT_SCALE_THRESHOLD) {
+    return MODEL_SURFEL_BASE_POINT_SCALE_PX;
+  }
+  const densityScale = Math.sqrt(MODEL_SURFEL_DENSE_POINT_SCALE_THRESHOLD / surfelCount);
+  return clamp(
+    MODEL_SURFEL_BASE_POINT_SCALE_PX * densityScale,
+    MODEL_SURFEL_DENSE_POINT_SCALE_MIN_PX,
+    MODEL_SURFEL_BASE_POINT_SCALE_PX
+  );
 }
 
 export interface PanoramicRigidTransform {
