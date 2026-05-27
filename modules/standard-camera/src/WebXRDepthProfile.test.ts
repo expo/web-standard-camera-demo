@@ -294,6 +294,65 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
   }
 });
 
+test('XRSession.requestAnimationFrame logs the first native frame pump sample immediately', () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+  const originalConsoleLog = console.log;
+  const originalPerformance = globalThis.performance;
+  const callbacks: FrameRequestCallback[] = [];
+  const profileLogs: unknown[] = [];
+
+  try {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => ({
+      ...makeNativeFrame(1),
+      arFrameNumber: 1,
+    });
+    console.log = (name: unknown, payload?: unknown): void => {
+      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
+    };
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      value: { ...originalPerformance, now: () => 100 },
+    });
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+      callbacks.push(callback);
+      return callbacks.length;
+    }) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
+
+    const session = new WebXRSession({
+      cameraAccessEnabled: false,
+      cameraFormat: 'bgra8unorm',
+      depthEnabled: true,
+      depthType: 'raw',
+      meshDetectionEnabled: false,
+      sessionId: 1,
+    });
+
+    session.requestAnimationFrame(() => {});
+    flushNextRaf(callbacks);
+
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      deliveredFramePolls: 1,
+      latestFrameNumber: 1,
+      reason: 'delivered-frame',
+    });
+  } finally {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
+    console.log = originalConsoleLog;
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      value: originalPerformance,
+    });
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+    globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+  }
+});
+
 test('XRSession.end releases the external camera lock only after native ARKit stop resolves', async () => {
   const originalAddListener = NativeStandardCamera.addListener;
   const originalStop = NativeStandardCamera.stopLiDARDepthAsync;

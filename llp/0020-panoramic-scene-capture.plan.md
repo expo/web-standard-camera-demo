@@ -164,8 +164,11 @@ Implemented:
   reached. Validator summaries SHOULD compare WebXR depth-frame counters with
   ARKit frame counters so a one-keyframe scan can be classified as JS keyframe
   rejection, full native frame-pump starvation, or native scene-depth
-  starvation while ARKit camera frames continue. The route accepts `?autorun=1`
-  for physical-device profiling runs so
+  starvation while ARKit camera frames continue. The WebXR frame-pump profiler
+  SHOULD emit its first sample immediately instead of waiting for its periodic
+  interval, because first-frame-only failures often happen before a second
+  profile window opens. The route accepts `?autorun=1` for physical-device
+  profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
   the normal Start Scan control for manual use. Live
   snapshot publishing uses adaptive backoff after 10k retained samples and

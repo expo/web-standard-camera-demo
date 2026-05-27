@@ -524,7 +524,7 @@ export class WebXRSession extends EventTarget {
   #ended = false;
   #callbacks = new Map<number, ScheduledXRCallback>();
   #lastDeliveredFrameNumber = 0;
-  #lastFramePumpProfileLoggedAtMs = 0;
+  #lastFramePumpProfileLoggedAtMs = -Infinity;
   #lastProfileARFrameNumber = 0;
   #lastProfileDepthFrameNumber = 0;
   #deliveredFramePolls = 0;

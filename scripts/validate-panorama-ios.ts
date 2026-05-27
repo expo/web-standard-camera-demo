@@ -1564,10 +1564,10 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     const noFramePolls = numberField(framePump, 'noFramePolls');
     const staleFramePolls = numberField(framePump, 'staleFramePolls');
     const reason = stringField(framePump, 'reason') || 'unknown';
-    if (deliveredFramePolls <= 0 && (noFramePolls > 0 || staleFramePolls > 0)) {
+    if (deliveredFramePolls <= 1 && (noFramePolls > 0 || staleFramePolls > 0)) {
       const arFrameDelta = numberField(framePump, 'arFrameDelta');
       const depthFrameDelta = numberField(framePump, 'depthFrameDelta');
-      if (staleFramePolls > 0 && arFrameDelta > 0 && depthFrameDelta <= 0) {
+      if (staleFramePolls > 0 && arFrameDelta > 0 && depthFrameDelta <= 1) {
         const arFrameNumber = numberField(framePump, 'arFrameNumber');
         const depthFrameArFrameNumber = numberField(framePump, 'depthFrameArFrameNumber');
         const depthFrameLag = arFrameNumber > 0 && depthFrameArFrameNumber > 0
