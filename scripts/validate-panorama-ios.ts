@@ -1590,6 +1590,7 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
       if (staleFramePolls > 0 && arFrameDelta > 0 && depthFrameDelta <= 1) {
         const arFrameNumber = numberField(framePump, 'arFrameNumber');
         const depthFrameArFrameNumber = numberField(framePump, 'depthFrameArFrameNumber');
+        const latestFrameNumber = numberField(framePump, 'latestFrameNumber');
         const depthFrameLag = arFrameNumber > 0 && depthFrameArFrameNumber > 0
           ? Math.max(0, arFrameNumber - depthFrameArFrameNumber)
           : 0;
@@ -1599,7 +1600,10 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
         const depthMissDetail = numberField(framePump, 'depthMisses') > 0 || numberField(framePump, 'consecutiveDepthMisses') > 0
           ? `, depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}`
           : '';
-        return `First-frame diagnosis: ARKit camera frames are still arriving (+${arFrameDelta}), but WebXR scene-depth snapshots are stuck on depth frame ${numberField(framePump, 'latestFrameNumber')}${depthSourceDetail}${depthMissDetail}; this points to native scene-depth starvation rather than JS keyframe rejection`;
+        if (latestFrameNumber <= 0) {
+          return `First-frame diagnosis: ARKit camera frames are arriving (+${arFrameDelta}), but WebXR scene-depth snapshots have not been produced yet${depthMissDetail}; this points to native scene-depth starvation before JS can add surfels`;
+        }
+        return `First-frame diagnosis: ARKit camera frames are still arriving (+${arFrameDelta}), but WebXR scene-depth snapshots are stuck on depth frame ${latestFrameNumber}${depthSourceDetail}${depthMissDetail}; this points to native scene-depth starvation rather than JS keyframe rejection`;
       }
       return `First-frame diagnosis: WebXR native frame delivery stalled (${reason}; no-frame ${noFramePolls}, stale ${staleFramePolls}) before the app could add more surfels`;
     }

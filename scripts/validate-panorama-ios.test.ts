@@ -713,6 +713,34 @@ test('panorama validator distinguishes ARKit frame delivery from stale scene-dep
   );
 });
 
+test('panorama validator diagnoses ARKit frames with no scene-depth snapshot', () => {
+  const seen = {
+    PANORAMIC_SCAN_STATS: {
+      acceptedKeyframes: 0,
+      elapsedMs: 1000,
+      frameCount: 0,
+      rejectedByReason: {},
+    },
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      arFrameDelta: 18,
+      arFrameNumber: 18,
+      consecutiveDepthMisses: 18,
+      deliveredFramePolls: 0,
+      depthFrameDelta: 0,
+      depthMisses: 18,
+      lastDeliveredFrameNumber: 0,
+      latestFrameNumber: 0,
+      noFramePolls: 0,
+      reason: 'stale-frame',
+      staleFramePolls: 18,
+    },
+  } satisfies SeenMetrics;
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'First-frame diagnosis: ARKit camera frames are arriving (+18), but WebXR scene-depth snapshots have not been produced yet, depth misses 18 consecutive 18; this points to native scene-depth starvation before JS can add surfels'
+  );
+});
+
 test('panorama validator diagnoses native frame starvation after the first surfel batch', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {

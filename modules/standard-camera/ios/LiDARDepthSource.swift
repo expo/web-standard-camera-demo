@@ -700,9 +700,38 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let arFrameTimestamp = latestARFrameTimestamp
     let depthMissCount = totalDepthMisses
     let currentConsecutiveDepthMisses = consecutiveDepthMisses
+    let diagnosticDepthType = activeDepthType
     lock.unlock()
 
     guard let snapshot else {
+      if arFrameNumber > 0 || depthMissCount > 0 || currentConsecutiveDepthMisses > 0 {
+        // @ref LLP 0020#testing-and-validation — Before the first scene-depth
+        // snapshot exists, WebXR must not deliver an XRFrame. Still return a
+        // non-deliverable frame-number-zero diagnostic so JS logs can distinguish
+        // "ARKit is not producing frames" from "ARKit frames have no scene depth".
+        return [
+          "width": 0,
+          "height": 0,
+          "depthFormat": "r32float",
+          "depthType": diagnosticDepthType.rawValue,
+          "timestamp": 0,
+          "trackingState": "unknown",
+          "worldMappingStatus": "unknown",
+          "projectionMatrix": webXRIdentityMatrix,
+          "projectionCameraImageResolution": [0, 0],
+          "viewTransform": webXRIdentityMatrix,
+          "normDepthBufferFromNormView": webXRIdentityMatrix,
+          "arFrameNumber": arFrameNumber,
+          "arFrameTimestamp": arFrameTimestamp,
+          "consecutiveDepthMisses": currentConsecutiveDepthMisses,
+          "depthFrameArFrameNumber": depthFrameARFrameNumber,
+          "depthMisses": depthMissCount,
+          "frameNumber": 0,
+          "minDepth": 0,
+          "maxDepth": 0,
+          "meanDepth": 0,
+        ]
+      }
       return nil
     }
 

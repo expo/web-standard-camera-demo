@@ -167,7 +167,10 @@ Implemented:
   starvation while ARKit camera frames continue. The WebXR frame-pump profiler
   SHOULD emit its first sample immediately instead of waiting for its periodic
   interval, because first-frame-only failures often happen before a second
-  profile window opens. The route accepts `?autorun=1`, `?depth=raw`, and
+  profile window opens. If ARKit frames arrive before the first scene-depth
+  snapshot, native SHOULD expose a non-deliverable frame-number-zero diagnostic
+  so logs can distinguish pre-first-depth starvation from total ARKit startup
+  failure. The route accepts `?autorun=1`, `?depth=raw`, and
   `?mesh=0` for physical-device profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
   the normal Start Scan control for manual use, and so profile-only logs can
