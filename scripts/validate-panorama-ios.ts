@@ -53,6 +53,7 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE',
   'PANORAMIC_XR_POSE_PROFILE',
 ] as const satisfies readonly OptionalMetricName[];
+const metricLogScanIds = new WeakMap<SeenMetrics, number>();
 
 export type RequiredMetricName =
   | 'PANORAMIC_KEYFRAME_PROFILE'
@@ -474,8 +475,29 @@ export function recordMetricLine(line: string, seen: SeenMetrics): void {
     console.warn(`Ignored invalid ${name}: ${JSON.stringify(metric)}`);
     return;
   }
+  if (!applyMetricScanBoundary(seen, metric)) {
+    return;
+  }
   seen[name] = mergeObservedMetric(name, seen[name], metric);
   console.log(`${name} ${JSON.stringify(seen[name])}`);
+}
+
+function applyMetricScanBoundary(seen: SeenMetrics, metric: Record<string, unknown>): boolean {
+  const scanId = numberField(metric, 'scanId');
+  if (scanId <= 0) return true;
+  const currentScanId = metricLogScanIds.get(seen) ?? 0;
+  if (currentScanId > 0 && scanId < currentScanId) {
+    return false;
+  }
+  if (scanId === currentScanId) return true;
+  for (const metricName of REQUIRED_METRICS) {
+    delete seen[metricName];
+  }
+  for (const metricName of OPTIONAL_METRICS) {
+    delete seen[metricName];
+  }
+  metricLogScanIds.set(seen, scanId);
+  return true;
 }
 
 export function parseMetricLogText(text: string): SeenMetrics {

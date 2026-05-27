@@ -231,6 +231,25 @@ test('panorama validator parses copied log text for offline profiling', () => {
   });
 });
 
+test('panorama validator keeps the latest scan id from copied multi-run logs', () => {
+  const seen = parseMetricLogText(`
+ LOG PANORAMIC_CAPTURE_METRICS {"boundsMeters":[2,1,1],"cameraColorPercent":85,"keyframes":12,"rawSampleCount":1200,"scanId":1,"surfelCount":900}
+ LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"smooth","depthTypeRequest":["smooth","raw"],"meshRequested":true,"scanId":2,"sessionDepthType":"smooth"}
+ LOG PANORAMIC_CAPTURE_METRICS {"boundsMeters":[2,1,1],"cameraColorPercent":85,"keyframes":12,"rawSampleCount":1200,"scanId":1,"surfelCount":900}
+ LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":12,"cameraColorPercent":90,"fusedSurfelCount":40,"keyframes":1,"rawSampleCount":40,"retainedSamples":40,"scanId":2,"surfelCount":40}
+ LOG PANORAMIC_CAPTURE_METRICS {"boundsMeters":[0.2,0.1,0.1],"cameraColorPercent":90,"keyframes":1,"rawSampleCount":40,"scanId":2,"surfelCount":40}
+  `);
+
+  expect(seen.PANORAMIC_SCAN_CONFIG?.scanId).toBe(2);
+  expect(seen.PANORAMIC_KEYFRAME_PROFILE?.scanId).toBe(2);
+  expect(seen.PANORAMIC_CAPTURE_METRICS).toMatchObject({
+    keyframes: 1,
+    rawSampleCount: 40,
+    scanId: 2,
+    surfelCount: 40,
+  });
+});
+
 test('panorama validator keeps worst repeated timing while preserving latest counts', () => {
   const seen: SeenMetrics = {};
 

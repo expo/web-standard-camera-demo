@@ -295,6 +295,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const lastMeshSupplementSignatureRef = React.useRef<string | null>(null);
   const lastKeyframeRejectionProfileLoggedAtMsRef = React.useRef(0);
   const lastScanStatsLoggedAtMsRef = React.useRef(0);
+  const scanIdRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
   const modelViewModeRef = React.useRef<ModelViewMode>(0);
@@ -429,6 +430,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   );
 
   function resetCapture(): void {
+    scanIdRef.current += 1;
     fusionRef.current = createSurfelFusionAccumulator();
     coverageSectorsRef.current = new Set();
     keyframeRef.current = null;
@@ -530,6 +532,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       rawSampleCount: fusionRef.current.rawSampleCount,
       reason: reason ?? 'unknown',
       retainedSamples: surfelCountRef.current,
+      scanId: scanIdRef.current,
       status: statusRef.current,
       ...fields,
     }));
@@ -568,6 +571,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       rejectedByReason: stats.rejectedByReason,
       rawSampleCount: fusionRef.current.rawSampleCount,
       retainedSamples: surfelCountRef.current,
+      scanId: scanIdRef.current,
       scanFps: roundMetric(1000 * stats.frameCount / Math.max(elapsedMs, 1), 1),
       updatedVoxelCount: stats.totalUpdatedVoxelCount,
     }));
@@ -589,6 +593,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       rawSampleCount: fusionRef.current.rawSampleCount,
       reason,
       retainedSamples: surfelCountRef.current,
+      scanId: scanIdRef.current,
       sessionEnded: session.ended,
       sessionMatches: sessionRef.current === session,
       status: statusRef.current,
@@ -609,6 +614,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       depthPreference: requestedDepthPreference,
       depthTypeRequest: requestedDepthTypes,
       meshRequested: requestedMesh,
+      scanId: scanIdRef.current,
       sessionDepthType: session.depthType ?? null,
     }));
   }
@@ -646,6 +652,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       lastChangedTime: roundMetric(latestChangedTime),
       meshCount,
       normalCount: 0,
+      scanId: scanIdRef.current,
     }));
   }
 
@@ -759,8 +766,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current });
       setModelInfo(formatModelInfo(nextModel));
       setQualityInfo(formatQualityInfo(nextModel));
-      logCaptureMetrics(nextModel, previewBuild);
-      logCaptureGeometryMetrics(nextModel, scanForwardSumRef.current);
+      logCaptureMetrics(nextModel, previewBuild, scanIdRef.current);
+      logCaptureGeometryMetrics(nextModel, scanForwardSumRef.current, scanIdRef.current);
       logScanStats('capture');
       setSaveInfo('ready to save .ply');
       statusRef.current = 'captured';
@@ -808,7 +815,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       setModelInfo(`preview: ${formatModelInfo(nextModel)}`);
       setQualityInfo(formatQualityInfo(nextModel));
       setFrameInfo(`preview model: ${nextModel.surfelCount} fused surfels from ${keyframeCountRef.current} keyframes`);
-      logPreviewMetrics(nextModel, previewBuild);
+      logPreviewMetrics(nextModel, previewBuild, scanIdRef.current);
       logScanStats('preview');
     } catch (e) {
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -881,7 +888,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setModelInfo(
       `live: ${formatModelInfo(nextModel)} - refresh ${previewBuild.buildMs.toFixed(1)}ms/${publishDecision.intervalMs}ms`
     );
-    logLiveModelProfile(nextModel, publishDecision, previewBuild);
+    logLiveModelProfile(nextModel, publishDecision, previewBuild, scanIdRef.current);
     return true;
   }
 
@@ -905,7 +912,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       }
       const filesLocation = formatFilesLocation(filename, savedSize);
       setSaveInfo(filesLocation);
-      logExportMetrics(capturedModel, file.uri, filename, savedSize);
+      logExportMetrics(capturedModel, file.uri, filename, savedSize, scanIdRef.current);
       const available = await Sharing.isAvailableAsync();
       if (!available) {
         return;
@@ -1175,7 +1182,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             modelRevision,
             performanceNow() - uploadStart,
             allocated,
-            surfelBufferCapacityBytes
+            surfelBufferCapacityBytes,
+            scanIdRef.current
           );
         };
 
@@ -1275,7 +1283,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               modelViewModeRef.current,
               statusRef.current,
               renderFrameProfile,
-              'model-change'
+              'model-change',
+              scanIdRef.current
             );
           } else if (
             currentModel &&
@@ -1292,7 +1301,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               modelViewModeRef.current,
               statusRef.current,
               renderFrameProfile,
-              'gesture'
+              'gesture',
+              scanIdRef.current
             );
           }
           if (didDrawCapturedModel && currentModel) {
@@ -1304,7 +1314,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               height,
               presentationFormat,
               modelViewModeRef.current,
-              renderFrameProfile
+              renderFrameProfile,
+              scanIdRef.current
             );
           }
 
@@ -2045,6 +2056,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       rotationDeg: sampleDecision.rotationDeg,
       rotationSpeedDegPerSec: sampleDecision.rotationSpeedDegPerSec,
       sampleDecisionMs,
+      scanId: scanIdRef.current,
       transform: cameraToWorld,
       surfelCount: totalSurfelCount,
       fusedSurfelCount,
@@ -2106,7 +2118,7 @@ function CommandButton({
   );
 }
 
-function logCaptureMetrics(model: CaptureModel, build: PreviewModelBuildResult): void {
+function logCaptureMetrics(model: CaptureModel, build: PreviewModelBuildResult, scanId: number): void {
   const boundsMeters = [
     model.boundsMax[0] - model.boundsMin[0],
     model.boundsMax[1] - model.boundsMin[1],
@@ -2125,12 +2137,13 @@ function logCaptureMetrics(model: CaptureModel, build: PreviewModelBuildResult):
     normalPercent: roundMetric(100 * model.normalEstimatedSurfels / Math.max(model.surfelCount, 1), 1),
     rawSampleCount: model.rawSampleCount,
     reusedModel: build.reusedModel,
+    scanId,
     surfelCount: model.surfelCount,
     voxelSizeMeters: model.voxelSizeMeters,
   }));
 }
 
-function logCaptureGeometryMetrics(model: CaptureModel, scanForwardSum: Vec3): void {
+function logCaptureGeometryMetrics(model: CaptureModel, scanForwardSum: Vec3, scanId: number): void {
   const boundsMeters: Vec3 = [
     model.boundsMax[0] - model.boundsMin[0],
     model.boundsMax[1] - model.boundsMin[1],
@@ -2154,6 +2167,7 @@ function logCaptureGeometryMetrics(model: CaptureModel, scanForwardSum: Vec3): v
     normalProjectedRmsMeters: roundMetric(geometry.normalProjectedRmsMeters, 3),
     normalProjectedSpanMeters: roundMetric(geometry.normalProjectedSpanMeters, 3),
     rawSampleCount: model.rawSampleCount,
+    scanId,
     scanForwardAverage: roundVec3([
       scanForwardSum[0] / Math.max(model.keyframes, 1),
       scanForwardSum[1] / Math.max(model.keyframes, 1),
@@ -2164,7 +2178,7 @@ function logCaptureGeometryMetrics(model: CaptureModel, scanForwardSum: Vec3): v
   }));
 }
 
-function logPreviewMetrics(model: CaptureModel, build: PreviewModelBuildResult): void {
+function logPreviewMetrics(model: CaptureModel, build: PreviewModelBuildResult, scanId: number): void {
   console.log('PANORAMIC_PREVIEW_METRICS', JSON.stringify({
     buildMs: roundMetric(build.buildMs),
     cameraColorPercent: roundMetric(100 * model.cameraColoredSurfels / Math.max(model.surfelCount, 1), 1),
@@ -2177,17 +2191,19 @@ function logPreviewMetrics(model: CaptureModel, build: PreviewModelBuildResult):
     normalPercent: roundMetric(100 * model.normalEstimatedSurfels / Math.max(model.surfelCount, 1), 1),
     rawSampleCount: model.rawSampleCount,
     reusedModel: build.reusedModel,
+    scanId,
     surfelCount: model.surfelCount,
   }));
 }
 
-function logExportMetrics(model: CaptureModel, uri: string, filename: string, bytes: number): void {
+function logExportMetrics(model: CaptureModel, uri: string, filename: string, bytes: number, scanId: number): void {
   console.log('PANORAMIC_EXPORT_METRICS', JSON.stringify({
     bytes,
     filename,
     filesVisiblePath: `standard-camera-app/${filename}`,
     keyframes: model.keyframes,
     rawSampleCount: model.rawSampleCount,
+    scanId,
     surfelCount: model.surfelCount,
     uri,
   }));
@@ -2200,7 +2216,8 @@ function logRenderMetrics(
   canvasHeight: number,
   presentationFormat: GPUTextureFormat,
   modelViewMode: ModelViewMode,
-  renderFrameProfile: RenderFrameProfile
+  renderFrameProfile: RenderFrameProfile,
+  scanId: number
 ): void {
   console.log('PANORAMIC_RENDER_METRICS', JSON.stringify({
     buildMs: roundMetric(model.buildMs),
@@ -2216,6 +2233,7 @@ function logRenderMetrics(
     presentationFormat,
     rawSampleCount: model.rawSampleCount,
     renderFrameMs: roundMetric(renderFrameProfile.renderFrameMs),
+    scanId,
     submitPresentMs: roundMetric(renderFrameProfile.submitPresentMs),
     surfelCount: model.surfelCount,
     viewMode: MODEL_VIEW_MODES.find((mode) => mode.value === modelViewMode)?.label ?? modelViewMode,
@@ -2231,7 +2249,8 @@ function logRenderFrameProfile(
   modelViewMode: ModelViewMode,
   status: PanoramicCaptureStatus,
   renderFrameProfile: RenderFrameProfile,
-  reason: 'gesture' | 'model-change'
+  reason: 'gesture' | 'model-change',
+  scanId: number
 ): void {
   console.log('PANORAMIC_RENDER_FRAME_PROFILE', JSON.stringify({
     canvasHeight,
@@ -2243,6 +2262,7 @@ function logRenderFrameProfile(
     rawSampleCount: model.rawSampleCount,
     reason,
     renderFrameMs: roundMetric(renderFrameProfile.renderFrameMs),
+    scanId,
     status,
     submitPresentMs: roundMetric(renderFrameProfile.submitPresentMs),
     surfelCount: model.surfelCount,
@@ -2253,7 +2273,8 @@ function logRenderFrameProfile(
 function logLiveModelProfile(
   model: CaptureModel,
   publishDecision: LiveModelSnapshotPublishDecision,
-  build: PreviewModelBuildResult
+  build: PreviewModelBuildResult,
+  scanId: number
 ): void {
   console.log('PANORAMIC_LIVE_MODEL_PROFILE', JSON.stringify({
     buildMs: roundMetric(build.buildMs),
@@ -2265,6 +2286,7 @@ function logLiveModelProfile(
     reason: publishDecision.reason,
     rawSampleCount: model.rawSampleCount,
     reusedModel: build.reusedModel,
+    scanId,
     surfelCount: model.surfelCount,
   }));
 }
@@ -2274,7 +2296,8 @@ function logModelUploadProfile(
   modelRevision: number,
   uploadMs: number,
   allocated: boolean,
-  capacityBytes: number
+  capacityBytes: number,
+  scanId: number
 ): void {
   console.log('PANORAMIC_MODEL_UPLOAD_PROFILE', JSON.stringify({
     allocated,
@@ -2282,6 +2305,7 @@ function logModelUploadProfile(
     keyframes: model.keyframes,
     modelRevision,
     rawSampleCount: model.rawSampleCount,
+    scanId,
     surfelBytes: model.surfels.byteLength,
     surfelCount: model.surfelCount,
     uploadMs: roundMetric(uploadMs),
@@ -2323,6 +2347,7 @@ function logKeyframeProfile({
   rotationDeg,
   rotationSpeedDegPerSec,
   sampleDecisionMs,
+  scanId,
   transform,
   surfelCount,
   translationM,
@@ -2363,6 +2388,7 @@ function logKeyframeProfile({
   rotationDeg: number;
   rotationSpeedDegPerSec: number;
   sampleDecisionMs: number;
+  scanId: number;
   transform: Float32Array;
   surfelCount: number;
   translationM: number;
@@ -2475,6 +2501,7 @@ function logKeyframeProfile({
     colorSampleMs: roundMetric(appendProfile.colorSampleMs ?? 0),
     sampleConsumeMs: roundMetric(appendProfile.sampleConsumeMs ?? 0),
     sampleDecisionMs: roundMetric(sampleDecisionMs),
+    scanId,
     sampleGrid: [appendProfile.sampleGridX ?? 0, appendProfile.sampleGridY ?? 0],
     sampleOffset: [
       roundMetric(appendProfile.sampleOffsetX ?? 0, 3),
