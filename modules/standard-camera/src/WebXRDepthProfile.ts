@@ -50,6 +50,10 @@ type CameraLockHandlers = {
   unlockExternal: () => void;
 };
 
+export interface WebXRDepthProfileTelemetryContext {
+  scanId?: number | null;
+}
+
 type XRNavigator = Navigator & { xr?: WebXRSystem };
 
 declare global {
@@ -68,6 +72,7 @@ let activeImmersiveSession: WebXRSession | null = null;
 let cameraLockHandlers: CameraLockHandlers | null = null;
 let lastViewerPoseProfileLoggedAtMs = -Infinity;
 let lastViewerPoseDegradedProfileLoggedAtMs = -Infinity;
+let telemetryContext: WebXRDepthProfileTelemetryContext = {};
 const trackedMeshCacheBySession = new WeakMap<WebXRSession, Map<string, WebXRMesh>>();
 
 const IDENTITY_MATRIX = new Float32Array([
@@ -99,6 +104,13 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function unsupported(message: string): DOMException {
   return new DOMException(message, 'NotSupportedError');
+}
+
+function telemetryContextFields(): Record<string, unknown> {
+  const scanId = telemetryContext.scanId;
+  return typeof scanId === 'number' && Number.isFinite(scanId) && scanId > 0
+    ? { scanId: Math.floor(scanId) }
+    : {};
 }
 
 function invalidState(message: string): DOMException {
@@ -155,6 +167,7 @@ function logViewerPoseUnavailable(nativeFrame: NativeLiDARDepthFrame): void {
   console.log('PANORAMIC_XR_POSE_PROFILE', JSON.stringify({
     frameNumber: nativeFrame.frameNumber,
     returnedPose: false,
+    ...telemetryContextFields(),
     trackingState: nativeFrame.trackingState ?? 'unknown',
     worldMappingStatus: nativeFrame.worldMappingStatus ?? 'unknown',
   }));
@@ -178,6 +191,7 @@ function logViewerPoseDegraded(nativeFrame: NativeLiDARDepthFrame): void {
   console.log('PANORAMIC_XR_POSE_PROFILE', JSON.stringify({
     frameNumber: nativeFrame.frameNumber,
     returnedPose: true,
+    ...telemetryContextFields(),
     trackingState: nativeFrame.trackingState ?? 'unknown',
     worldMappingStatus: nativeFrame.worldMappingStatus ?? 'unknown',
   }));
@@ -380,6 +394,13 @@ function bgraToRgba(src: Uint8Array): Uint8Array {
 // by the LiDAR native sidecar.
 export function setWebXRDepthCameraLockHandlers(handlers: CameraLockHandlers | null): void {
   cameraLockHandlers = handlers;
+}
+
+// @ref LLP 0020#testing-and-validation - Panorama profiling scopes native
+// WebXR diagnostics by scan attempt so pasted multi-run logs do not merge an
+// older native frame pump profile into a later one-frame scan.
+export function setWebXRDepthProfileTelemetryContext(context: WebXRDepthProfileTelemetryContext | null): void {
+  telemetryContext = context ? { ...context } : {};
 }
 
 // React Native has no browser `navigator.userActivation`, so the demo's press
@@ -755,6 +776,7 @@ export class WebXRSession extends EventTarget {
       noFramePolls: this.#noFramePolls,
       reason,
       staleFramePolls: this.#staleFramePolls,
+      ...telemetryContextFields(),
     }));
     this.#lastProfileARFrameNumber = arFrameNumber;
     this.#lastProfileDepthFrameNumber = latestFrameNumber;
@@ -1282,6 +1304,7 @@ function logNativePayloadProfile(
       projectionCameraImageHeight > 0 ? roundMetric(frame.height / projectionCameraImageHeight, 4) : 0,
     ],
     requestMs: roundMetric(request.requestMs),
+    ...telemetryContextFields(),
     validDepthCount,
     validDepthPercent: depthPixelCount > 0 ? roundMetric(100 * validDepthCount / depthPixelCount, 1) : 0,
   }));
@@ -1337,6 +1360,7 @@ function logNativeMeshPayloadProfile(
     triangleCount: Math.floor(indexCount / 3),
     vertexBytes,
     vertexCount,
+    ...telemetryContextFields(),
   }));
 }
 

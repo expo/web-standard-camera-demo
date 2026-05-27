@@ -83,6 +83,7 @@ import {
 import {
   installWebXRDepthProfile,
   runWithWebXRUserActivation,
+  setWebXRDepthProfileTelemetryContext,
   WebXRCPUCameraBinding,
   type WebXRCPUDepthInformation,
   type WebXRCPUCameraImage,
@@ -425,12 +426,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       return () => {
         cancelXRLoop();
         void sessionRef.current?.end();
+        setWebXRDepthProfileTelemetryContext(null);
       };
     }, [])
   );
 
   function resetCapture(): void {
     scanIdRef.current += 1;
+    setWebXRDepthProfileTelemetryContext({ scanId: scanIdRef.current });
     fusionRef.current = createSurfelFusionAccumulator();
     coverageSectorsRef.current = new Set();
     keyframeRef.current = null;

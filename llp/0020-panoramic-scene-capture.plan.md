@@ -170,13 +170,14 @@ Implemented:
   count; device logs need to distinguish "no post-first frames accepted" from
   "post-first samples collapsed into the first frame's fused voxels" and from a
   stale live model publish. Route-side panorama telemetry SHOULD also include a
-  monotonically increasing `scanId`, and copied-log parsing SHOULD keep the
-  latest observed scan, so repeated manual attempts in one device-log paste do
-  not merge a previous full scan with a later one-frame failure. Validator
-  summaries SHOULD compare WebXR depth-frame counters with ARKit frame counters
-  so a one-keyframe scan can be classified as JS keyframe rejection, full native
-  frame-pump starvation, or native scene-depth starvation while ARKit camera
-  frames continue. The WebXR
+  monotonically increasing `scanId`, and the WebXR profile SHOULD copy that
+  context onto native pose, frame-pump, payload, and mesh-payload diagnostics.
+  Copied-log parsing SHOULD keep the latest observed scan, so repeated manual
+  attempts in one device-log paste do not merge a previous full scan with a later
+  one-frame failure. Validator summaries SHOULD compare WebXR depth-frame
+  counters with ARKit frame counters so a one-keyframe scan can be classified as
+  JS keyframe rejection, full native frame-pump starvation, or native scene-depth
+  starvation while ARKit camera frames continue. The WebXR
   frame-pump profiler SHOULD emit its first sample immediately instead of
   waiting for its periodic interval, because first-frame-only failures often
   happen before a second profile window opens. If ARKit frames arrive before the

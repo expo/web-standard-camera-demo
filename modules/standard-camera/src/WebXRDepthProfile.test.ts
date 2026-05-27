@@ -15,6 +15,7 @@ import {
   WebXRViewerPose,
   WebXRView,
   setWebXRDepthCameraLockHandlers,
+  setWebXRDepthProfileTelemetryContext,
 } from './WebXRDepthProfile';
 
 const PROJECTION = [
@@ -164,6 +165,7 @@ test('XRFrame.getViewerPose returns null when native tracking has no camera pose
   const profileLogs: unknown[] = [];
 
   try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 7 });
     console.log = (name: unknown, payload?: unknown): void => {
       if (name === 'PANORAMIC_XR_POSE_PROFILE') profileLogs.push(payload);
     };
@@ -187,10 +189,12 @@ test('XRFrame.getViewerPose returns null when native tracking has no camera pose
     expect(nullPoseLog).toMatchObject({
       frameNumber: 1,
       returnedPose: false,
+      scanId: 7,
       trackingState: 'notAvailable',
       worldMappingStatus: 'mapped',
     });
   } finally {
+    setWebXRDepthProfileTelemetryContext(null);
     console.log = originalConsoleLog;
   }
 });
@@ -230,6 +234,7 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
   let delivered = 0;
 
   try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 8 });
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => nativeFrame;
     console.log = (name: unknown, payload?: unknown): void => {
@@ -264,6 +269,7 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
       deliveredFramePolls: 1,
       latestFrameNumber: 1,
       reason: 'delivered-frame',
+      scanId: 8,
     });
 
     session.requestAnimationFrame(onFrame);
@@ -279,9 +285,11 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
       deliveredFramePolls: 1,
       latestFrameNumber: 2,
       reason: 'delivered-frame',
+      scanId: 8,
       staleFramePolls: 1,
     });
   } finally {
+    setWebXRDepthProfileTelemetryContext(null);
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
     console.log = originalConsoleLog;
@@ -565,6 +573,7 @@ test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', ()
   let fullMeshRequests = 0;
 
   try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 9 });
     console.log = (name: unknown, payload?: unknown): void => {
       if (name === 'PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE') profileLogs.push(payload);
     };
@@ -608,6 +617,7 @@ test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', ()
       meshCount: 1,
       normalBytes: 12,
       normalCount: 1,
+      scanId: 9,
       triangleCount: 1,
       sourceIndexCount: 3,
       sourceTriangleCount: 1,
@@ -616,6 +626,7 @@ test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', ()
       vertexCount: 3,
     });
   } finally {
+    setWebXRDepthProfileTelemetryContext(null);
     console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFrameMeshes = originalMeshGetter;
   }
@@ -690,6 +701,7 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
   nativeBytes.set(new Uint8Array(new Float32Array([1, 2]).buffer));
 
   try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 10 });
     console.log = (name: unknown, payload?: unknown): void => {
       if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
     };
@@ -727,9 +739,11 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
       lowConfidencePercent: 0,
       mediumConfidenceDepthCount: 19151,
       depthMinMeters: 0.45,
+      scanId: 10,
       validDepthPercent: 100,
     });
   } finally {
+    setWebXRDepthProfileTelemetryContext(null);
     console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
   }
