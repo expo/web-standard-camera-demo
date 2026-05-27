@@ -59,12 +59,7 @@ async function main(): Promise<number> {
   console.log(`Waiting up to ${(options.timeoutMs / 1000).toFixed(0)}s for panorama telemetry.`);
   console.log('On the phone: Start Scan, pan slowly until surfels appear, Capture, then Save.');
 
-  const logProc = spawn({
-    cmd: ['idevicesyslog', '-n', '-p', 'standardcameraapp', '--no-colors'],
-    stdout: 'pipe',
-    stderr: 'inherit',
-  });
-
+  let logProc: ReturnType<typeof spawn> | null = null;
   try {
     if (!options.noLaunch) {
       const payloadUrl = `${URL_SCHEME}://expo-development-client/?url=${encodeURIComponent(options.metroUrl)}`;
@@ -100,17 +95,26 @@ async function main(): Promise<number> {
       }
     }
 
+    logProc = startLogStream();
     const seen = await collectMetrics(logProc, options.timeoutMs);
     validateRequiredMetricSet(seen);
     printMetricSummary(seen);
     return 0;
   } finally {
     try {
-      logProc.kill();
+      logProc?.kill();
     } catch {
       // ignore
     }
   }
+}
+
+function startLogStream(): ReturnType<typeof spawn> {
+  return spawn({
+    cmd: ['idevicesyslog', '-n', '-p', 'standardcameraapp', '--no-colors'],
+    stdout: 'pipe',
+    stderr: 'inherit',
+  });
 }
 
 function parseArgs(args: string[]): Options {
