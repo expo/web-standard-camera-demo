@@ -46,7 +46,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test:web": "bun run scripts/test-web.ts",
-    "test:ios": "bun run scripts/test-ios.ts"
+    "test:ios": "bun run scripts/test-ios.ts",
+    "validate:panorama:ios": "bun run scripts/validate-panorama-ios.ts"
   },
   "private": true,
   "patchedDependencies": {

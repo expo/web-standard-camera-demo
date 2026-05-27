@@ -639,6 +639,16 @@ Before requesting review for implementation, run:
 bun run test:ios
 ```
 
+For physical-device proof of the panorama flow, run:
+
+```sh
+bun run validate:panorama:ios -- --device <device-name-or-id> --metro-url <lan-metro-url>
+```
+
+Then use the phone to Start Scan, pan slowly until surfels appear, Capture, and
+Save. The validator passes only after it sees nonzero keyframe, capture,
+WebGPU-render, and Files-export telemetry from the physical app logs.
+
 Also run the `ref-check` skill so any `@ref LLP 0020#...` annotations added in
 code point to real anchors.
 
