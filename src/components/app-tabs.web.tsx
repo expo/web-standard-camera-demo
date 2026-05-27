@@ -56,7 +56,7 @@ const TABS: TabItem[] = [
 // so the heading lives entirely in this nav shell. We first check the leaf
 // for a known subscreen, then fall back to the tab group's default title.
 const LEAF_TITLES: Record<string, string> = {
-  cube: 'WebGPU Demo',
+  cube: 'Cube',
   'shader-lens': 'Shader Lens',
   'neural-lens': 'Neural Lens',
   'lidar-depth-webxr': 'WebXR LiDAR',

@@ -82,7 +82,7 @@ export default function DemoStackLayout(): React.JSX.Element {
       <Stack.Screen
         name="cube"
         options={{
-          title: 'WebGPU Demo',
+          title: 'Cube',
           ...DARK_DEMO_HEADER_OPTIONS,
           unstable_headerRightItems: standardHeaderRightItems,
         }}
