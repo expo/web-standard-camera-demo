@@ -352,11 +352,12 @@ Implemented:
   separate a slow Preview tap from final Capture, scan overlap, WebGPU upload,
   or render bottlenecks.
 - WebGPU upload telemetry: model revisions log `PANORAMIC_MODEL_UPLOAD_PROFILE`
-  with upload time, surfel byte count, and whether a larger reusable vertex
-  buffer had to be allocated.
+  with upload time, keyframe/sample/surfel counts, surfel byte count, and
+  whether a larger reusable vertex buffer had to be allocated.
 - Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
-  Files-visible path, file URI, byte count, keyframe count, and surfel count
-  only after the Documents file exists and reports a nonzero size.
+  Files-visible path, file URI, byte count, keyframe count, raw sample count,
+  and surfel count only after the Documents file exists and reports a nonzero
+  size.
 - Scan controls: the route keeps the native dark header Start/Stop action and
   also exposes the same Start Scan / Stop Scan action in the Expo UI command
   cluster so physical-device validation does not depend on discovering header

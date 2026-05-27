@@ -2279,7 +2279,9 @@ function logModelUploadProfile(
   console.log('PANORAMIC_MODEL_UPLOAD_PROFILE', JSON.stringify({
     allocated,
     capacityBytes,
+    keyframes: model.keyframes,
     modelRevision,
+    rawSampleCount: model.rawSampleCount,
     surfelBytes: model.surfels.byteLength,
     surfelCount: model.surfelCount,
     uploadMs: roundMetric(uploadMs),

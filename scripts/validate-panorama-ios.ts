@@ -1108,7 +1108,10 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
       String(metric.uri ?? '').length > 0;
   }
   if (name === 'PANORAMIC_MODEL_UPLOAD_PROFILE') {
-    return numberField(metric, 'surfelBytes') > 0 && numberField(metric, 'uploadMs') >= 0;
+    const rawSamples = numberField(metric, 'rawSampleCount');
+    return numberField(metric, 'surfelBytes') > 0 &&
+      numberField(metric, 'uploadMs') >= 0 &&
+      (rawSamples <= 0 || rawSamples >= surfels);
   }
   return true;
 }
@@ -1167,6 +1170,7 @@ export function metricSetValidationError(
   const capture = seen.PANORAMIC_CAPTURE_METRICS!;
   const render = seen.PANORAMIC_RENDER_METRICS!;
   const exported = seen.PANORAMIC_EXPORT_METRICS!;
+  const uploadProfile = seen.PANORAMIC_MODEL_UPLOAD_PROFILE;
   const captureKeyframes = numberField(capture, 'keyframes');
   const captureSurfels = numberField(capture, 'surfelCount');
   const captureRawSamples = numberField(capture, 'rawSampleCount');
@@ -1202,6 +1206,20 @@ export function metricSetValidationError(
   const exportedRawSamples = numberField(exported, 'rawSampleCount');
   if (exportedRawSamples > 0 && exportedRawSamples !== captureRawSamples) {
     return `Capture/export telemetry mismatch: raw samples ${captureRawSamples} !== ${exportedRawSamples}`;
+  }
+  if (uploadProfile) {
+    const uploadedKeyframes = numberField(uploadProfile, 'keyframes');
+    if (uploadedKeyframes > 0 && uploadedKeyframes !== numberField(render, 'keyframes')) {
+      return `Render/upload telemetry mismatch: keyframes ${numberField(render, 'keyframes')} !== ${uploadedKeyframes}`;
+    }
+    const uploadedSurfels = numberField(uploadProfile, 'surfelCount');
+    if (uploadedSurfels > 0 && uploadedSurfels !== numberField(render, 'surfelCount')) {
+      return `Render/upload telemetry mismatch: surfels ${numberField(render, 'surfelCount')} !== ${uploadedSurfels}`;
+    }
+    const uploadedRawSamples = numberField(uploadProfile, 'rawSampleCount');
+    if (uploadedRawSamples > 0 && uploadedRawSamples !== numberField(render, 'rawSampleCount')) {
+      return `Render/upload telemetry mismatch: raw samples ${numberField(render, 'rawSampleCount')} !== ${uploadedRawSamples}`;
+    }
   }
   const keyframeAppendMs = numberField(keyframe, 'appendMs');
   if (keyframeAppendMs > budgets.maxKeyframeAppendMs) {
@@ -1264,7 +1282,6 @@ export function metricSetValidationError(
   if (liveProfile && numberField(liveProfile, 'buildMs') > budgets.maxLiveBuildMs) {
     return `Live model build budget exceeded: ${numberField(liveProfile, 'buildMs')}ms > ${budgets.maxLiveBuildMs}ms`;
   }
-  const uploadProfile = seen.PANORAMIC_MODEL_UPLOAD_PROFILE;
   if (uploadProfile && numberField(uploadProfile, 'uploadMs') > budgets.maxModelUploadMs) {
     return `Model upload budget exceeded: ${numberField(uploadProfile, 'uploadMs')}ms > ${budgets.maxModelUploadMs}ms`;
   }
@@ -1800,7 +1817,12 @@ function panoramaTimingEntries(seen: SeenMetrics): TimingEntry[] {
   }
   const upload = seen.PANORAMIC_MODEL_UPLOAD_PROFILE;
   if (upload) {
-    addTiming(entries, upload, 'uploadMs', 'WebGPU upload', `${numberField(upload, 'surfelBytes')} bytes`);
+    const uploadDetail = [
+      numberField(upload, 'keyframes') > 0 ? `${numberField(upload, 'keyframes')} keyframes` : '',
+      numberField(upload, 'rawSampleCount') > 0 ? `${numberField(upload, 'rawSampleCount')} samples` : '',
+      `${numberField(upload, 'surfelBytes')} bytes`,
+    ].filter(Boolean).join(', ');
+    addTiming(entries, upload, 'uploadMs', 'WebGPU upload', uploadDetail);
   }
   const nativePayload = seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE;
   if (nativePayload) {

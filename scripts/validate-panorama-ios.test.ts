@@ -48,6 +48,25 @@ test('panorama validator rejects mismatched exported raw sample metrics', () => 
   expect(() => validateRequiredMetricSet(seen)).toThrow('Capture/export telemetry mismatch: raw samples');
 });
 
+test('panorama validator rejects mismatched uploaded model metrics', () => {
+  const seen = completeMetricSet({
+    PANORAMIC_MODEL_UPLOAD_PROFILE: { rawSampleCount: 99 },
+  });
+
+  expect(metricSetValidationError(seen)).toContain('Render/upload telemetry mismatch: raw samples');
+  expect(() => validateRequiredMetricSet(seen)).toThrow('Render/upload telemetry mismatch: raw samples');
+});
+
+test('panorama validator rejects impossible uploaded raw sample counts', () => {
+  expect(isValidMetric('PANORAMIC_MODEL_UPLOAD_PROFILE', {
+    keyframes: 3,
+    rawSampleCount: 40,
+    surfelBytes: 2048,
+    surfelCount: 42,
+    uploadMs: 0.1,
+  })).toBe(false);
+});
+
 test('panorama validator rejects mismatched keyframe fused surfel metrics', () => {
   const seen = completeMetricSet({
     PANORAMIC_KEYFRAME_PROFILE: { fusedSurfelCount: 41 },
@@ -181,7 +200,7 @@ test('panorama validator parses copied log text for offline profiling', () => {
  LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.68,"cameraColorPercent":100,"fusedSurfelCount":9388,"keyframes":23,"rawSampleCount":12866,"retainedSamples":12866,"surfelCount":830}
  noise
  LOG PANORAMIC_LIVE_MODEL_PROFILE {"buildMs":14.95,"intervalMs":1600,"keyframes":23,"reason":"stale","rawSampleCount":12866,"surfelCount":9388}
- LOG PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":false,"capacityBytes":262144,"modelRevision":12,"surfelBytes":450624,"surfelCount":9388,"uploadMs":0.08}
+ LOG PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":false,"capacityBytes":262144,"keyframes":23,"modelRevision":12,"rawSampleCount":12866,"surfelBytes":450624,"surfelCount":9388,"uploadMs":0.08}
  LOG PANORAMIC_XR_POSE_PROFILE {"frameNumber":42,"returnedPose":false,"trackingState":"limited","worldMappingStatus":"limited"}
   `);
 
@@ -199,7 +218,9 @@ test('panorama validator parses copied log text for offline profiling', () => {
     surfelCount: 9388,
   });
   expect(seen.PANORAMIC_MODEL_UPLOAD_PROFILE).toMatchObject({
+    keyframes: 23,
     modelRevision: 12,
+    rawSampleCount: 12866,
     uploadMs: 0.08,
   });
   expect(seen.PANORAMIC_XR_POSE_PROFILE).toMatchObject({
@@ -217,8 +238,8 @@ test('panorama validator keeps worst repeated timing while preserving latest cou
   recordMetricLine('PANORAMIC_KEYFRAME_PROFILE {"appendMs":12,"cameraColorPercent":70,"cameraPointCacheHits":120,"cameraPointSamples":1200,"cameraRequested":false,"cameraSampleMode":"precomputed-axis","cameraTransformMode":"identity","colorSampleMs":1,"depthAppendMs":10,"depthCacheReused":true,"depthGridSampleMode":"precomputed-identity","depthGridSamples":1200,"depthInitialAppendMs":6,"depthLookupMs":2,"depthRecoveryAppendMs":3,"depthRecoverySkipped":false,"depthTransformMode":"identity","depthType":"smooth","keyframes":3,"meshAppendMs":12,"meshCameraColoredSurfels":4,"meshCameraColorPercent":57.1,"meshCameraImageMs":2,"meshCameraRequested":false,"meshCount":2,"meshFetchMs":7,"meshMaxSurfels":400,"meshNewVoxelCount":3,"meshPlaneProjectedSamples":5,"meshPoseMisses":1,"meshPreflightMs":1,"meshPreflightNewVoxelCount":4,"meshPreflightSurfelCount":10,"meshProjectedSurfels":9,"meshRecoveredDepthGate":true,"meshSampleStride":3,"meshSkippedSurfels":2,"meshSurfelCount":7,"meshTriangles":240,"meshUpdatedVoxelCount":4,"meshVertices":280,"newVoxelCount":4,"newVoxelPercent":11.8,"normalEstimateMs":3,"observedDepthSurfels":120,"planeProjectedSamples":11,"profiledSampleCount":34,"retainedSamples":100,"sampleConsumeMs":4,"sampleLoopMs":20,"surfelCount":34,"timedSampleCount":6,"timingSampleStride":8,"unprojectMs":5,"unprojectionMode":"intrinsics-projection","updatedVoxelCount":30}', seen);
   recordMetricLine('PANORAMIC_LIVE_MODEL_PROFILE {"buildMs":900,"intervalMs":900,"keyframes":1,"multiObservationPercent":70,"reason":"new-keyframe","rawSampleCount":40,"surfelCount":35}', seen);
   recordMetricLine('PANORAMIC_LIVE_MODEL_PROFILE {"buildMs":40,"intervalMs":1600,"keyframes":3,"multiObservationPercent":55,"reason":"interval","rawSampleCount":100,"surfelCount":42}', seen);
-  recordMetricLine('PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":true,"capacityBytes":262144,"modelRevision":1,"surfelBytes":1024,"surfelCount":20,"uploadMs":95}', seen);
-  recordMetricLine('PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":false,"capacityBytes":262144,"modelRevision":2,"surfelBytes":2048,"surfelCount":42,"uploadMs":5}', seen);
+  recordMetricLine('PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":true,"capacityBytes":262144,"keyframes":1,"modelRevision":1,"rawSampleCount":40,"surfelBytes":1024,"surfelCount":20,"uploadMs":95}', seen);
+  recordMetricLine('PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":false,"capacityBytes":262144,"keyframes":3,"modelRevision":2,"rawSampleCount":100,"surfelBytes":2048,"surfelCount":42,"uploadMs":5}', seen);
   recordMetricLine('PANORAMIC_NATIVE_PAYLOAD_PROFILE {"cameraCapturedSize":[1920,1440],"cameraPreviewMs":12,"cameraPreviewPath":"ycbcr-direct","depthCopyMs":0,"depthSize":[256,192],"depthToCameraScale":[0.1333,0.1333],"frameNumber":1,"includeCameraImage":true,"includeDepthData":false,"payloadMs":13,"projectionCameraImageResolution":[1920,1440],"projectionDepthToCameraScale":[0.1333,0.1333],"requestMs":20}', seen);
   recordMetricLine('PANORAMIC_NATIVE_PAYLOAD_PROFILE {"cameraPreviewMs":2,"confidenceFilteredDepthCount":2000,"confidenceFilteredPercent":4,"confidenceMapUsed":true,"confidenceThreshold":1,"depthCopyMs":8,"depthMaxMeters":3.2,"depthMeanMeters":1.4,"depthMinMeters":0.45,"depthPixelCount":49152,"depthType":"smooth","frameNumber":2,"highConfidenceDepthCount":20000,"includeCameraImage":false,"includeDepthData":true,"invalidDepthPercent":4,"lowConfidencePercent":4,"mediumConfidenceDepthCount":24000,"payloadMs":9,"requestMs":10,"validDepthPercent":96}', seen);
   recordMetricLine('PANORAMIC_NATIVE_PAYLOAD_PROFILE {"cameraPreviewMs":20,"cameraPreviewPath":"ycbcr-direct","cameraCapturedSize":[1920,1440],"depthSize":[256,192],"depthToCameraScale":[0.1333,0.1333],"frameNumber":3,"includeCameraImage":true,"includeDepthData":false,"payloadMs":25,"requestMs":30}', seen);
@@ -303,7 +324,9 @@ test('panorama validator keeps worst repeated timing while preserving latest cou
     surfelCount: 42,
   });
   expect(seen.PANORAMIC_MODEL_UPLOAD_PROFILE).toMatchObject({
+    keyframes: 3,
     modelRevision: 2,
+    rawSampleCount: 100,
     surfelBytes: 2048,
     surfelCount: 42,
     uploadMs: 95,
@@ -446,7 +469,9 @@ test('panorama validator summarizes likely bottlenecks and quality context', () 
     PANORAMIC_MODEL_UPLOAD_PROFILE: {
       allocated: true,
       capacityBytes: 262144,
+      keyframes: 3,
       modelRevision: 2,
+      rawSampleCount: 100,
       surfelBytes: 2048,
       surfelCount: 42,
       uploadMs: 95,
