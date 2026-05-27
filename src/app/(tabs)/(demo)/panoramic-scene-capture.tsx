@@ -2187,6 +2187,7 @@ function logExportMetrics(model: CaptureModel, uri: string, filename: string, by
     filename,
     filesVisiblePath: `standard-camera-app/${filename}`,
     keyframes: model.keyframes,
+    rawSampleCount: model.rawSampleCount,
     surfelCount: model.surfelCount,
     uri,
   }));

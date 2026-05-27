@@ -1102,6 +1102,7 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
   if (name === 'PANORAMIC_EXPORT_METRICS') {
     const filename = String(metric.filename ?? '');
     return numberField(metric, 'bytes') > 0 &&
+      (numberField(metric, 'rawSampleCount') <= 0 || numberField(metric, 'rawSampleCount') >= surfels) &&
       filename.endsWith('.ply') &&
       String(metric.filesVisiblePath ?? '') === `standard-camera-app/${filename}` &&
       String(metric.uri ?? '').length > 0;
@@ -1197,6 +1198,10 @@ export function metricSetValidationError(
   }
   if (numberField(render, 'rawSampleCount') !== captureRawSamples) {
     return `Capture/render telemetry mismatch: raw samples ${captureRawSamples} !== ${numberField(render, 'rawSampleCount')}`;
+  }
+  const exportedRawSamples = numberField(exported, 'rawSampleCount');
+  if (exportedRawSamples > 0 && exportedRawSamples !== captureRawSamples) {
+    return `Capture/export telemetry mismatch: raw samples ${captureRawSamples} !== ${exportedRawSamples}`;
   }
   const keyframeAppendMs = numberField(keyframe, 'appendMs');
   if (keyframeAppendMs > budgets.maxKeyframeAppendMs) {

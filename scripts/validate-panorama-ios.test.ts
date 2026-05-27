@@ -39,6 +39,15 @@ test('panorama validator rejects mismatched exported model metrics', () => {
   expect(() => validateRequiredMetricSet(seen)).toThrow('Capture/export telemetry mismatch');
 });
 
+test('panorama validator rejects mismatched exported raw sample metrics', () => {
+  const seen = completeMetricSet({
+    PANORAMIC_EXPORT_METRICS: { rawSampleCount: 99 },
+  });
+
+  expect(metricSetValidationError(seen)).toContain('Capture/export telemetry mismatch: raw samples');
+  expect(() => validateRequiredMetricSet(seen)).toThrow('Capture/export telemetry mismatch: raw samples');
+});
+
 test('panorama validator rejects mismatched keyframe fused surfel metrics', () => {
   const seen = completeMetricSet({
     PANORAMIC_KEYFRAME_PROFILE: { fusedSurfelCount: 41 },
@@ -119,9 +128,19 @@ test('panorama validator requires Files-visible PLY export metadata', () => {
     filename: 'scene.ply',
     filesVisiblePath: 'standard-camera-app/scene.ply',
     keyframes: 3,
+    rawSampleCount: 100,
     surfelCount: 42,
     uri: 'file:///Documents/scene.ply',
   })).toBe(true);
+  expect(isValidMetric('PANORAMIC_EXPORT_METRICS', {
+    bytes: 1024,
+    filename: 'scene.ply',
+    filesVisiblePath: 'standard-camera-app/scene.ply',
+    keyframes: 3,
+    rawSampleCount: 40,
+    surfelCount: 42,
+    uri: 'file:///Documents/scene.ply',
+  })).toBe(false);
   expect(isValidMetric('PANORAMIC_EXPORT_METRICS', {
     bytes: 1024,
     filename: 'scene.ply',
@@ -937,6 +956,7 @@ function completeMetricSet(
       filename: 'scene.ply',
       filesVisiblePath: 'standard-camera-app/scene.ply',
       keyframes: 3,
+      rawSampleCount: 100,
       surfelCount: 42,
       uri: 'file:///Documents/scene.ply',
     },
