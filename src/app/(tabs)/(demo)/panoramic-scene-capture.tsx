@@ -867,6 +867,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             <>
               <Host colorScheme="dark" style={[styles.commandHost, { width: stageWidth }]}>
                 <VStack spacing={COMMAND_BUTTON_GAP}>
+                  <CommandButton
+                    disabled={running ? transitioning : transitioning || !canStart || unsupported}
+                    icon={running ? 'stop.fill' : 'play.fill'}
+                    label={running ? 'Stop Scan' : 'Start Scan'}
+                    onPress={running ? () => void stopSession() : () => void startSession()}
+                    tone={running ? 'danger' : 'primary'}
+                    width={stageWidth}
+                  />
                   <HStack spacing={COMMAND_BUTTON_GAP}>
                     <CommandButton
                       disabled={!canCapture}
@@ -1394,7 +1402,7 @@ const styles = StyleSheet.create({
     height: 5,
   },
   commandHost: {
-    minHeight: COMMAND_BUTTON_HEIGHT * 2 + COMMAND_BUTTON_GAP,
+    minHeight: COMMAND_BUTTON_HEIGHT * 3 + COMMAND_BUTTON_GAP * 2,
   },
   modeControl: {
     gap: 6,

@@ -76,6 +76,10 @@ Implemented:
 - Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
   Files-visible path, file URI, byte count, keyframe count, and surfel count
   only after the Documents file exists and reports a nonzero size.
+- Scan controls: the route keeps the native dark header Start/Stop action and
+  also exposes the same Start Scan / Stop Scan action in the Expo UI command
+  cluster so physical-device validation does not depend on discovering header
+  chrome.
 - `model-view`: renders the frozen surfel cloud with smaller instanced WebGPU
   splats, one-finger orbit, two-finger pan/pinch interaction, depth testing,
   and model statistics.
@@ -210,6 +214,7 @@ The user starts an `immersive-ar` WebXR-shaped session with
 Depth Studio route, but adds scan coverage feedback:
 
 - live camera/depth WebGPU preview
+- in-screen Start/Stop control in addition to the native header action
 - keyframe count
 - approximate captured points/surfels
 - coverage ring or mini-map hint
