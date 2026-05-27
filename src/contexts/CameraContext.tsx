@@ -152,7 +152,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const streamRef = React.useRef<MediaStream | null>(null);
   const getUserMediaInFlightRef = React.useRef<Promise<MediaStream> | null>(null);
   const startRequestRef = React.useRef(0);
-  const activeLiDARSessionIdRef = React.useRef<number | null>(null);
   const standardStopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = React.useRef(true);
   const cameraOwnershipGate = React.useMemo(() => createCameraOwnershipGate(), []);
@@ -407,18 +406,28 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       'onLiDARDepthSessionState',
       (event: NativeLiDARDepthSessionEvent) => {
         if (!mountedRef.current) return;
-        const activeSessionId = activeLiDARSessionIdRef.current;
-        if (activeSessionId !== null && event.sessionId !== activeSessionId) return;
+        // @ref LLP 0012#camera-ownership-handoff — Terminal events from a
+        // previous ARKit session can arrive after a new WebXR request has
+        // taken the synchronous external lock. Do not clear that lock until a
+        // matching native session has established ownership and then stops.
+        const decision = cameraOwnershipGate.handleExternalSessionEvent(event);
+        if (!decision.accepted) {
+          console.log(`CAMERA_CTX lidar event ignored ${JSON.stringify({
+            activeSessionId: cameraOwnershipGate.activeExternalSessionId(),
+            reason: decision.reason,
+            sessionId: event.sessionId,
+            state: event.state,
+          })}`);
+          return;
+        }
 
         if (event.state === 'running') {
-          activeLiDARSessionIdRef.current = event.sessionId;
           setLiDARError(null);
           setLiDARStatus('running');
           return;
         }
 
         if (event.state === 'interrupted') {
-          activeLiDARSessionIdRef.current = event.sessionId;
           setLiDARError(event.reason ?? 'ARKit scene depth session was interrupted');
           setLiDARStatus('interrupted');
           return;
@@ -431,24 +440,26 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         }
 
         if (event.state === 'failed') {
-          activeLiDARSessionIdRef.current = null;
           setLiDARStatus('error');
           setLiDARError(event.reason ?? 'ARKit scene depth session failed');
-          unlockExternal();
+          if (decision.releaseLock) {
+            unlockExternal();
+          }
           return;
         }
 
         if (event.state === 'stopped') {
-          activeLiDARSessionIdRef.current = null;
           setLiDARStatus('stopped');
-          unlockExternal();
+          if (decision.releaseLock) {
+            unlockExternal();
+          }
         }
       }
     );
     return () => {
       subscription.remove();
     };
-  }, [unlockExternal]);
+  }, [cameraOwnershipGate, unlockExternal]);
 
   const hardware: CameraHardwareState = React.useMemo(() => {
     if (lidarStatus === 'starting') return { owner: 'lidar', phase: 'starting' };

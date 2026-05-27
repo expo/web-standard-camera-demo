@@ -14,6 +14,7 @@ import {
   WebXRSession,
   WebXRViewerPose,
   WebXRView,
+  setWebXRDepthCameraLockHandlers,
 } from './WebXRDepthProfile';
 
 const PROJECTION = [
@@ -261,6 +262,59 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
     globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+  }
+});
+
+test('XRSession.end releases the external camera lock only after native ARKit stop resolves', async () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalStop = NativeStandardCamera.stopLiDARDepthAsync;
+  let stopStarted = false;
+  let resolveStop!: () => void;
+  let unlocks = 0;
+  let endEvents = 0;
+
+  try {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = () => {
+      stopStarted = true;
+      return new Promise<void>((resolve) => {
+        resolveStop = resolve;
+      });
+    };
+    setWebXRDepthCameraLockHandlers({
+      lockExternal: async () => {},
+      unlockExternal: () => {
+        unlocks += 1;
+      },
+    });
+    const session = new WebXRSession({
+      cameraAccessEnabled: false,
+      cameraFormat: 'bgra8unorm',
+      depthEnabled: true,
+      depthType: 'raw',
+      meshDetectionEnabled: false,
+      sessionId: 1,
+    });
+    session.addEventListener('end', () => {
+      endEvents += 1;
+    });
+
+    const endPromise = session.end();
+
+    expect(session.ended).toBe(true);
+    expect(stopStarted).toBe(true);
+    expect(unlocks).toBe(0);
+    expect(endEvents).toBe(0);
+
+    resolveStop();
+    await endPromise;
+
+    expect(unlocks).toBe(1);
+    expect(endEvents).toBe(1);
+  } finally {
+    setWebXRDepthCameraLockHandlers(null);
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = originalStop;
   }
 });
 

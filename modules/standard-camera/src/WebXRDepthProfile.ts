@@ -531,6 +531,7 @@ export class WebXRSession extends EventTarget {
   #staleFramePolls = 0;
   #nativeTimestampOriginMs: number | null = null;
   #domTimestampOriginMs: number | null = null;
+  #endDispatched = false;
   #nativeStateSubscription: { remove(): void } | null = null;
 
   constructor(config: WebXRSessionConfig) {
@@ -765,11 +766,19 @@ export class WebXRSession extends EventTarget {
   }
 
   async end(): Promise<void> {
-    if (!this.#finishEnd()) return;
-    await NativeStandardCamera.stopLiDARDepthAsync();
+    if (!this.#beginEnd()) return;
+    try {
+      // @ref LLP 0012#camera-ownership-handoff — Keep the external camera
+      // lock until native ARKit pause has resolved. Clearing it earlier lets
+      // focused standard-camera routes reopen AVFoundation while ARKit is
+      // still winding down, which can starve the next WebXR frame pump.
+      await NativeStandardCamera.stopLiDARDepthAsync();
+    } finally {
+      this.#finishEnd();
+    }
   }
 
-  #finishEnd(): boolean {
+  #beginEnd(): boolean {
     if (this.#ended) return false;
     this.#ended = true;
     for (const handle of [...this.#callbacks.keys()]) {
@@ -777,10 +786,19 @@ export class WebXRSession extends EventTarget {
     }
     this.#nativeStateSubscription?.remove();
     this.#nativeStateSubscription = null;
-    cameraLockHandlers?.unlockExternal();
     if (activeImmersiveSession === this) {
       activeImmersiveSession = null;
     }
+    return true;
+  }
+
+  #finishEnd(): boolean {
+    if (!this.#ended) {
+      this.#beginEnd();
+    }
+    if (this.#endDispatched) return false;
+    this.#endDispatched = true;
+    cameraLockHandlers?.unlockExternal();
     this.dispatchEvent(new Event('end'));
     return true;
   }

@@ -415,7 +415,12 @@ focused routes may hold stale `start()` closures across native-tab transitions,
 so `start()` MUST check a ref-backed external lock before opening
 AVFoundation. Otherwise a route-level auto-start can reopen the standard camera
 after WebXR has acquired ARKit, starving the WebXR frame pump after the first
-scene-depth frames.
+scene-depth frames. Terminal native LiDAR state events are also part of this
+handoff: a `stopped` or `failed` event from an older ARKit session MUST NOT
+clear a newly acquired external lock before the new `starting`/`running` event
+has established its session id. The WebXR explicit `end()` path MUST mark the
+session ended and cancel callbacks immediately, but it MUST keep the external
+camera lock until the native ARKit stop promise resolves.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,
