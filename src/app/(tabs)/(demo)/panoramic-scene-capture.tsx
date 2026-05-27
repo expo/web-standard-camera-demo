@@ -416,7 +416,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   // @ref LLP 0020#privacy-and-permissions - Export is an explicit user action
   // and uses the system share sheet; captures are not uploaded or saved silently.
   async function saveModel(): Promise<void> {
-    const capturedModel = statusRef.current === 'captured' ? modelRef.current : null;
+    const capturedModel = status === 'captured' ? modelRef.current : null;
     if (!capturedModel || saving) return;
     setSaving(true);
     setError(null);
