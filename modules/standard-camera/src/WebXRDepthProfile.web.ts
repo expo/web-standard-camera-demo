@@ -118,6 +118,9 @@ export class WebXRCamera {
 export class WebXRDepthInformation {
   readonly width = 0;
   readonly height = 0;
+  readonly cameraIntrinsics = null;
+  readonly cameraIntrinsicsImageResolution = null;
+  readonly cameraIntrinsicsReference = null;
   readonly normDepthBufferFromNormView = new WebXRRigidTransform();
   readonly rawValueToMeters = 1;
 }

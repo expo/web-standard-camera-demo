@@ -35,6 +35,9 @@ private struct LiDARDepthFrameSnapshot {
   let frameNumber: UInt64
   let timestamp: TimeInterval
   let depthType: LiDARDepthType
+  let cameraIntrinsics: [Double]
+  let cameraIntrinsicsImageHeight: Double
+  let cameraIntrinsicsImageWidth: Double
   let projectionMatrix: [Double]
   let viewTransform: [Double]
   let normDepthBufferFromNormView: [Double]
@@ -62,6 +65,14 @@ private func webXRMatrixArray(_ matrix: simd_float4x4) -> [Double] {
     Double(matrix.columns.1.x), Double(matrix.columns.1.y), Double(matrix.columns.1.z), Double(matrix.columns.1.w),
     Double(matrix.columns.2.x), Double(matrix.columns.2.y), Double(matrix.columns.2.z), Double(matrix.columns.2.w),
     Double(matrix.columns.3.x), Double(matrix.columns.3.y), Double(matrix.columns.3.z), Double(matrix.columns.3.w),
+  ]
+}
+
+private func webXRMatrixArray(_ matrix: simd_float3x3) -> [Double] {
+  [
+    Double(matrix.columns.0.x), Double(matrix.columns.0.y), Double(matrix.columns.0.z),
+    Double(matrix.columns.1.x), Double(matrix.columns.1.y), Double(matrix.columns.1.z),
+    Double(matrix.columns.2.x), Double(matrix.columns.2.y), Double(matrix.columns.2.z),
   ]
 }
 
@@ -358,6 +369,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let n = latestFrameNumber
     let projectionMatrixArray = webXRMatrixArray(projectionMatrix)
     let viewTransformArray = webXRMatrixArray(frame.camera.transform)
+    let cameraIntrinsicsArray = webXRMatrixArray(frame.camera.intrinsics)
+    let cameraIntrinsicsImageResolution = frame.camera.imageResolution
     let normDepthBufferFromNormViewArray = webXRMatrixArray(cameraImageFromView)
     // @ref LLP 0013#xr-frame-loop — JS converts ARFrame.timestamp into the
     // DOMHighResTimeStamp timeline for XR animation-frame callbacks.
@@ -376,6 +389,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       frameNumber: n,
       timestamp: frame.timestamp,
       depthType: requestedDepthType,
+      cameraIntrinsics: cameraIntrinsicsArray,
+      cameraIntrinsicsImageHeight: Double(cameraIntrinsicsImageResolution.height),
+      cameraIntrinsicsImageWidth: Double(cameraIntrinsicsImageResolution.width),
       projectionMatrix: projectionMatrixArray,
       viewTransform: viewTransformArray,
       normDepthBufferFromNormView: normDepthBufferFromNormViewArray,
@@ -453,6 +469,15 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       "depthFormat": "r32float",
       "depthType": snapshot.depthType.rawValue,
       "timestamp": snapshot.timestamp,
+      // @ref LLP 0020#arkit-intrinsics-unprojection — ARKit scene-depth point
+      // reconstruction uses the per-frame ARCamera intrinsics in captured-image
+      // pixel units; WebXR view/depth transforms only locate the depth sample.
+      "cameraIntrinsics": snapshot.cameraIntrinsics,
+      "cameraIntrinsicsImageResolution": [
+        "width": snapshot.cameraIntrinsicsImageWidth,
+        "height": snapshot.cameraIntrinsicsImageHeight,
+      ],
+      "cameraIntrinsicsReference": "captured-image",
       "projectionMatrix": snapshot.projectionMatrix,
       "viewTransform": snapshot.viewTransform,
       "normDepthBufferFromNormView": snapshot.normDepthBufferFromNormView,

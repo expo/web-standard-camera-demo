@@ -51,6 +51,11 @@ Implemented:
   view-to-captured-image transform with the preview crop/scale, so
   `normCameraImageFromNormView` maps into the actual CPU-visible BGRA bytes
   returned through `XRCamera`.
+- ARKit intrinsics unprojection: native WebXR depth frames expose per-frame
+  `ARCamera.intrinsics`, `ARCamera.imageResolution`, and an explicit
+  `captured-image` reference plane so the surfel pipeline can unproject
+  depth-map samples with the same pinhole math used by Apple's scene-depth
+  point-cloud sample.
 - Basic voxel fusion: repeated world-space samples are merged into 4.5 cm
   voxel surfels with weighted position/radius averages, lower weights for
   distant samples, and camera-color-preferred color averaging.
@@ -60,11 +65,11 @@ Implemented:
 - Capture telemetry: model view reports fusion, camera-color, normal-estimate,
   and build-time metrics, and final Capture logs a
   `PANORAMIC_CAPTURE_METRICS` JSON line for physical-device validation.
-- Scan-loop profiling: accepted keyframes log `PANORAMIC_KEYFRAME_PROFILE`;
-  scan mode maintains an incremental voxel-fusion map and no longer rebuilds
-  the full voxel-fused model after every retained keyframe, so live capture
-  work stays proportional to the new keyframe instead of the entire accumulated
-  point history.
+- Scan-loop profiling and live preview: accepted keyframes log
+  `PANORAMIC_KEYFRAME_PROFILE`; scan mode maintains an incremental voxel-fusion
+  map and publishes throttled `PANORAMIC_LIVE_MODEL_PROFILE` snapshots for
+  realtime WebGPU feedback. The full model is not rebuilt on every XR frame, so
+  live capture work avoids the earlier quadratic point-history path.
 - Lazy WebXR payloads: native XR animation-frame polling returns frame metadata
   first and defers CPU depth copies plus camera preview rendering until
   `XRCPUDepthInformation.data` or `XRCPUCameraBinding.getCameraImage()` is
@@ -80,21 +85,22 @@ Implemented:
   also exposes the same Start Scan / Stop Scan action in the Expo UI command
   cluster so physical-device validation does not depend on discovering header
   chrome.
-- `model-view`: renders the frozen surfel cloud with smaller instanced WebGPU
-  splats, one-finger orbit, two-finger pan/pinch interaction, depth testing,
-  and model statistics.
+- `model-view`: renders live and frozen surfel clouds with smaller instanced
+  WebGPU splats, one-finger orbit, two-finger pan/pinch interaction, depth
+  testing, and model statistics. The preview canvas owns gestures that start on
+  it so those touches do not scroll the route or trigger horizontal navigation.
 - `building-model`: Capture moves through an explicit build state before
   publishing the frozen saveable model, which prevents duplicate Capture taps
   and makes the freeze/build boundary visible in the UI. The XR frame loop is
   cancelled before yielding to that state so no additional keyframes are
   accepted after the Capture tap. Late errors from stale XR loop setup are
   ignored once the session has been intentionally ended or replaced.
-- Scan preview: an explicit Preview Model action builds a temporary WebGPU
-  model snapshot from the current incremental surfel fusion state without
-  ending the WebXR session or enabling export. Preview is available only during
-  scan mode; after Capture, the frozen model is the saveable model boundary.
-  Preview and Capture recenter the viewer so a newly built model starts in
-  frame.
+- Scan preview: scan mode publishes realtime model snapshots automatically.
+  The explicit Preview Model action remains as a manual rebuild/recenter from
+  the current incremental surfel fusion state without ending the WebXR session
+  or enabling export. Preview is available only during scan mode; after
+  Capture, the frozen model is the saveable model boundary. Manual Preview and
+  Capture recenter the viewer so a newly built model starts in frame.
 - Model-view display modes: a segmented View control switches the WebGPU
   surfel renderer between camera color, geometric depth/distance, and fused
   normal inspection.
@@ -127,7 +133,6 @@ Implemented:
 Not yet implemented:
 
 - ARKit confidence-aware weighting and native confidence map exposure.
-- Geometry-grade ARKit intrinsics exposure or a native unprojection helper.
 - Physical-device proof that a captured flat wall has correct metric scale and
   camera/depth alignment.
 - ARKit mesh-anchor snapshot support.
@@ -299,8 +304,8 @@ interface SceneCaptureModel {
 ```
 
 `cameraIntrinsics`, `cameraIntrinsicsImageResolution`, and
-`cameraIntrinsicsReference` are proposed additions to the repo-local WebXR frame
-payload. They should be sourced from `ARCamera.intrinsics` and
+`cameraIntrinsicsReference` are repo-local WebXR frame payload fields for the
+panoramic capture experiment. They are sourced from `ARCamera.intrinsics` and
 `ARCamera.imageResolution`, with an explicit reference image plane. If the BGRA
 camera bytes are cropped, scaled, or rotated for preview, the intrinsics MUST
 either be transformed into that post-processed image plane or the crop / scale
@@ -309,12 +314,10 @@ points will be colored and unprojected with a systematic offset.
 
 The current `LiDARDepthSource` returns display-oriented 1280x960 BGRA camera
 bytes generated by `makeCameraPreviewFrame()`. That is sufficient for the live
-WebGPU depth demo, but it is not automatically geometry-grade texture input.
-For panoramic capture, the implementation should choose one of two
-geometry-grade paths: expose the original captured-image plane plus matching
-transforms, or move depth downsampling, unprojection, and color lookup into
-native code where the ARKit camera buffers and intrinsics are still in one
-coordinate system.
+WebGPU depth demo, but it is not automatically geometry-grade texture input;
+therefore the frame payload keeps intrinsics referenced to the original
+captured-image plane and separately exposes `normCameraImageFromNormView` for
+sampling the post-processed preview bytes.
 
 ## Keyframe policy
 
@@ -397,6 +400,27 @@ averages rather than simple append-only points. Suggested weights:
 Dynamic or reflective objects will still create ghosts. The MVP should not
 promise metrology-grade scans; it is a panoramic scene capture suitable for
 visualization.
+
+### ARKit intrinsics unprojection
+
+ARKit scene-depth point-cloud reconstruction should follow Apple's documented
+sample shape: use the depth sample's image pixel, per-frame camera intrinsics,
+and camera-plane depth to produce camera-space coordinates. For this repo's
+WebXR-shaped profile, `LiDARDepthSource` therefore exposes:
+
+- `cameraIntrinsics`: column-major 3x3 `ARCamera.intrinsics` in pixel units.
+- `cameraIntrinsicsImageResolution`: `ARCamera.imageResolution`, the captured
+  image size those intrinsics reference.
+- `cameraIntrinsicsReference`: currently `"captured-image"`, meaning a
+  normalized view sample must first be transformed with
+  `normDepthBufferFromNormView` before unprojection.
+
+The TypeScript surfel pipeline converts captured-image pixels into ARKit camera
+coordinates as `x` right, `y` up, and forward along negative `z`, then applies
+`XRView.transform` / `ARCamera.transform` as camera-to-world. If a future
+native payload changes the reference plane to `"camera-bytes"` or
+`"depth-buffer"`, it must either transform the intrinsics into that plane or
+expose the needed plane-to-plane transform in the WebXR-shaped metadata.
 
 The model format should store:
 
@@ -505,11 +529,12 @@ The existing `LiDARDepthSource` already provides:
 - view transform
 - projection matrix
 - normalized view-to-depth/camera transforms
+- per-frame intrinsics/resolution/reference-plane fields for captured-image
+  unprojection
 
-The surfel MVP needs either:
+Future reconstruction quality work needs either:
 
-- additional per-frame intrinsics/resolution/reference-plane fields plus
-  optional depth confidence, or
+- optional depth confidence, or
 - a native unprojection/downsample method that returns world-space surfels for
   selected frames.
 
@@ -631,8 +656,7 @@ code point to real anchors.
 
 1. Add this LLP and keep the existing LiDAR Depth Studio unchanged.
 2. Extend the WebXR-shaped frame payload with camera intrinsics and image
-   resolution/reference-plane metadata plus optional depth confidence, or add a
-   native downsample/unproject helper.
+   resolution/reference-plane metadata.
 3. Build a new demo route, tentatively `panoramic-scene-capture`, that reuses
    `installWebXRDepthProfile()`.
 4. Implement scan-live keyframe collection with strict caps.

@@ -136,6 +136,12 @@ export interface PanoramicDepthInformation {
   readonly width: number;
   readonly height: number;
   readonly data: ArrayBuffer;
+  readonly cameraIntrinsics?: Float32Array | readonly number[] | null;
+  readonly cameraIntrinsicsImageResolution?: {
+    readonly width: number;
+    readonly height: number;
+  } | null;
+  readonly cameraIntrinsicsReference?: 'captured-image' | 'camera-bytes' | 'depth-buffer' | null;
   readonly normDepthBufferFromNormView: PanoramicRigidTransform;
   readonly rawValueToMeters: number;
 }
@@ -255,7 +261,8 @@ export function appendDepthSurfels(
   existingSurfels: number
 ): { cameraColoredSurfels: number; surfelCount: number } {
   const inverseProjection = invertMatrix4(projectionMatrix);
-  if (!inverseProjection) return { cameraColoredSurfels: 0, surfelCount: 0 };
+  const canUnprojectWithIntrinsics = hasCapturedImageIntrinsics(depth);
+  if (!inverseProjection && !canUnprojectWithIntrinsics) return { cameraColoredSurfels: 0, surfelCount: 0 };
   const values = new Float32Array(depth.data);
   const depthTransform = depth.normDepthBufferFromNormView.matrix;
   const cameraPosition = extractPosition(cameraToWorld);
@@ -271,7 +278,8 @@ export function appendDepthSurfels(
       if (!Number.isFinite(depthMeters) || depthMeters < MIN_DEPTH_M || depthMeters > MAX_DEPTH_M) {
         continue;
       }
-      const cameraPoint = unprojectViewSample(inverseProjection, viewX, viewY, depthMeters);
+      const cameraPoint = unprojectDepthSample(depth, depthTransform, inverseProjection, viewX, viewY, depthMeters);
+      if (!cameraPoint) continue;
       const world = transformPoint(cameraToWorld, cameraPoint);
       const normalSample = estimateWorldNormal(
         values,
@@ -322,6 +330,9 @@ export function sampleDepthMeters(
 ): number {
   const depthPoint = transformNormalizedPoint(normDepthBufferFromNormView, viewX, viewY);
   if (!Number.isFinite(depthPoint.x) || !Number.isFinite(depthPoint.y)) return Number.NaN;
+  if (depthPoint.x < 0 || depthPoint.x > 1 || depthPoint.y < 0 || depthPoint.y > 1) {
+    return Number.NaN;
+  }
   const px = Math.round(clamp01(depthPoint.x) * Math.max(0, depth.width - 1));
   const py = Math.round(clamp01(depthPoint.y) * Math.max(0, depth.height - 1));
   const rawDepth = values[py * depth.width + px] ?? 0;
@@ -332,7 +343,7 @@ function estimateWorldNormal(
   values: Float32Array,
   depth: PanoramicDepthInformation,
   depthTransform: Float32Array,
-  inverseProjection: Float32Array,
+  inverseProjection: Float32Array | null,
   cameraToWorld: Float32Array,
   cameraPosition: Vec3,
   worldPoint: Vec3,
@@ -362,8 +373,11 @@ function estimateWorldNormal(
     return { confidence: 0.25, normal: fallback };
   }
 
-  const cameraPointX = unprojectViewSample(inverseProjection, neighborX, viewY, depthX);
-  const cameraPointY = unprojectViewSample(inverseProjection, viewX, neighborY, depthY);
+  const cameraPointX = unprojectDepthSample(depth, depthTransform, inverseProjection, neighborX, viewY, depthX);
+  const cameraPointY = unprojectDepthSample(depth, depthTransform, inverseProjection, viewX, neighborY, depthY);
+  if (!cameraPointX || !cameraPointY) {
+    return { confidence: 0.25, normal: fallback };
+  }
   const vecX = xForward ? subtract(cameraPointX, cameraPoint) : subtract(cameraPoint, cameraPointX);
   const vecY = yForward ? subtract(cameraPointY, cameraPoint) : subtract(cameraPoint, cameraPointY);
   const normalCamera = cross(vecY, vecX);
@@ -703,6 +717,83 @@ export function unprojectViewSample(
   const z = near[2] === 0 ? -1 : near[2];
   const scale = -depthMeters / z;
   return [near[0] * scale, near[1] * scale, -depthMeters];
+}
+
+export function unprojectCameraIntrinsicsSample(
+  cameraIntrinsics: Float32Array | readonly number[],
+  imageResolution: { readonly height: number; readonly width: number },
+  normalizedImageX: number,
+  normalizedImageY: number,
+  depthMeters: number
+): Vec3 | null {
+  const fx = cameraIntrinsics[0] ?? 0;
+  const fy = cameraIntrinsics[4] ?? 0;
+  const cx = cameraIntrinsics[6] ?? 0;
+  const cy = cameraIntrinsics[7] ?? 0;
+  const width = imageResolution.width;
+  const height = imageResolution.height;
+  if (
+    !Number.isFinite(fx) ||
+    !Number.isFinite(fy) ||
+    !Number.isFinite(cx) ||
+    !Number.isFinite(cy) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    Math.abs(fx) < 1e-6 ||
+    Math.abs(fy) < 1e-6 ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null;
+  }
+
+  // @ref LLP 0020#arkit-intrinsics-unprojection - Apple scene-depth samples
+  // are distances along the camera plane. Convert captured-image pixels into
+  // ARKit camera coordinates: x right, y up, and forward along negative z.
+  const imageX = normalizedImageX * width;
+  const imageY = normalizedImageY * height;
+  return [
+    (imageX - cx) * depthMeters / fx,
+    -(imageY - cy) * depthMeters / fy,
+    -depthMeters,
+  ];
+}
+
+function unprojectDepthSample(
+  depth: PanoramicDepthInformation,
+  normDepthBufferFromNormView: Float32Array,
+  inverseProjection: Float32Array | null,
+  viewX: number,
+  viewY: number,
+  depthMeters: number
+): Vec3 | null {
+  if (hasCapturedImageIntrinsics(depth)) {
+    const imagePoint = transformNormalizedPoint(normDepthBufferFromNormView, viewX, viewY);
+    if (imagePoint.x < 0 || imagePoint.x > 1 || imagePoint.y < 0 || imagePoint.y > 1) {
+      return null;
+    }
+    return unprojectCameraIntrinsicsSample(
+      depth.cameraIntrinsics,
+      depth.cameraIntrinsicsImageResolution,
+      imagePoint.x,
+      imagePoint.y,
+      depthMeters
+    );
+  }
+  return inverseProjection ? unprojectViewSample(inverseProjection, viewX, viewY, depthMeters) : null;
+}
+
+function hasCapturedImageIntrinsics(depth: PanoramicDepthInformation): depth is PanoramicDepthInformation & {
+  readonly cameraIntrinsics: Float32Array | readonly number[];
+  readonly cameraIntrinsicsImageResolution: { readonly height: number; readonly width: number };
+  readonly cameraIntrinsicsReference: 'captured-image';
+} {
+  return (
+    depth.cameraIntrinsicsReference === 'captured-image' &&
+    !!depth.cameraIntrinsics &&
+    depth.cameraIntrinsics.length >= 9 &&
+    !!depth.cameraIntrinsicsImageResolution
+  );
 }
 
 function transformClipPoint(matrix: Float32Array, point: [number, number, number, number]): Vec3 {

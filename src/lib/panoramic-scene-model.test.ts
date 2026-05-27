@@ -20,6 +20,7 @@ import {
   shouldAcceptPanoramicKeyframe,
   SURFEL_STRIDE_FLOATS,
   transformPoint,
+  unprojectCameraIntrinsicsSample,
   unprojectViewSample,
   type KeyframeSnapshot,
   type PanoramicCameraImage,
@@ -40,6 +41,24 @@ test('unprojectViewSample treats depth as camera-plane meters', () => {
   expect(point[0]).toBeCloseTo(0, 6);
   expect(point[1]).toBeCloseTo(0, 6);
   expect(point[2]).toBeCloseTo(-2, 6);
+});
+
+test('unprojectCameraIntrinsicsSample maps ARKit captured-image pixels into WebXR camera axes', () => {
+  const intrinsics = new Float32Array([
+    100, 0, 0,
+    0, 200, 0,
+    320, 240, 1,
+  ]);
+
+  const center = unprojectCameraIntrinsicsSample(intrinsics, { width: 640, height: 480 }, 0.5, 0.5, 2);
+  const upperLeft = unprojectCameraIntrinsicsSample(intrinsics, { width: 640, height: 480 }, 0, 0, 2);
+
+  expect(center?.[0]).toBeCloseTo(0, 6);
+  expect(center?.[1]).toBeCloseTo(0, 6);
+  expect(center?.[2]).toBeCloseTo(-2, 6);
+  expect(upperLeft?.[0]).toBeCloseTo(-6.4, 6);
+  expect(upperLeft?.[1]).toBeCloseTo(2.4, 6);
+  expect(upperLeft?.[2]).toBeCloseTo(-2, 6);
 });
 
 test('transformPoint applies column-major camera-to-world translation', () => {

@@ -225,6 +225,13 @@ export interface NativeLiDARDepthFrame {
   readonly depthType?: NativeLiDARDepthType;
   /** ARFrame.timestamp, seconds on ARKit's monotonic clock. */
   readonly timestamp?: number;
+  /** Column-major 3x3 ARCamera intrinsics in `cameraIntrinsicsReference` pixel units. */
+  readonly cameraIntrinsics?: readonly number[];
+  readonly cameraIntrinsicsImageResolution?: {
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly cameraIntrinsicsReference?: 'captured-image' | 'camera-bytes' | 'depth-buffer';
   /** Column-major 4x4 matrices in WebXR-compatible order. */
   readonly projectionMatrix?: readonly number[];
   readonly viewTransform?: readonly number[];

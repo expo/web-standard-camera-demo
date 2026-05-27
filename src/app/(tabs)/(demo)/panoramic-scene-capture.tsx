@@ -75,6 +75,7 @@ const QUAD_VERTEX_COUNT = 6;
 const COMMAND_BUTTON_GAP = 8;
 const COMMAND_BUTTON_HEIGHT = 38;
 const COMMAND_BUTTON_NATIVE_CHROME_WIDTH = 36;
+const LIVE_MODEL_BUILD_INTERVAL_MS = 320;
 // @ref LLP 0020#webgpu-rendering - Dense surfel captures should render as
 // small camera-facing splats rather than oversized point sprites.
 const MODEL_SURFEL_POINT_SCALE_PX = 3.4;
@@ -190,6 +191,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const captureInFlightRef = React.useRef(false);
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
+  const lastLiveModelBuildMsRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
   const modelViewModeRef = React.useRef<ModelViewMode>(0);
@@ -302,6 +304,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     coverageSectorsRef.current = new Set();
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
+    lastLiveModelBuildMsRef.current = 0;
     surfelCountRef.current = 0;
     modelViewModeRef.current = 0;
     publishModel(null);
@@ -462,6 +465,29 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     return buildModelFromFusion(fusionRef.current, keyframeCountRef.current);
   }
 
+  function maybePublishLiveModel(): boolean {
+    if (statusRef.current !== 'scanning' || keyframeCountRef.current <= 0) {
+      return false;
+    }
+    const now = performanceNow();
+    const hasPublishedModel = modelRef.current !== null;
+    if (hasPublishedModel && now - lastLiveModelBuildMsRef.current < LIVE_MODEL_BUILD_INTERVAL_MS) {
+      return false;
+    }
+    lastLiveModelBuildMsRef.current = now;
+    const nextModel = buildPreviewModel();
+    if (!nextModel || nextModel.surfelCount === 0) {
+      return false;
+    }
+    // @ref LLP 0020#performance-constraints - During scan, publish throttled
+    // fused snapshots for live WebGPU feedback; avoid rebuilding on every XR
+    // frame as retained samples grow.
+    publishModel(nextModel, { recenter: !hasPublishedModel });
+    setModelInfo(`live: ${formatModelInfo(nextModel)}`);
+    logLiveModelProfile(nextModel);
+    return true;
+  }
+
   // @ref LLP 0020#privacy-and-permissions - Export is an explicit user action
   // and uses the system share sheet; captures are not uploaded or saved silently.
   async function saveModel(): Promise<void> {
@@ -535,17 +561,24 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     return { label: 'ready', style: styles.badgeWarn };
   })();
 
+  const isStageGestureEnabled = React.useCallback(
+    () => statusRef.current === 'scanning' || modelRef.current !== null,
+    []
+  );
+
   const modelPanResponder = React.useMemo(
     () =>
       // @ref LLP 0020#model-view - Model-view supports one-finger orbit plus
       // two-finger pan/pinch inspection of the surfel cloud.
       // eslint-disable-next-line react-hooks/refs -- PanResponder stores handlers; refs are read when gestures fire.
       PanResponder.create({
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
         onMoveShouldSetPanResponder: (event, gesture) =>
-          modelRef.current !== null &&
+          isStageGestureEnabled() &&
           (event.nativeEvent.touches.length > 1 || Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
         onMoveShouldSetPanResponderCapture: (event, gesture) =>
-          modelRef.current !== null &&
+          isStageGestureEnabled() &&
           (event.nativeEvent.touches.length > 1 || Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
         onPanResponderGrant: (event) => {
           viewerGestureStartRef.current = viewerRef.current;
@@ -559,7 +592,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           }
         },
         onPanResponderMove: (event) => {
-          if (!modelRef.current) return;
+          if (!isStageGestureEnabled()) return;
           const touches = event.nativeEvent.touches;
           if (touches.length > 1) {
             if (pinchDistanceStartRef.current === null || panMidpointStartRef.current === null) {
@@ -610,12 +643,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         onPanResponderTerminate: () => {
           endViewerGesture();
         },
-        onStartShouldSetPanResponder: (event) =>
-          modelRef.current !== null && event.nativeEvent.touches.length > 1,
-        onStartShouldSetPanResponderCapture: (event) =>
-          modelRef.current !== null && event.nativeEvent.touches.length > 1,
+        onStartShouldSetPanResponder: () => isStageGestureEnabled(),
+        onStartShouldSetPanResponderCapture: () => isStageGestureEnabled(),
       }),
-    [beginTwoFingerViewerGesture, endViewerGesture, setViewerState]
+    [beginTwoFingerViewerGesture, endViewerGesture, isStageGestureEnabled, setViewerState]
   );
 
   function xrHeaderRightItems(): NativeStackHeaderItem[] {
@@ -829,7 +860,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   return (
     <>
-      <Stack.Screen options={{ unstable_headerRightItems: xrHeaderRightItems }} />
+      <Stack.Screen options={{ gestureEnabled: false, unstable_headerRightItems: xrHeaderRightItems }} />
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.content}
@@ -997,7 +1028,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         // @ref LLP 0017#xr-webgl-get-camera-image — This route uses the
         // repo-local CPU binding analog to sample camera colors into surfels;
         // no native camera side API is called outside the WebXR-shaped frame.
-        const accepted = maybeCaptureKeyframe(
+        maybeCaptureKeyframe(
           depth,
           () => {
             const xrCamera = view.camera;
@@ -1007,14 +1038,6 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           view.transform.matrix,
           frame.predictedDisplayTime
         );
-        if (accepted) {
-          // @ref LLP 0020#performance-constraints - Do not rebuild the full
-          // voxel-fused model while scanning; that made each accepted keyframe
-          // slower as retained samples grew. Capture seals and builds once.
-          setModelInfo(
-            `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - ${surfelCountRef.current}/${MAX_SURFELS} samples retained - model builds on Capture`
-          );
-        }
       }
       xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
     };
@@ -1118,6 +1141,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       retainedSamples: surfelCountRef.current,
       surfelCount: added.surfelCount,
     });
+    if (!maybePublishLiveModel()) {
+      setModelInfo(
+        `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - ${surfelCountRef.current}/${MAX_SURFELS} samples retained - live model ${modelRef.current?.surfelCount ?? 0} surfels`
+      );
+    }
     return true;
   }
 }
@@ -1215,6 +1243,15 @@ function logRenderMetrics(
     rawSampleCount: model.rawSampleCount,
     surfelCount: model.surfelCount,
     viewMode: MODEL_VIEW_MODES.find((mode) => mode.value === modelViewMode)?.label ?? modelViewMode,
+  }));
+}
+
+function logLiveModelProfile(model: CaptureModel): void {
+  console.log('PANORAMIC_LIVE_MODEL_PROFILE', JSON.stringify({
+    buildMs: Number(model.buildMs.toFixed(2)),
+    keyframes: model.keyframes,
+    rawSampleCount: model.rawSampleCount,
+    surfelCount: model.surfelCount,
   }));
 }
 
