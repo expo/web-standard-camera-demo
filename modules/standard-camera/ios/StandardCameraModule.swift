@@ -233,6 +233,20 @@ public final class StandardCameraModule: Module {
       LiDARDepthSource.shared.latestWebXRFrame()
     }
 
+    Function("getWebXRLiDARDepthFramePayload") { (
+      frameNumber: Double,
+      includeDepthData: Bool,
+      includeCameraImage: Bool
+    ) -> [String: Any]? in
+      // @ref LLP 0013#xr-frame-loop — Internal WebXR bridge helper. JS still
+      // observes data only through XRCPUDepthInformation / XRCPUCameraBinding.
+      LiDARDepthSource.shared.webXRFramePayload(
+        frameNumber: UInt64(frameNumber),
+        includeDepthData: includeDepthData,
+        includeCameraImage: includeCameraImage
+      )
+    }
+
     // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this
     // returns a `MediaTrackSupportedConstraints` dictionary listing every
     // constraint name the UA recognizes — regardless of whether the current

@@ -159,6 +159,11 @@ export interface NativeStandardCameraModule {
   stopLiDARDepthAsync(): Promise<void>;
   stopLiDARDepth(): void;
   getLatestWebXRLiDARDepthFrame(): NativeLiDARDepthFrame | null;
+  getWebXRLiDARDepthFramePayload(
+    frameNumber: number,
+    includeDepthData: boolean,
+    includeCameraImage: boolean
+  ): NativeLiDARDepthFramePayload | null;
   addListener(
     eventName: 'onLiDARDepthSessionState',
     listener: (event: NativeLiDARDepthSessionEvent) => void
@@ -214,8 +219,8 @@ export interface NativeLiDARDepthSessionEvent {
 export interface NativeLiDARDepthFrame {
   readonly width: number;
   readonly height: number;
-  /** `width * height * 4` bytes, Float32 depth in meters, no row padding. */
-  readonly depthData: Uint8Array;
+  /** Lazily fetched from `getWebXRLiDARDepthFramePayload()`. */
+  readonly depthData?: Uint8Array;
   readonly depthFormat: 'r32float';
   readonly depthType?: NativeLiDARDepthType;
   /** ARFrame.timestamp, seconds on ARKit's monotonic clock. */
@@ -227,6 +232,7 @@ export interface NativeLiDARDepthFrame {
   /** ARKit camera preview paired with the depth frame, when available. */
   readonly colorWidth?: number;
   readonly colorHeight?: number;
+  /** Lazily fetched from `getWebXRLiDARDepthFramePayload()`. */
   readonly colorData?: Uint8Array;
   readonly colorFormat?: 'bgra8unorm';
   readonly normCameraImageFromNormView?: readonly number[];
@@ -234,6 +240,17 @@ export interface NativeLiDARDepthFrame {
   readonly minDepth: number;
   readonly maxDepth: number;
   readonly meanDepth: number;
+}
+
+export interface NativeLiDARDepthFramePayload {
+  readonly frameNumber: number;
+  /** `width * height * 4` bytes, Float32 depth in meters, no row padding. */
+  readonly depthData?: Uint8Array;
+  readonly colorData?: Uint8Array;
+  readonly colorFormat?: 'bgra8unorm';
+  readonly minDepth?: number;
+  readonly maxDepth?: number;
+  readonly meanDepth?: number;
 }
 
 function unavailable(method: string): never {
@@ -259,6 +276,7 @@ const unavailableBackend: NativeStandardCameraModule = {
   stopLiDARDepthAsync: () => unavailable('StandardCamera.stopLiDARDepthAsync'),
   stopLiDARDepth: () => unavailable('StandardCamera.stopLiDARDepth'),
   getLatestWebXRLiDARDepthFrame: () => unavailable('StandardCamera.getLatestWebXRLiDARDepthFrame'),
+  getWebXRLiDARDepthFramePayload: () => unavailable('StandardCamera.getWebXRLiDARDepthFramePayload'),
   addListener: () => unavailable('StandardCamera.addListener'),
 };
 

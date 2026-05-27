@@ -65,6 +65,10 @@ Implemented:
   the full voxel-fused model after every retained keyframe, so live capture
   work stays proportional to the new keyframe instead of the entire accumulated
   point history.
+- Lazy WebXR payloads: native XR animation-frame polling returns frame metadata
+  first and defers CPU depth copies plus camera preview rendering until
+  `XRCPUDepthInformation.data` or `XRCPUCameraBinding.getCameraImage()` is
+  actually used by an accepted keyframe or the live LiDAR viewer.
 - Render telemetry: after the captured model reaches a WebGPU draw with a
   nonempty surfel buffer, the viewer logs `PANORAMIC_RENDER_METRICS` with the
   canvas size, presentation format, model revision, keyframe count, surfel

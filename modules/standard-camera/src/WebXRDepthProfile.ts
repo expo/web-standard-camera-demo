@@ -684,6 +684,9 @@ export class WebXRFrame {
   #active = true;
   #view: WebXRView | null = null;
   #depthInformation: WebXRCPUDepthInformation | null = null;
+  #depthData: Uint8Array | null = null;
+  #cameraData: Uint8Array | null = null;
+  #cameraDataFormat: 'bgra8unorm' | null = null;
 
   constructor(session: WebXRSession, nativeFrame: NativeLiDARDepthFrame, time: DOMHighResTimeStamp) {
     this.session = session;
@@ -699,6 +702,36 @@ export class WebXRFrame {
 
   deactivate(): void {
     this.#active = false;
+  }
+
+  nativeDepthData(): Uint8Array | null {
+    this.assertActive();
+    if (this.#depthData) return this.#depthData;
+    const payload = NativeStandardCamera.getWebXRLiDARDepthFramePayload(
+      this.nativeFrame.frameNumber,
+      true,
+      false
+    );
+    this.#depthData = payload?.depthData ?? null;
+    return this.#depthData;
+  }
+
+  nativeCameraData(): { data: Uint8Array; format: 'bgra8unorm' } | null {
+    this.assertActive();
+    if (this.#cameraData && this.#cameraDataFormat) {
+      return { data: this.#cameraData, format: this.#cameraDataFormat };
+    }
+    const payload = NativeStandardCamera.getWebXRLiDARDepthFramePayload(
+      this.nativeFrame.frameNumber,
+      false,
+      true
+    );
+    if (!payload?.colorData || payload.colorFormat !== 'bgra8unorm') {
+      return null;
+    }
+    this.#cameraData = payload.colorData;
+    this.#cameraDataFormat = payload.colorFormat;
+    return { data: this.#cameraData, format: this.#cameraDataFormat };
   }
 
   // @ref LLP 0013#xr-viewer-pose
@@ -769,7 +802,7 @@ export class WebXRView {
     }
     if (!this.frame.session.hasCameraAccess()) return null;
     const native = this.frame.nativeFrame;
-    if (!native.colorData || !native.colorWidth || !native.colorHeight) return null;
+    if (!native.colorWidth || !native.colorHeight) return null;
     this.#camera = new WebXRCamera(
       this.frame,
       native.colorWidth,
@@ -823,19 +856,27 @@ export class WebXRCPUDepthInformation extends WebXRDepthInformation {
 
   get data(): ArrayBuffer {
     this.frame.assertActive();
-    this.#data ??= exactArrayBuffer(this.frame.nativeFrame.depthData);
+    const bytes = this.frame.nativeDepthData();
+    if (!bytes) {
+      throw invalidState('Depth data for this XRFrame is no longer available');
+    }
+    this.#data ??= exactArrayBuffer(bytes);
     return this.#data;
   }
 
   getDepthInMeters(x: number, y: number): number {
     this.frame.assertActive();
+    const bytes = this.frame.nativeDepthData();
+    if (!bytes) {
+      throw invalidState('Depth data for this XRFrame is no longer available');
+    }
     const point = transformNormalizedPoint(this.normDepthBufferFromNormView, x, y);
     const px = Math.round(clamp01(point.x) * Math.max(0, this.width - 1));
     const py = Math.round(clamp01(point.y) * Math.max(0, this.height - 1));
     const values = new Float32Array(
-      this.frame.nativeFrame.depthData.buffer,
-      this.frame.nativeFrame.depthData.byteOffset,
-      Math.min(this.width * this.height, Math.floor(this.frame.nativeFrame.depthData.byteLength / 4))
+      bytes.buffer,
+      bytes.byteOffset,
+      Math.min(this.width * this.height, Math.floor(bytes.byteLength / 4))
     );
     return (values[py * this.width + px] ?? 0) * this.rawValueToMeters;
   }
@@ -863,12 +904,12 @@ export class WebXRCPUCameraImage {
 
   static fromCamera(camera: WebXRCamera): WebXRCPUCameraImage | null {
     const frame = camera[CAMERA_FRAME];
-    const native = frame.nativeFrame;
-    if (!native.colorData || !native.colorWidth || !native.colorHeight) return null;
+    const cameraData = frame.nativeCameraData();
+    if (!cameraData) return null;
     const bytes =
-      native.colorFormat === 'bgra8unorm' && frame.session.cameraFormat === 'rgba8unorm'
-        ? bgraToRgba(native.colorData)
-        : native.colorData;
+      cameraData.format === 'bgra8unorm' && frame.session.cameraFormat === 'rgba8unorm'
+        ? bgraToRgba(cameraData.data)
+        : cameraData.data;
     return new WebXRCPUCameraImage(frame, camera, bytes);
   }
 

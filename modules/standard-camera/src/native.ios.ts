@@ -9,6 +9,7 @@ export type {
   NativeDiagnostics,
   NativeLiDARDepthCapabilities,
   NativeLiDARDepthFrame,
+  NativeLiDARDepthFramePayload,
   NativeLiDARDepthSessionEvent,
   NativeLiDARDepthSessionState,
   NativeLiDARDepthType,

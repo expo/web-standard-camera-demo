@@ -476,6 +476,10 @@ keeps the API shape close to WebXR and avoids inventing a non-XR frame object.
   normalized depth-buffer coordinates. It MAY be identity only if the native
   implementation has already produced view-aligned depth.
 
+The implementation MAY return frame metadata from the native animation-frame
+poll before copying CPU depth bytes, as long as `XRCPUDepthInformation.data`
+and `getDepthInMeters()` still expose data for the same active `XRFrame`.
+
 `getDepthInMeters(x, y)` MUST:
 
 1. Throw `InvalidStateError` if the frame is inactive.
@@ -521,6 +525,8 @@ The implementation SHOULD return the selected camera format without an extra
 copy when feasible. The current WebGPU renderer creates a `bgra8unorm` texture
 when the XR camera image format is `"bgra8unorm"`, avoiding the per-frame
 BGRA-to-RGBA swizzle that dominated physical-device profiling.
+The implementation MAY also defer camera-image rendering/copying until
+`XRCPUCameraBinding.getCameraImage(camera)` is called for the active frame.
 
 ## WebGPU Upload
 

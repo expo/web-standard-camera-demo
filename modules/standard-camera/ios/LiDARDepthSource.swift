@@ -29,6 +29,18 @@ private struct PendingLiDARStart {
   let reject: (Error) -> Void
 }
 
+private struct LiDARDepthFrameSnapshot {
+  let depthMap: CVPixelBuffer
+  let cameraImage: CVPixelBuffer?
+  let frameNumber: UInt64
+  let timestamp: TimeInterval
+  let depthType: LiDARDepthType
+  let projectionMatrix: [Double]
+  let viewTransform: [Double]
+  let normDepthBufferFromNormView: [Double]
+  let normCapturedImageFromNormView: CGAffineTransform
+}
+
 private func lidarDepthError(_ code: Int, _ description: String) -> NSError {
   NSError(
     domain: lidarDepthErrorDomain,
@@ -134,6 +146,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   private var latestViewTransform = webXRIdentityMatrix
   private var latestNormDepthBufferFromNormView = webXRIdentityMatrix
   private var latestNormCapturedImageFromNormView = CGAffineTransform.identity
+  private var frameSnapshots: [UInt64: LiDARDepthFrameSnapshot] = [:]
   private var state: LiDARDepthSessionState = .idle
   private var sessionId: UInt64 = 0
   private var activeDepthType: LiDARDepthType = .raw
@@ -245,6 +258,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestViewTransform = webXRIdentityMatrix
     latestNormDepthBufferFromNormView = webXRIdentityMatrix
     latestNormCapturedImageFromNormView = .identity
+    frameSnapshots.removeAll()
     lastErrorReason = nil
     state = .starting
     pendingStart = PendingLiDARStart(sessionId: currentSessionId, resolve: resolve, reject: reject)
@@ -289,6 +303,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestDepthMap = nil
     latestCameraImage = nil
     latestFrameNumber = 0
+    frameSnapshots.removeAll()
     lock.unlock()
     if let pending {
       DispatchQueue.main.async {
@@ -340,15 +355,36 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestDepthMap = depth.depthMap
     latestCameraImage = frame.capturedImage
     latestFrameNumber &+= 1
+    let n = latestFrameNumber
+    let projectionMatrixArray = webXRMatrixArray(projectionMatrix)
+    let viewTransformArray = webXRMatrixArray(frame.camera.transform)
+    let normDepthBufferFromNormViewArray = webXRMatrixArray(cameraImageFromView)
     // @ref LLP 0013#xr-frame-loop — JS converts ARFrame.timestamp into the
     // DOMHighResTimeStamp timeline for XR animation-frame callbacks.
     latestTimestamp = frame.timestamp
     latestDepthType = requestedDepthType
-    latestProjectionMatrix = webXRMatrixArray(projectionMatrix)
-    latestViewTransform = webXRMatrixArray(frame.camera.transform)
-    latestNormDepthBufferFromNormView = webXRMatrixArray(cameraImageFromView)
+    latestProjectionMatrix = projectionMatrixArray
+    latestViewTransform = viewTransformArray
+    latestNormDepthBufferFromNormView = normDepthBufferFromNormViewArray
     latestNormCapturedImageFromNormView = cameraImageFromView
-    let n = latestFrameNumber
+    // @ref LLP 0013#xr-frame-loop — Keep a tiny frame-scoped native cache so
+    // WebXR accessors can lazily fetch bytes for this XRFrame without copying
+    // depth/camera payloads for frames rejected by JS keyframe policy.
+    frameSnapshots[n] = LiDARDepthFrameSnapshot(
+      depthMap: depth.depthMap,
+      cameraImage: frame.capturedImage,
+      frameNumber: n,
+      timestamp: frame.timestamp,
+      depthType: requestedDepthType,
+      projectionMatrix: projectionMatrixArray,
+      viewTransform: viewTransformArray,
+      normDepthBufferFromNormView: normDepthBufferFromNormViewArray,
+      normCapturedImageFromNormView: cameraImageFromView
+    )
+    let minimumSnapshotFrame = n > 3 ? n - 3 : 0
+    for key in frameSnapshots.keys where key < minimumSnapshotFrame {
+      frameSnapshots.removeValue(forKey: key)
+    }
     currentSessionId = sessionId
     if state == .starting || state == .interrupted {
       state = .running
@@ -402,21 +438,105 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     cameraPreviewHeight: Int
   ) -> [String: Any]? {
     lock.lock()
-    let depthMap = latestDepthMap
-    let cameraImage = latestCameraImage
-    let frameNumber = latestFrameNumber
-    let timestamp = latestTimestamp
-    let depthType = latestDepthType
-    let projectionMatrix = latestProjectionMatrix
-    let viewTransform = latestViewTransform
-    let normDepthBufferFromNormView = latestNormDepthBufferFromNormView
-    let capturedImageFromNormView = latestNormCapturedImageFromNormView
+    let snapshot = frameSnapshots[latestFrameNumber]
     lock.unlock()
 
-    guard let depthMap else {
+    guard let snapshot else {
       return nil
     }
 
+    let width = CVPixelBufferGetWidth(snapshot.depthMap)
+    let height = CVPixelBufferGetHeight(snapshot.depthMap)
+    var result: [String: Any] = [
+      "width": width,
+      "height": height,
+      "depthFormat": "r32float",
+      "depthType": snapshot.depthType.rawValue,
+      "timestamp": snapshot.timestamp,
+      "projectionMatrix": snapshot.projectionMatrix,
+      "viewTransform": snapshot.viewTransform,
+      "normDepthBufferFromNormView": snapshot.normDepthBufferFromNormView,
+      "frameNumber": snapshot.frameNumber,
+      "minDepth": 0,
+      "maxDepth": 0,
+      "meanDepth": 0,
+    ]
+    if let cameraImage = snapshot.cameraImage {
+      // @ref LLP 0013#xr-camera-image
+      // @ref LLP 0017#native-camera-alignment — `normCameraImageFromNormView`
+      // must describe the returned `XRCamera` image. The CPU-visible camera
+      // frame is cover-scaled from `ARFrame.capturedImage`, so compose ARKit's
+      // view-to-captured-image transform with the preview crop/scale.
+      let previewFromCapturedImage = normalizedPreviewFromCapturedImageTransform(
+        sourceWidth: CVPixelBufferGetWidth(cameraImage),
+        sourceHeight: CVPixelBufferGetHeight(cameraImage),
+        destinationWidth: cameraPreviewWidth,
+        destinationHeight: cameraPreviewHeight
+      )
+      let previewFromNormView = concatenating(snapshot.normCapturedImageFromNormView, then: previewFromCapturedImage)
+      result["colorWidth"] = cameraPreviewWidth
+      result["colorHeight"] = cameraPreviewHeight
+      result["colorFormat"] = "bgra8unorm"
+      result["normCameraImageFromNormView"] = webXRMatrixArray(previewFromNormView)
+    }
+    return result
+  }
+
+  func webXRFramePayload(
+    frameNumber: UInt64,
+    includeDepthData: Bool,
+    includeCameraImage: Bool
+  ) -> [String: Any]? {
+    lock.lock()
+    let snapshot = frameSnapshots[frameNumber]
+    lock.unlock()
+
+    guard let snapshot else {
+      return nil
+    }
+
+    var result: [String: Any] = [
+      "frameNumber": snapshot.frameNumber,
+    ]
+    if includeDepthData {
+      guard let depthPayload = makeDepthData(from: snapshot.depthMap) else {
+        return nil
+      }
+      result["depthData"] = depthPayload.data
+      result["minDepth"] = Double(depthPayload.minDepth)
+      result["maxDepth"] = Double(depthPayload.maxDepth)
+      result["meanDepth"] = depthPayload.meanDepth
+    }
+    if includeCameraImage {
+      guard let cameraImage = snapshot.cameraImage,
+            let colorFrame = makeCameraPreviewFrame(
+              from: cameraImage,
+              width: webXRCameraPreviewWidth,
+              height: webXRCameraPreviewHeight
+            ) else {
+        return nil
+      }
+      result["colorData"] = colorFrame.data
+      result["colorFormat"] = "bgra8unorm"
+    }
+    return result
+  }
+
+  func latestWebXRFrame() -> [String: Any]? {
+    // @ref LLP 0013#xr-camera-resolution — The WebXR research profile owns its
+    // CPU-visible camera preview size as a private native detail.
+    latestFrame(
+      cameraPreviewWidth: webXRCameraPreviewWidth,
+      cameraPreviewHeight: webXRCameraPreviewHeight
+    )
+  }
+
+  private func makeDepthData(from depthMap: CVPixelBuffer) -> (
+    data: Data,
+    minDepth: Float,
+    maxDepth: Float,
+    meanDepth: Double
+  )? {
     CVPixelBufferLockBaseAddress(depthMap, .readOnly)
     defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
 
@@ -461,54 +581,11 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       maxDepth = 0
     }
 
-    var result: [String: Any] = [
-      "width": width,
-      "height": height,
-      "depthData": data,
-      "depthFormat": "r32float",
-      "depthType": depthType.rawValue,
-      "timestamp": timestamp,
-      "projectionMatrix": projectionMatrix,
-      "viewTransform": viewTransform,
-      "normDepthBufferFromNormView": normDepthBufferFromNormView,
-      "frameNumber": frameNumber,
-      "minDepth": Double(minDepth),
-      "maxDepth": Double(maxDepth),
-      "meanDepth": validCount > 0 ? sumDepth / Double(validCount) : 0,
-    ]
-    if let cameraImage,
-       let colorFrame = makeCameraPreviewFrame(
-         from: cameraImage,
-         width: cameraPreviewWidth,
-         height: cameraPreviewHeight
-       ) {
-      // @ref LLP 0013#xr-camera-image
-      // @ref LLP 0017#native-camera-alignment — `normCameraImageFromNormView`
-      // must describe the returned `XRCamera` image. The CPU-visible camera
-      // frame is cover-scaled from `ARFrame.capturedImage`, so compose ARKit's
-      // view-to-captured-image transform with the preview crop/scale.
-      let previewFromCapturedImage = normalizedPreviewFromCapturedImageTransform(
-        sourceWidth: CVPixelBufferGetWidth(cameraImage),
-        sourceHeight: CVPixelBufferGetHeight(cameraImage),
-        destinationWidth: colorFrame.width,
-        destinationHeight: colorFrame.height
-      )
-      let previewFromNormView = concatenating(capturedImageFromNormView, then: previewFromCapturedImage)
-      result["colorWidth"] = colorFrame.width
-      result["colorHeight"] = colorFrame.height
-      result["colorData"] = colorFrame.data
-      result["colorFormat"] = "bgra8unorm"
-      result["normCameraImageFromNormView"] = webXRMatrixArray(previewFromNormView)
-    }
-    return result
-  }
-
-  func latestWebXRFrame() -> [String: Any]? {
-    // @ref LLP 0013#xr-camera-resolution — The WebXR research profile owns its
-    // CPU-visible camera preview size as a private native detail.
-    latestFrame(
-      cameraPreviewWidth: webXRCameraPreviewWidth,
-      cameraPreviewHeight: webXRCameraPreviewHeight
+    return (
+      data: data,
+      minDepth: minDepth,
+      maxDepth: maxDepth,
+      meanDepth: validCount > 0 ? sumDepth / Double(validCount) : 0
     )
   }
 
@@ -595,6 +672,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     lastErrorReason = reason
     latestDepthMap = nil
     latestCameraImage = nil
+    frameSnapshots.removeAll()
     lock.unlock()
 
     DispatchQueue.main.async { [weak self] in
