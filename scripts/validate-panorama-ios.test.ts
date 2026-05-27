@@ -623,6 +623,9 @@ test('panorama validator summarizes likely bottlenecks and quality context', () 
   expect(summary).toContain(
     'Keyframe mesh supplement: 12 fused surfels, 14 projected, 2 skipped, 9 stride candidates skipped, 4 plane-projected samples, 6 new voxels, normals face (2), preflight 14 surfels / 6 new voxels, 5 preflight stride candidates skipped, early stop yes, depth gate recovered yes'
   );
+  expect(summary).toContain(
+    'Model chain: capture 3kf/100raw/42surfels; render 3kf/100raw/42surfels; upload 3kf/100raw/42surfels; export 3kf/100raw/42surfels; all present stages match'
+  );
   expect(summary).toContain('Keyframe mesh fetch: 15ms');
   expect(summary).toContain('Keyframe mesh append skipped: unchanged-mesh');
   expect(summary).toContain('Keyframe gate recovery: initial depth 50ms, mesh preflight 18ms, depth recovery 42ms');
@@ -648,6 +651,20 @@ test('panorama validator summarizes likely bottlenecks and quality context', () 
   expect(summary).toContain('Viewer pose unavailable: tracking limited, world mapping limited, frame 88');
   expect(summary).toContain(
     'Keyframe rejection: too-few-surfels, 1 keyframes, frame 18, retained 42 samples, translation 0.11m, rotation 7.5deg, observed depth 12, depth+mesh 18'
+  );
+});
+
+test('panorama validator summarizes model chain mismatches for profile-only logs', () => {
+  const summary = panoramaBottleneckSummary(completeMetricSet({
+    PANORAMIC_MODEL_UPLOAD_PROFILE: {
+      keyframes: 1,
+      rawSampleCount: 40,
+      surfelCount: 20,
+    },
+  }));
+
+  expect(summary).toContain(
+    'Model chain: capture 3kf/100raw/42surfels; render 3kf/100raw/42surfels; upload 1kf/40raw/20surfels; export 3kf/100raw/42surfels; mismatch upload keyframes 1 vs capture 3, upload raw 40 vs capture 100, upload surfels 20 vs capture 42'
   );
 });
 

@@ -1440,6 +1440,10 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `largest bound ${formatMeters(largestBoundsMeter(capture))}`
     );
   }
+  const modelChainSummary = panoramaModelChainSummary(seen);
+  if (modelChainSummary) {
+    lines.push(modelChainSummary);
+  }
 
   const nativePayload = seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE;
   if (nativePayload) {
@@ -1711,6 +1715,68 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   }
 
   return '';
+}
+
+interface ModelChainStage {
+  keyframes: number;
+  label: string;
+  rawSampleCount: number;
+  surfelCount: number;
+}
+
+function panoramaModelChainSummary(seen: SeenMetrics): string {
+  const stages = [
+    modelChainStage('capture', seen.PANORAMIC_CAPTURE_METRICS),
+    modelChainStage('render', seen.PANORAMIC_RENDER_METRICS),
+    modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
+    modelChainStage('export', seen.PANORAMIC_EXPORT_METRICS),
+  ].filter((stage): stage is ModelChainStage => stage !== null);
+  if (stages.length < 2) return '';
+  const reference = stages[0];
+  const mismatches = stages
+    .slice(1)
+    .flatMap((stage) => modelChainMismatches(reference, stage));
+  const status = mismatches.length > 0
+    ? `mismatch ${mismatches.join(', ')}`
+    : 'all present stages match';
+  return `Model chain: ${stages.map(formatModelChainStage).join('; ')}; ${status}`;
+}
+
+function modelChainStage(label: string, metric: Record<string, unknown> | undefined): ModelChainStage | null {
+  if (!metric) return null;
+  const keyframes = numberField(metric, 'keyframes');
+  const rawSampleCount = numberField(metric, 'rawSampleCount');
+  const surfelCount = numberField(metric, 'surfelCount');
+  if (keyframes <= 0 && rawSampleCount <= 0 && surfelCount <= 0) return null;
+  return { keyframes, label, rawSampleCount, surfelCount };
+}
+
+function formatModelChainStage(stage: ModelChainStage): string {
+  return `${stage.label} ${formatModelCount(stage.keyframes, 'kf')}/` +
+    `${formatModelCount(stage.rawSampleCount, 'raw')}/` +
+    `${formatModelCount(stage.surfelCount, 'surfels')}`;
+}
+
+function formatModelCount(value: number, unit: string): string {
+  return value > 0 ? `${value}${unit}` : `?${unit}`;
+}
+
+function modelChainMismatches(reference: ModelChainStage, stage: ModelChainStage): string[] {
+  const mismatches: string[] = [];
+  if (reference.keyframes > 0 && stage.keyframes > 0 && reference.keyframes !== stage.keyframes) {
+    mismatches.push(`${stage.label} keyframes ${stage.keyframes} vs ${reference.label} ${reference.keyframes}`);
+  }
+  if (
+    reference.rawSampleCount > 0 &&
+    stage.rawSampleCount > 0 &&
+    reference.rawSampleCount !== stage.rawSampleCount
+  ) {
+    mismatches.push(`${stage.label} raw ${stage.rawSampleCount} vs ${reference.label} ${reference.rawSampleCount}`);
+  }
+  if (reference.surfelCount > 0 && stage.surfelCount > 0 && reference.surfelCount !== stage.surfelCount) {
+    mismatches.push(`${stage.label} surfels ${stage.surfelCount} vs ${reference.label} ${reference.surfelCount}`);
+  }
+  return mismatches;
 }
 
 function scanRejectionSummary(scan: Record<string, unknown>): string {
