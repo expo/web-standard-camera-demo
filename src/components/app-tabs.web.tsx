@@ -1,8 +1,8 @@
 import { useSegments } from 'expo-router';
 import {
   TabList,
-  TabSlot,
   Tabs,
+  TabSlot,
   TabTrigger,
   type TabTriggerSlotProps,
 } from 'expo-router/ui';

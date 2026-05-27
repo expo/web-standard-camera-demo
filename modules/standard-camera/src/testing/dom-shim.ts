@@ -451,9 +451,13 @@ self.onmessage = (e) => {
 
   const querySelector = doc.querySelector.bind(documentRef);
   doc.querySelector = ((selector: string) => {
+    const trimmed = selector.trim();
+    const lower = trimmed.toLowerCase();
+    if (lower === 'video' || lower === 'audio') {
+      return fallbackElementForSelector(selector);
+    }
     const found = querySelector(selector);
     if (found) return found;
-    const trimmed = selector.trim();
     if (trimmed.startsWith('#')) return browserFallbackForId(trimmed.slice(1));
     return fallbackElementForSelector(selector);
   }) as Document['querySelector'];

@@ -209,13 +209,15 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 **UX.**
 
 1. Open the demo. The camera preview appears unfiltered; the current class is reported outside the image.
-2. A prediction panel shows the top scene label and confidence bars.
+2. A prediction panel shows the top scene label and per-label evidence bars.
 3. Back/front controls reuse the same camera constraint path as the other demos.
 4. On simulators with no camera, an animated synthetic texture keeps the inference path visible.
 
-**Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, applies fixed model weights, and writes class logits into a storage buffer. A `MAP_READ` buffer copies back only eight floats: five logits plus three feature readouts.
+**Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, and writes calibrated heuristic evidence scores into a storage buffer. A `MAP_READ` buffer copies back only a small fixed float vector: per-label scores plus feature readouts and secondary scene probes.
 
-**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. It is deliberately not a VLM and does not claim semantic understanding; it is a tiny no-WASM inference proof point.
+**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. The classifier distinguishes exposure, color temperature, texture/detail, and a dedicated covered-lens/no-visible-scene state. It also surfaces secondary heuristic probes for outdoor-like color/light, palette, and texture. It is deliberately not a VLM and does not claim semantic understanding, people detection, or emotion recognition; it is a tiny no-WASM inference proof point.
+
+**Next ML direction:** Do not add another "human cue" heuristic. A people/face signal needs a real detector before it is user-facing. The best fit for this repo's no-WASM constraint is a small WebGPU/WGSL face detector, likely a hand-ported BlazeFace-style model: downsample the camera texture to 128×128, run the model as WebGPU compute passes with weights stored in GPU buffers, decode face boxes/keypoints, and read back only the detection score and boxes. Browser ML runtimes that depend on WebAssembly remain out of scope for this demo path under Hermes V1.
 
 **Complexity:** Low. No model download, no tokenizer, no runtime dependency. The main risk is GPU buffer readback support in `react-native-wgpu`, which is validated by the route smoke test.
 
