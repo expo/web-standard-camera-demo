@@ -628,6 +628,9 @@ Implementation tests:
 - the panorama route keeps AR access behind WebXR-shaped
   `immersive-ar`/`depth-sensing`/`camera-access` calls and does not call direct
   native LiDAR helpers (`bun test src/app/(tabs)/(demo)/panoramic-scene-capture.test.ts`)
+- the panorama route keeps the capture, WebGPU render, and Files export
+  telemetry wired in the order expected by the physical validator
+  (`bun test src/app/(tabs)/(demo)/panoramic-scene-capture.test.ts`)
 
 Manual/device validation:
 
