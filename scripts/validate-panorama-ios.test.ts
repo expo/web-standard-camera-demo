@@ -645,6 +645,37 @@ test('panorama validator surfaces scan loop callback errors', () => {
   );
 });
 
+test('panorama validator diagnoses scan loop scheduling stops', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 1,
+      retainedSamples: 781,
+      surfelCount: 781,
+    },
+    PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE: {
+      acceptedKeyframes: 1,
+      captureInFlight: false,
+      frameCount: 1,
+      keyframes: 1,
+      rawSampleCount: 781,
+      reason: 'status-idle',
+      retainedSamples: 781,
+      sessionEnded: false,
+      sessionMatches: true,
+      status: 'idle',
+    },
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'XR scan loop stopped: status-idle, status idle, 1/1 frames accepted, retained 781 samples, captureInFlight no, sessionEnded no, sessionMatches yes'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: XR scan loop stopped after 1 frame(s) and 1 keyframe(s) because capture status became idle; status idle, captureInFlight no, sessionEnded no, sessionMatches yes'
+  );
+});
+
 test('panorama validator distinguishes delivered WebXR frames from stale polling', () => {
   const seen = {
     PANORAMIC_SCAN_STATS: {

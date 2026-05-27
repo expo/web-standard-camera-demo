@@ -125,6 +125,12 @@ export interface XRScanFrameSchedulingInput {
   status: PanoramicCaptureStatus;
 }
 
+export type XRScanFrameStopReason =
+  | 'capture-in-flight'
+  | 'session-ended'
+  | 'session-mismatch'
+  | `status-${PanoramicCaptureStatus}`;
+
 export interface KeyframeSnapshot {
   forward: Vec3;
   position: Vec3;
@@ -283,10 +289,25 @@ export function shouldScheduleNextXRScanFrame({
   sessionMatches,
   status,
 }: XRScanFrameSchedulingInput): boolean {
-  return sessionMatches &&
-    !sessionEnded &&
-    !captureInFlight &&
-    (status === 'scanning' || status === 'building-model');
+  return xrScanFrameStopReason({
+    captureInFlight,
+    sessionEnded,
+    sessionMatches,
+    status,
+  }) === null;
+}
+
+export function xrScanFrameStopReason({
+  captureInFlight,
+  sessionEnded,
+  sessionMatches,
+  status,
+}: XRScanFrameSchedulingInput): XRScanFrameStopReason | null {
+  if (!sessionMatches) return 'session-mismatch';
+  if (sessionEnded) return 'session-ended';
+  if (captureInFlight) return 'capture-in-flight';
+  if (status !== 'scanning' && status !== 'building-model') return `status-${status}`;
+  return null;
 }
 
 export function nextSurfelBufferCapacityBytes(requiredBytes: number): number {

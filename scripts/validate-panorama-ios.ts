@@ -50,6 +50,7 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_SCAN_CONFIG',
   'PANORAMIC_SCAN_STATS',
   'PANORAMIC_XR_FRAME_PUMP_PROFILE',
+  'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE',
   'PANORAMIC_XR_POSE_PROFILE',
 ] as const satisfies readonly OptionalMetricName[];
 
@@ -71,6 +72,7 @@ export type OptionalMetricName =
   | 'PANORAMIC_SCAN_CONFIG'
   | 'PANORAMIC_SCAN_STATS'
   | 'PANORAMIC_XR_FRAME_PUMP_PROFILE'
+  | 'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE'
   | 'PANORAMIC_XR_POSE_PROFILE';
 export type MetricName = RequiredMetricName | OptionalMetricName;
 
@@ -374,9 +376,9 @@ The validator also prints optional profiling telemetry when it appears:
   PANORAMIC_MESH_PROFILE, PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE,
   PANORAMIC_NATIVE_PAYLOAD_PROFILE, PANORAMIC_PREVIEW_METRICS,
   PANORAMIC_RENDER_FRAME_PROFILE, PANORAMIC_SCAN_CONFIG, PANORAMIC_SCAN_STATS,
-  PANORAMIC_XR_FRAME_PUMP_PROFILE, and PANORAMIC_CAPTURE_GEOMETRY, plus
-  PANORAMIC_XR_POSE_PROFILE when WebXR withholds viewer poses because native
-  tracking is not normal.`);
+  PANORAMIC_XR_FRAME_PUMP_PROFILE, PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE, and
+  PANORAMIC_CAPTURE_GEOMETRY, plus PANORAMIC_XR_POSE_PROFILE when WebXR
+  withholds viewer poses because native tracking is not normal.`);
 }
 
 interface DeviceInfo {
@@ -1039,6 +1041,11 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
       numberField(metric, 'latestFrameNumber') >= 0 &&
       stringField(metric, 'reason').length > 0;
   }
+  if (name === 'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE') {
+    return stringField(metric, 'reason').length > 0 &&
+      numberField(metric, 'frameCount') >= numberField(metric, 'acceptedKeyframes') &&
+      numberField(metric, 'keyframes') >= 0;
+  }
   if (name === 'PANORAMIC_MESH_PROFILE') {
     return (numberField(metric, 'frameNumber') > 0 || numberField(metric, 'frameTimeMs') >= 0) &&
       numberField(metric, 'meshCount') > 0;
@@ -1551,6 +1558,19 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     );
   }
 
+  const loopStop = seen.PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE;
+  if (loopStop) {
+    lines.push(
+      `XR scan loop stopped: ${stringField(loopStop, 'reason') || 'unknown'}, ` +
+      `status ${stringField(loopStop, 'status') || 'unknown'}, ` +
+      `${numberField(loopStop, 'acceptedKeyframes')}/${numberField(loopStop, 'frameCount')} frames accepted, ` +
+      `retained ${numberField(loopStop, 'retainedSamples')} samples, ` +
+      `captureInFlight ${loopStop.captureInFlight === true ? 'yes' : 'no'}, ` +
+      `sessionEnded ${loopStop.sessionEnded === true ? 'yes' : 'no'}, ` +
+      `sessionMatches ${loopStop.sessionMatches === false ? 'no' : 'yes'}`
+    );
+  }
+
   const firstFrameDiagnosis = panoramaFirstFrameDiagnosis(seen);
   if (firstFrameDiagnosis) {
     lines.push(firstFrameDiagnosis);
@@ -1564,6 +1584,7 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   const scan = seen.PANORAMIC_SCAN_STATS;
   const rejectionProfile = seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE;
   const framePump = seen.PANORAMIC_XR_FRAME_PUMP_PROFILE;
+  const loopStop = seen.PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE;
   const acceptedKeyframes = Math.max(
     numberField(keyframeProfile ?? {}, 'keyframes'),
     numberField(scan ?? {}, 'acceptedKeyframes'),
@@ -1577,6 +1598,12 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     const errorName = stringField(rejectionProfile ?? {}, 'errorName') || 'Error';
     const errorMessage = stringField(rejectionProfile ?? {}, 'errorMessage') || 'see keyframe rejection profile';
     return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}`;
+  }
+
+  if (loopStop) {
+    const reason = stringField(loopStop, 'reason') || 'unknown';
+    const status = stringField(loopStop, 'status') || 'unknown';
+    return `First-frame diagnosis: XR scan loop stopped after ${numberField(loopStop, 'frameCount')} frame(s) and ${acceptedKeyframes} keyframe(s) because ${humanizeScanLoopStopReason(reason)}; status ${status}, captureInFlight ${loopStop.captureInFlight === true ? 'yes' : 'no'}, sessionEnded ${loopStop.sessionEnded === true ? 'yes' : 'no'}, sessionMatches ${loopStop.sessionMatches === false ? 'no' : 'yes'}`;
   }
 
   if (framePump) {
@@ -1635,6 +1662,14 @@ function scanRejectionSummary(scan: Record<string, unknown>): string {
     .filter((entry) => entry.count > 0)
     .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
   return entries.map((entry) => `${entry.reason} ${formatNumber(entry.count, 0)}`).join(', ');
+}
+
+function humanizeScanLoopStopReason(reason: string): string {
+  if (reason === 'capture-in-flight') return 'capture was in flight';
+  if (reason === 'session-ended') return 'the XR session ended';
+  if (reason === 'session-mismatch') return 'a different XR session became current';
+  if (reason.startsWith('status-')) return `capture status became ${reason.slice('status-'.length) || 'unknown'}`;
+  return reason || 'unknown';
 }
 
 function panoramaTimingEntries(seen: SeenMetrics): TimingEntry[] {

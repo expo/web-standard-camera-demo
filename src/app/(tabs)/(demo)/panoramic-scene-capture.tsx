@@ -61,11 +61,11 @@ import {
   shouldAcceptPanoramicKeyframe,
   shouldPublishLiveModelSnapshot,
   shouldRequestPanoramicMeshDetection,
-  shouldScheduleNextXRScanFrame,
   shouldSkipCoveredPanoramicSector,
   summarizeCaptureGeometry,
   SURFEL_STRIDE_BYTES,
   viewerYawForForward,
+  xrScanFrameStopReason,
   type AppendDepthSurfelsProfile,
   type AppendDepthSurfelsResult,
   type AppendMeshSurfelsProfile,
@@ -565,6 +565,27 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       retainedSamples: surfelCountRef.current,
       scanFps: roundMetric(1000 * stats.frameCount / Math.max(elapsedMs, 1), 1),
       updatedVoxelCount: stats.totalUpdatedVoxelCount,
+    }));
+  }
+
+  function logXRScanLoopStopProfile(reason: string, session: WebXRSession): void {
+    const stats = scanStatsRef.current;
+    // @ref LLP 0020#testing-and-validation - If recursive XR frame scheduling
+    // stops after a first keyframe, logs need to show whether the app stopped
+    // intentionally or the session/status guard rejected the next frame.
+    console.log('PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE', JSON.stringify({
+      acceptedKeyframes: stats.acceptedKeyframes,
+      captureInFlight: captureInFlightRef.current,
+      depthMisses: stats.depthMisses,
+      frameCount: stats.frameCount,
+      keyframes: keyframeCountRef.current,
+      poseMisses: stats.poseMisses,
+      rawSampleCount: fusionRef.current.rawSampleCount,
+      reason,
+      retainedSamples: surfelCountRef.current,
+      sessionEnded: session.ended,
+      sessionMatches: sessionRef.current === session,
+      status: statusRef.current,
     }));
   }
 
@@ -1557,14 +1578,17 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         });
         setError(`Scan loop error: ${message}`);
       } finally {
-        if (shouldScheduleNextXRScanFrame({
+        const scheduleInput = {
           captureInFlight: captureInFlightRef.current,
           sessionEnded: nextSession.ended,
           sessionMatches: sessionRef.current === nextSession,
           status: statusRef.current,
-        })) {
+        };
+        const stopReason = xrScanFrameStopReason(scheduleInput);
+        if (stopReason === null) {
           xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
         } else {
+          logXRScanLoopStopProfile(stopReason, nextSession);
           xrRafRef.current = null;
         }
       }

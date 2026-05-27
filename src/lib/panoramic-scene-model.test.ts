@@ -51,6 +51,7 @@ import {
   transformPoint,
   unprojectViewSample,
   viewerYawForForward,
+  xrScanFrameStopReason,
   type AppendDepthSurfelsProfile,
   type AppendMeshSurfelsProfile,
   type KeyframeSnapshot,
@@ -1583,36 +1584,45 @@ test('live model snapshot publishing favors fresh previews until build cost grow
 });
 
 test('XR scan frame scheduling survives preview work but not capture cancellation', () => {
-  expect(shouldScheduleNextXRScanFrame({
+  const scanning = {
     captureInFlight: false,
     sessionEnded: false,
     sessionMatches: true,
     status: 'scanning',
-  })).toBe(true);
-  expect(shouldScheduleNextXRScanFrame({
-    captureInFlight: false,
-    sessionEnded: false,
-    sessionMatches: true,
+  } as const;
+  const previewBuilding = {
+    ...scanning,
     status: 'building-model',
-  })).toBe(true);
-  expect(shouldScheduleNextXRScanFrame({
+  } as const;
+  const captureCancelling = {
+    ...previewBuilding,
     captureInFlight: true,
-    sessionEnded: false,
-    sessionMatches: true,
-    status: 'building-model',
-  })).toBe(false);
-  expect(shouldScheduleNextXRScanFrame({
-    captureInFlight: false,
+  } as const;
+  const ended = {
+    ...scanning,
     sessionEnded: true,
-    sessionMatches: true,
-    status: 'scanning',
-  })).toBe(false);
-  expect(shouldScheduleNextXRScanFrame({
-    captureInFlight: false,
-    sessionEnded: false,
+  } as const;
+  const mismatched = {
+    ...scanning,
     sessionMatches: false,
-    status: 'scanning',
-  })).toBe(false);
+  } as const;
+  const idle = {
+    ...scanning,
+    status: 'idle',
+  } as const;
+
+  expect(shouldScheduleNextXRScanFrame(scanning)).toBe(true);
+  expect(xrScanFrameStopReason(scanning)).toBeNull();
+  expect(shouldScheduleNextXRScanFrame(previewBuilding)).toBe(true);
+  expect(xrScanFrameStopReason(previewBuilding)).toBeNull();
+  expect(shouldScheduleNextXRScanFrame(captureCancelling)).toBe(false);
+  expect(xrScanFrameStopReason(captureCancelling)).toBe('capture-in-flight');
+  expect(shouldScheduleNextXRScanFrame(ended)).toBe(false);
+  expect(xrScanFrameStopReason(ended)).toBe('session-ended');
+  expect(shouldScheduleNextXRScanFrame(mismatched)).toBe(false);
+  expect(xrScanFrameStopReason(mismatched)).toBe('session-mismatch');
+  expect(shouldScheduleNextXRScanFrame(idle)).toBe(false);
+  expect(xrScanFrameStopReason(idle)).toBe('status-idle');
 });
 
 test('surfel buffer capacity grows in coarse chunks for WebGPU reuse', () => {

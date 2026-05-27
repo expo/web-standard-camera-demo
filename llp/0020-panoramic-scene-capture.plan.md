@@ -170,7 +170,11 @@ Implemented:
   profile window opens. If ARKit frames arrive before the first scene-depth
   snapshot, native SHOULD expose a non-deliverable frame-number-zero diagnostic
   so logs can distinguish pre-first-depth starvation from total ARKit startup
-  failure. The route accepts `?autorun=1`, `?depth=raw`, and
+  failure. If the app's recursive XR scan loop elects not to request the next
+  frame, it SHOULD emit `PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE` with the stop
+  reason, status, session-match, session-ended, capture-in-flight, and retained
+  sample counters so one-keyframe logs can distinguish native starvation from an
+  app-side scheduling guard. The route accepts `?autorun=1`, `?depth=raw`, and
   `?mesh=0` for physical-device profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
   the normal Start Scan control for manual use, and so profile-only logs can
@@ -1263,7 +1267,8 @@ summary SHOULD also include the normal-projected span/RMS thickness and normal
 coherence so a flat-wall scan can be checked for world-coordinate smear from
 logs alone. When only the first keyframe is accepted, the summary SHOULD also
 classify the likely first-frame failure mode as native frame starvation,
-scan-loop callback failure, or post-first keyframe-gate rejection. A
+scan-loop callback failure, app-side scan-loop scheduling stop, or post-first
+keyframe-gate rejection. A
 `--out-json <path>` mode SHOULD write the same merged metrics,
 missing required metric list, validation/profile-only status, timestamp, and
 bottleneck summary to a durable JSON report so physical-device collections can
