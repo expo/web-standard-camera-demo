@@ -80,7 +80,8 @@ Implemented:
   orbit/pinch interaction, depth testing, and model statistics.
 - Scan preview: an explicit Preview action builds a temporary WebGPU model
   snapshot from the current incremental surfel fusion state without ending the
-  WebXR session or enabling export.
+  WebXR session or enabling export. Preview is available only during scan mode;
+  after Capture, the frozen model is the saveable model boundary.
 - Model-view display modes: a segmented View control switches the WebGPU
   surfel renderer between camera color, geometric depth/distance, and fused
   normal inspection.

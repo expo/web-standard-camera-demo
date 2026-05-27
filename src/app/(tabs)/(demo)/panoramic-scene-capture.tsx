@@ -464,7 +464,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const capturedModelAvailable = status === 'captured' && model !== null;
   const canStart = status === 'idle' || status === 'captured';
   const transitioning = status === 'requesting' || status === 'ending';
-  const canPreview = liveSurfelCount > 0 && !transitioning;
+  const canPreview = status === 'scanning' && liveSurfelCount > 0 && !transitioning;
   const canCapture = status === 'scanning' && liveSurfelCount > 0;
   const canSave = capturedModelAvailable && !saving;
   const unsupported = status === 'unsupported';
