@@ -75,6 +75,9 @@ const QUAD_VERTEX_COUNT = 6;
 const COMMAND_BUTTON_GAP = 8;
 const COMMAND_BUTTON_HEIGHT = 38;
 const COMMAND_BUTTON_NATIVE_CHROME_WIDTH = 36;
+// @ref LLP 0020#webgpu-rendering - Dense surfel captures should render as
+// small camera-facing splats rather than oversized point sprites.
+const MODEL_SURFEL_POINT_SCALE_PX = 3.4;
 const MODEL_VIEW_MODES = [
   { label: 'Color', value: 0 },
   { label: 'Depth', value: 1 },
@@ -123,7 +126,7 @@ fn quadCorner(i: u32) -> vec2f {
 fn vs_main(in: VsIn, @builtin(vertex_index) vertexIndex: u32) -> VsOut {
   let corner = quadCorner(vertexIndex);
   var clip = u.viewProjection * vec4f(in.positionRadius.xyz, 1.0);
-  let radiusScale = max(in.positionRadius.w, 0.35);
+  let radiusScale = clamp(in.positionRadius.w, 0.24, 1.35);
   let clipOffset = corner * u.pointScale * radiusScale * clip.w;
   clip = vec4f(clip.x + clipOffset.x, clip.y + clipOffset.y, clip.z, clip.w);
 
@@ -155,7 +158,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
   let alpha = smoothstep(1.0, 0.55, d);
   let lightDir = normalize(vec3f(-0.25, 0.72, 0.64));
   let diffuse = 0.52 + 0.38 * max(dot(normalize(in.normal), lightDir), 0.0);
-  var rgb = in.color.rgb * (diffuse + alpha * 0.18);
+  let visibleColor = max(in.color.rgb, vec3f(0.09, 0.11, 0.14));
+  var rgb = visibleColor * (diffuse + alpha * 0.18);
   if (u.displayMode > 1.5) {
     rgb = normalize(in.normal) * 0.5 + vec3f(0.5);
   } else if (u.displayMode > 0.5) {
@@ -196,6 +200,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const viewerGestureStartRef = React.useRef<ViewerState>(DEFAULT_VIEWER_STATE);
   const pinchDistanceStartRef = React.useRef<number | null>(null);
   const panMidpointStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const singleTouchStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [session, setSession] = React.useState<WebXRSession | null>(null);
   const [status, setStatus] = React.useState<PanoramicCaptureStatus>('checking');
   const [support, setSupport] = React.useState('checking WebXR camera/depth support');
@@ -230,6 +235,26 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   React.useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  const setViewerState = React.useCallback((nextViewer: ViewerState): void => {
+    viewerRef.current = nextViewer;
+    setViewer(nextViewer);
+  }, []);
+
+  const beginTwoFingerViewerGesture = React.useCallback((
+    touches: readonly { pageX: number; pageY: number }[]
+  ): void => {
+    viewerGestureStartRef.current = viewerRef.current;
+    pinchDistanceStartRef.current = touchDistance(touches);
+    panMidpointStartRef.current = touchMidpoint(touches);
+    singleTouchStartRef.current = null;
+  }, []);
+
+  const endViewerGesture = React.useCallback((): void => {
+    pinchDistanceStartRef.current = null;
+    panMidpointStartRef.current = null;
+    singleTouchStartRef.current = null;
+  }, []);
 
   /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing support-check initialization timing. */
   React.useEffect(() => {
@@ -278,11 +303,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     keyframeRef.current = null;
     keyframeCountRef.current = 0;
     surfelCountRef.current = 0;
-    viewerRef.current = DEFAULT_VIEWER_STATE;
     modelViewModeRef.current = 0;
     publishModel(null);
     setModelViewMode(0);
-    setViewer(DEFAULT_VIEWER_STATE);
+    setViewerState(DEFAULT_VIEWER_STATE);
     setFrameInfo('waiting for depth frames');
     setModelInfo('no capture yet');
     setQualityInfo('quality: no capture yet');
@@ -296,11 +320,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   function resetViewer(): void {
-    viewerRef.current = DEFAULT_VIEWER_STATE;
     viewerGestureStartRef.current = DEFAULT_VIEWER_STATE;
     pinchDistanceStartRef.current = null;
     panMidpointStartRef.current = null;
-    setViewer(DEFAULT_VIEWER_STATE);
+    singleTouchStartRef.current = null;
+    setViewerState(DEFAULT_VIEWER_STATE);
   }
 
   async function startSession(): Promise<void> {
@@ -393,7 +417,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         setError('No valid depth samples have been captured yet.');
         return;
       }
-      publishModel(nextModel);
+      publishModel(nextModel, { recenter: true });
       setModelInfo(formatModelInfo(nextModel));
       setQualityInfo(formatQualityInfo(nextModel));
       logCaptureMetrics(nextModel);
@@ -427,9 +451,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       setError('No valid depth samples have been captured yet.');
       return;
     }
-    publishModel(nextModel);
+    setError(null);
+    publishModel(nextModel, { recenter: true });
     setModelInfo(`preview: ${formatModelInfo(nextModel)}`);
     setQualityInfo(formatQualityInfo(nextModel));
+    setFrameInfo(`preview model: ${nextModel.surfelCount} fused surfels from ${keyframeCountRef.current} keyframes`);
   }
 
   function buildPreviewModel(): CaptureModel | null {
@@ -511,26 +537,43 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   const modelPanResponder = React.useMemo(
     () =>
+      // @ref LLP 0020#model-view - Model-view supports one-finger orbit plus
+      // two-finger pan/pinch inspection of the surfel cloud.
       // eslint-disable-next-line react-hooks/refs -- PanResponder stores handlers; refs are read when gestures fire.
       PanResponder.create({
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          model !== null && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
+        onMoveShouldSetPanResponder: (event, gesture) =>
+          modelRef.current !== null &&
+          (event.nativeEvent.touches.length > 1 || Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
+        onMoveShouldSetPanResponderCapture: (event, gesture) =>
+          modelRef.current !== null &&
+          (event.nativeEvent.touches.length > 1 || Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
         onPanResponderGrant: (event) => {
           viewerGestureStartRef.current = viewerRef.current;
-          pinchDistanceStartRef.current = touchDistance(event.nativeEvent.touches);
-          panMidpointStartRef.current = touchMidpoint(event.nativeEvent.touches);
-        },
-        onPanResponderMove: (event, gesture) => {
-          if (!model) return;
-          const start = viewerGestureStartRef.current;
           const touches = event.nativeEvent.touches;
-          const pinchDistance = touchDistance(touches);
-          const midpoint = touchMidpoint(touches);
-          if (pinchDistance !== null && pinchDistanceStartRef.current !== null) {
+          if (touches.length > 1) {
+            beginTwoFingerViewerGesture(touches);
+          } else {
+            pinchDistanceStartRef.current = null;
+            panMidpointStartRef.current = null;
+            singleTouchStartRef.current = touchPoint(touches);
+          }
+        },
+        onPanResponderMove: (event) => {
+          if (!modelRef.current) return;
+          const touches = event.nativeEvent.touches;
+          if (touches.length > 1) {
+            if (pinchDistanceStartRef.current === null || panMidpointStartRef.current === null) {
+              beginTwoFingerViewerGesture(touches);
+              return;
+            }
+            const start = viewerGestureStartRef.current;
+            const pinchDistance = touchDistance(touches);
+            const midpoint = touchMidpoint(touches);
+            if (pinchDistance === null || midpoint === null) return;
             const startMidpoint = panMidpointStartRef.current ?? midpoint;
-            const panDx = midpoint && startMidpoint ? midpoint.x - startMidpoint.x : 0;
-            const panDy = midpoint && startMidpoint ? midpoint.y - startMidpoint.y : 0;
-            setViewer({
+            const panDx = midpoint.x - startMidpoint.x;
+            const panDy = midpoint.y - startMidpoint.y;
+            setViewerState({
               ...start,
               distanceScale: clamp(start.distanceScale * pinchDistanceStartRef.current / pinchDistance, 0.45, 2.4),
               panX: clamp(start.panX - panDx * 0.0022, -1.6, 1.6),
@@ -538,23 +581,41 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             });
             return;
           }
-          setViewer({
+
+          if (pinchDistanceStartRef.current !== null || panMidpointStartRef.current !== null) {
+            viewerGestureStartRef.current = viewerRef.current;
+            pinchDistanceStartRef.current = null;
+            panMidpointStartRef.current = null;
+            singleTouchStartRef.current = touchPoint(touches);
+            return;
+          }
+
+          const point = touchPoint(touches);
+          if (!point) return;
+          if (!singleTouchStartRef.current) {
+            singleTouchStartRef.current = point;
+            viewerGestureStartRef.current = viewerRef.current;
+            return;
+          }
+          const start = viewerGestureStartRef.current;
+          setViewerState({
             ...start,
-            pitch: clamp(start.pitch + gesture.dy * 0.006, -1.05, 1.15),
-            yaw: start.yaw + gesture.dx * 0.008,
+            pitch: clamp(start.pitch + (point.y - singleTouchStartRef.current.y) * 0.006, -1.05, 1.15),
+            yaw: start.yaw + (point.x - singleTouchStartRef.current.x) * 0.008,
           });
         },
         onPanResponderRelease: () => {
-          pinchDistanceStartRef.current = null;
-          panMidpointStartRef.current = null;
+          endViewerGesture();
         },
         onPanResponderTerminate: () => {
-          pinchDistanceStartRef.current = null;
-          panMidpointStartRef.current = null;
+          endViewerGesture();
         },
-        onStartShouldSetPanResponder: (event) => model !== null && event.nativeEvent.touches.length > 1,
+        onStartShouldSetPanResponder: (event) =>
+          modelRef.current !== null && event.nativeEvent.touches.length > 1,
+        onStartShouldSetPanResponderCapture: (event) =>
+          modelRef.current !== null && event.nativeEvent.touches.length > 1,
       }),
-    [model]
+    [beginTwoFingerViewerGesture, endViewerGesture, setViewerState]
   );
 
   function xrHeaderRightItems(): NativeStackHeaderItem[] {
@@ -683,8 +744,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           );
           const uniforms = new Float32Array(20);
           uniforms.set(viewProjection, 0);
-          uniforms[16] = 5.5 / Math.max(width, 1);
-          uniforms[17] = 5.5 / Math.max(height, 1);
+          uniforms[16] = MODEL_SURFEL_POINT_SCALE_PX / Math.max(width, 1);
+          uniforms[17] = MODEL_SURFEL_POINT_SCALE_PX / Math.max(height, 1);
           uniforms[18] = elapsed;
           uniforms[19] = modelViewModeRef.current;
           device.queue.writeBuffer(uniformBuffer, 0, uniforms);
@@ -764,6 +825,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }, [device, ref, stageHeight, stageWidth]);
 
   const showStoppedPlaceholder = Device.isDevice && !running && !model;
+  const stageSurfelCount = model ? model.surfelCount : liveSurfelCount;
 
   return (
     <>
@@ -787,9 +849,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               </View>
               <View style={styles.stageReadout}>
                 <Text style={styles.stageReadoutLabel}>MODEL</Text>
-                <Text style={styles.stageReadoutValue}>
-                  {status === 'scanning' ? liveSurfelCount : model ? `${model.surfelCount}` : liveSurfelCount}
-                </Text>
+                <Text style={styles.stageReadoutValue}>{stageSurfelCount}</Text>
                 <Text style={styles.stageReadoutSub}>surfels</Text>
               </View>
               <View style={styles.coveragePanel}>
@@ -819,7 +879,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                     <CommandButton
                       disabled={!canPreview}
                       icon="eye.fill"
-                      label="Preview"
+                      label="Preview Model"
                       onPress={previewModel}
                       tone="preview"
                       width={commandButtonWidth}
@@ -963,13 +1023,18 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     });
   }
 
-  function publishModel(nextModel: CaptureModel | null): void {
+  function publishModel(nextModel: CaptureModel | null, options: { recenter?: boolean } = {}): void {
     modelRef.current = nextModel;
     modelRevisionRef.current += 1;
     setModel(nextModel);
     if (nextModel) {
-      setLiveSurfelCount(nextModel.surfelCount);
+      if (statusRef.current !== 'scanning') {
+        setLiveSurfelCount(nextModel.surfelCount);
+      }
       setQualityInfo(formatQualityInfo(nextModel));
+      if (options.recenter) {
+        setViewerState(DEFAULT_VIEWER_STATE);
+      }
     }
   }
 
@@ -1193,6 +1258,12 @@ function touchMidpoint(touches: readonly { pageX: number; pageY: number }[]): { 
     x: (a.pageX + b.pageX) / 2,
     y: (a.pageY + b.pageY) / 2,
   };
+}
+
+function touchPoint(touches: readonly { pageX: number; pageY: number }[]): { x: number; y: number } | null {
+  const [touch] = touches;
+  if (!touch) return null;
+  return { x: touch.pageX, y: touch.pageY };
 }
 
 const styles = StyleSheet.create({

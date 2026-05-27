@@ -9,6 +9,7 @@ import {
   derivePanoramicCaptureControls,
   formatFilesLocation,
   invertMatrix4,
+  makeModelViewProjection,
   MAX_KEYFRAMES,
   MAX_SURFELS,
   MIN_KEYFRAME_SURFELS,
@@ -303,6 +304,30 @@ test('formatFilesLocation reports the app Documents path shown to the user', () 
   expect(formatFilesLocation('scan.ply', 1536)).toBe('Files: standard-camera-app/scan.ply (1.5 KB)');
 });
 
+test('makeModelViewProjection keeps a recentered model visible in WebGPU clip space', () => {
+  const model = buildModel([
+    ...surfelSample({ x: 0, y: 0, z: -1, r: 1, g: 0.5, b: 0, weight: 1 }),
+  ], 1);
+
+  expect(model).not.toBeNull();
+  const viewProjection = makeModelViewProjection(model!, 0.75, 0, {
+    distanceScale: 1,
+    panX: 0,
+    panY: 0,
+    pitch: 0.34,
+    yaw: 0,
+  });
+  const clip = projectPoint(viewProjection, [0, 0, -1]);
+
+  expect(clip.w).toBeGreaterThan(0);
+  expect(clip.x / clip.w).toBeGreaterThanOrEqual(-1);
+  expect(clip.x / clip.w).toBeLessThanOrEqual(1);
+  expect(clip.y / clip.w).toBeGreaterThanOrEqual(-1);
+  expect(clip.y / clip.w).toBeLessThanOrEqual(1);
+  expect(clip.z / clip.w).toBeGreaterThanOrEqual(0);
+  expect(clip.z / clip.w).toBeLessThanOrEqual(1);
+});
+
 test('invertMatrix4 round-trips a simple transform', () => {
   const matrix = new Float32Array(IDENTITY_4X4);
   matrix[12] = 3;
@@ -343,6 +368,15 @@ function exactArrayBuffer(view: Uint8Array | Float32Array): ArrayBuffer {
   const copy = new Uint8Array(view.byteLength);
   copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   return copy.buffer;
+}
+
+function projectPoint(matrix: Float32Array, point: Vec3): { w: number; x: number; y: number; z: number } {
+  return {
+    x: matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12],
+    y: matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13],
+    z: matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2] + matrix[14],
+    w: matrix[3] * point[0] + matrix[7] * point[1] + matrix[11] * point[2] + matrix[15],
+  };
 }
 
 function snapshot({ forward = [0, 0, -1], position = [0, 0, 0], time }: {

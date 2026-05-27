@@ -76,18 +76,21 @@ Implemented:
 - Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
   Files-visible path, file URI, byte count, keyframe count, and surfel count
   only after the Documents file exists and reports a nonzero size.
-- `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
-  orbit/pinch interaction, depth testing, and model statistics.
+- `model-view`: renders the frozen surfel cloud with smaller instanced WebGPU
+  splats, one-finger orbit, two-finger pan/pinch interaction, depth testing,
+  and model statistics.
 - `building-model`: Capture moves through an explicit build state before
   publishing the frozen saveable model, which prevents duplicate Capture taps
   and makes the freeze/build boundary visible in the UI. The XR frame loop is
   cancelled before yielding to that state so no additional keyframes are
   accepted after the Capture tap. Late errors from stale XR loop setup are
   ignored once the session has been intentionally ended or replaced.
-- Scan preview: an explicit Preview action builds a temporary WebGPU model
-  snapshot from the current incremental surfel fusion state without ending the
-  WebXR session or enabling export. Preview is available only during scan mode;
-  after Capture, the frozen model is the saveable model boundary.
+- Scan preview: an explicit Preview Model action builds a temporary WebGPU
+  model snapshot from the current incremental surfel fusion state without
+  ending the WebXR session or enabling export. Preview is available only during
+  scan mode; after Capture, the frozen model is the saveable model boundary.
+  Preview and Capture recenter the viewer so a newly built model starts in
+  frame.
 - Model-view display modes: a segmented View control switches the WebGPU
   surfel renderer between camera color, geometric depth/distance, and fused
   normal inspection.
@@ -466,9 +469,12 @@ For surfels:
   rely on point-sprite sizing, because WebGPU does not provide portable
   programmable point size
 - enable depth testing
-- size each splat from surfel radius and camera distance
+- size each splat from surfel radius and camera distance, clamped to a small
+  screen-space range so dense captures read as surfaces instead of oversized
+  blobs
 - shade with camera color, optional normal lighting, and a subtle confidence
-  fade
+  fade; color mode should still apply a low luminance floor so black or
+  unavailable camera pixels do not make the surfel cloud disappear
 - keep splats mostly opaque in the first version so depth testing remains
   predictable; transparent splats require sorting or an order-independent
   transparency pass
