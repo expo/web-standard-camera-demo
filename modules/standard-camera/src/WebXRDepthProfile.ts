@@ -839,9 +839,8 @@ export class WebXRCamera {
 export class WebXRDepthInformation {
   readonly width: number;
   readonly height: number;
-  readonly cameraIntrinsics: Float32Array | null;
-  readonly cameraIntrinsicsImageResolution: { height: number; width: number } | null;
-  readonly cameraIntrinsicsReference: 'captured-image' | 'camera-bytes' | 'depth-buffer' | null;
+  readonly projectionMatrix: Float32Array;
+  readonly transform: WebXRRigidTransform;
   readonly normDepthBufferFromNormView: WebXRRigidTransform;
   readonly rawValueToMeters = 1;
   protected readonly frame: WebXRFrame;
@@ -850,16 +849,11 @@ export class WebXRDepthInformation {
     this.frame = frame;
     this.width = frame.nativeFrame.width;
     this.height = frame.nativeFrame.height;
-    this.cameraIntrinsics = frame.nativeFrame.cameraIntrinsics
-      ? new Float32Array(frame.nativeFrame.cameraIntrinsics)
-      : null;
-    this.cameraIntrinsicsImageResolution = frame.nativeFrame.cameraIntrinsicsImageResolution
-      ? {
-          height: frame.nativeFrame.cameraIntrinsicsImageResolution.height,
-          width: frame.nativeFrame.cameraIntrinsicsImageResolution.width,
-        }
-      : null;
-    this.cameraIntrinsicsReference = frame.nativeFrame.cameraIntrinsicsReference ?? null;
+    // @ref LLP 0013#xr-depth-information — The WebXR Depth Sensing spec mixes
+    // XRViewGeometry into XRDepthInformation; for matchDepthView=true these
+    // geometry fields match the associated XRView.
+    this.projectionMatrix = matrixFromNative(frame.nativeFrame.projectionMatrix);
+    this.transform = transformFromNative(frame.nativeFrame.viewTransform);
     this.normDepthBufferFromNormView = transformFromNative(frame.nativeFrame.normDepthBufferFromNormView);
   }
 }

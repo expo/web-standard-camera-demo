@@ -1034,8 +1034,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             const xrCamera = view.camera;
             return xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
           },
-          view.projectionMatrix,
-          view.transform.matrix,
+          // @ref LLP 0013#xr-depth-information — XRDepthInformation includes
+          // XRViewGeometry; use the depth object's associated projection and
+          // transform for reconstruction instead of exposing native intrinsics.
+          depth.projectionMatrix,
+          depth.transform.matrix,
           frame.predictedDisplayTime
         );
       }

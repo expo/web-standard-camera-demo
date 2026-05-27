@@ -256,6 +256,8 @@ interface XRRigidTransform {
 interface XRDepthInformation {
   readonly width: number;
   readonly height: number;
+  readonly projectionMatrix: Float32Array; // 16 entries, column-major.
+  readonly transform: XRRigidTransform;
   readonly normDepthBufferFromNormView: XRRigidTransform;
   readonly rawValueToMeters: number;
 }
@@ -468,6 +470,9 @@ keeps the API shape close to WebXR and avoids inventing a non-XR frame object.
 `XRCPUDepthInformation` fields:
 
 - `width` and `height` MUST match the tight depth buffer dimensions.
+- `projectionMatrix` and `transform` MUST expose the `XRViewGeometry` for the
+  depth information. With `matchDepthView === true`, they MUST match the
+  associated `XRView`.
 - `data` MUST be a tightly packed `ArrayBuffer` containing
   `width * height` little-endian `Float32` values.
 - `rawValueToMeters` MUST be `1` for `float32` ARKit meters.

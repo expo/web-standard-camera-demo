@@ -43,6 +43,10 @@ function unsupported(message: string): DOMException {
   return new DOMException(message, 'NotSupportedError');
 }
 
+function identityMatrix4(): Float32Array {
+  return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+}
+
 export function setWebXRDepthCameraLockHandlers(_handlers: CameraLockHandlers | null): void {}
 
 export function runWithWebXRUserActivation<T>(callback: () => T): T {
@@ -86,7 +90,7 @@ export class WebXRRigidTransform {
   readonly matrix: Float32Array;
 
   constructor(matrix?: Float32Array) {
-    this.matrix = matrix ?? new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    this.matrix = matrix ?? identityMatrix4();
   }
 }
 
@@ -105,6 +109,8 @@ export class WebXRViewerPose {
 }
 
 export class WebXRView {
+  readonly projectionMatrix = identityMatrix4();
+  readonly transform = new WebXRRigidTransform();
   readonly camera: WebXRCamera | null = null;
 }
 
@@ -118,9 +124,8 @@ export class WebXRCamera {
 export class WebXRDepthInformation {
   readonly width = 0;
   readonly height = 0;
-  readonly cameraIntrinsics = null;
-  readonly cameraIntrinsicsImageResolution = null;
-  readonly cameraIntrinsicsReference = null;
+  readonly projectionMatrix = identityMatrix4();
+  readonly transform = new WebXRRigidTransform();
   readonly normDepthBufferFromNormView = new WebXRRigidTransform();
   readonly rawValueToMeters = 1;
 }
