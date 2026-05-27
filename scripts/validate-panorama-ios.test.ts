@@ -774,6 +774,30 @@ test('panorama validator distinguishes delivered WebXR frames from stale polling
   );
 });
 
+test('panorama validator identifies too-fast keyframe gate dominance', () => {
+  const seen = {
+    PANORAMIC_SCAN_STATS: {
+      acceptedKeyframes: 1,
+      elapsedMs: 1200,
+      frameCount: 44,
+      rejectedByReason: {
+        'too-fast': 18,
+        'too-similar': 2,
+      },
+    },
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      deliveredFramePolls: 22,
+      lastDeliveredFrameNumber: 44,
+      latestFrameNumber: 44,
+      reason: 'delivered-frame',
+    },
+  } satisfies SeenMetrics;
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'First-frame diagnosis: WebXR frames are still being delivered (22 polls), but post-first frames are not accepted by the panorama keyframe gates; rejected too-fast 18, too-similar 2; dominant gate too-fast means delivered frames exceeded the pose-speed limit before depth/camera sampling'
+  );
+});
+
 test('panorama validator distinguishes ARKit frame delivery from stale scene-depth snapshots', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {

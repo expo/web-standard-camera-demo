@@ -1677,31 +1677,49 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     if (deliveredFramePolls > 1) {
       const rejected = scan ? scanRejectionSummary(scan) : stringField(rejectionProfile ?? {}, 'reason');
       const detail = rejected ? `; rejected ${rejected}` : '';
-      return `First-frame diagnosis: WebXR frames are still being delivered (${deliveredFramePolls} polls), but post-first frames are not accepted by the panorama keyframe gates${detail}`;
+      const gateDiagnosis = scan ? dominantKeyframeGateDiagnosis(scan) : '';
+      return `First-frame diagnosis: WebXR frames are still being delivered (${deliveredFramePolls} polls), but post-first frames are not accepted by the panorama keyframe gates${detail}${gateDiagnosis}`;
     }
   }
 
   if (scan && numberField(scan, 'frameCount') > 1) {
     const rejected = scanRejectionSummary(scan);
-    return `First-frame diagnosis: scan loop ran ${numberField(scan, 'frameCount')} frames but accepted ${acceptedKeyframes}; ${rejected ? `rejected ${rejected}` : 'check pose/depth rejection profiles'}`;
+    const gateDiagnosis = dominantKeyframeGateDiagnosis(scan);
+    return `First-frame diagnosis: scan loop ran ${numberField(scan, 'frameCount')} frames but accepted ${acceptedKeyframes}; ${rejected ? `rejected ${rejected}` : 'check pose/depth rejection profiles'}${gateDiagnosis}`;
   }
 
   return '';
 }
 
 function scanRejectionSummary(scan: Record<string, unknown>): string {
+  return scanRejectionEntries(scan)
+    .map((entry) => `${entry.reason} ${formatNumber(entry.count, 0)}`)
+    .join(', ');
+}
+
+function dominantKeyframeGateDiagnosis(scan: Record<string, unknown>): string {
+  const entries = scanRejectionEntries(scan);
+  if (entries.length <= 0) return '';
+  const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+  const dominant = entries[0];
+  if (dominant.reason === 'too-fast' && dominant.count >= Math.max(3, total * 0.5)) {
+    return '; dominant gate too-fast means delivered frames exceeded the pose-speed limit before depth/camera sampling';
+  }
+  return '';
+}
+
+function scanRejectionEntries(scan: Record<string, unknown>): Array<{ count: number; reason: string }> {
   const rejectedByReason = scan.rejectedByReason;
   if (!rejectedByReason || typeof rejectedByReason !== 'object' || Array.isArray(rejectedByReason)) {
-    return '';
+    return [];
   }
-  const entries = Object.entries(rejectedByReason)
+  return Object.entries(rejectedByReason)
     .map(([reason, count]) => ({
       count: typeof count === 'number' && Number.isFinite(count) ? count : 0,
       reason,
     }))
     .filter((entry) => entry.count > 0)
     .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
-  return entries.map((entry) => `${entry.reason} ${formatNumber(entry.count, 0)}`).join(', ');
 }
 
 function humanizeScanLoopStopReason(reason: string): string {
