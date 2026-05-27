@@ -444,6 +444,10 @@ has not already started.
 3. Return `null` if the native AR frame is unavailable.
 4. Return an `XRViewerPose` with exactly one `XRView`.
 
+The returned `XRViewerPose.transform` MUST expose the viewer pose in the
+requested reference space. In the monocular phone profile this is the same
+ARKit camera transform exposed on the single `XRView.transform`.
+
 The single `XRView` MUST have:
 
 - `eye === "none"`

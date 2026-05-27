@@ -766,11 +766,15 @@ export class WebXRFrame {
 }
 
 export class WebXRViewerPose {
-  readonly transform = identityTransform();
+  readonly transform: WebXRRigidTransform;
   readonly views: readonly WebXRView[];
 
   constructor(views: readonly WebXRView[]) {
     this.views = views;
+    // @ref LLP 0013#xr-viewer-pose — XRViewerPose is an XRPose for the
+    // viewer. In this monocular phone profile, the single XRView carries that
+    // same ARKit camera-to-reference-space transform.
+    this.transform = views[0]?.transform ?? identityTransform();
   }
 }
 

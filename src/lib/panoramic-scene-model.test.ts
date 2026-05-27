@@ -15,6 +15,7 @@ import {
   MIN_KEYFRAME_SURFELS,
   panoramicCoverageKey,
   panoramicCoveragePercent,
+  sampleDepthMeters,
   sampleCameraColor,
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
@@ -42,6 +43,23 @@ test('unprojectViewSample treats depth as camera-plane meters', () => {
   expect(point[2]).toBeCloseTo(-2, 6);
 });
 
+test('unprojectViewSample honors asymmetric projection while keeping camera-plane depth', () => {
+  const projection = new Float32Array([
+    2, 0, 0, 0,
+    0, 4, 0, 0,
+    0.3, -0.2, -1.002, -1,
+    0, 0, -0.2002, 0,
+  ]);
+  const inverseProjection = invertMatrix4(projection);
+
+  expect(inverseProjection).not.toBeNull();
+  const point = unprojectViewSample(inverseProjection!, 0.75, 0.25, 2);
+
+  expect(point[0]).toBeCloseTo(0.8, 5);
+  expect(point[1]).toBeCloseTo(0.15, 5);
+  expect(point[2]).toBeCloseTo(-2, 6);
+});
+
 test('transformPoint applies column-major camera-to-world translation', () => {
   const translated = new Float32Array(IDENTITY_4X4);
   translated[12] = 1;
@@ -65,6 +83,28 @@ test('sampleCameraColor reads BGRA camera bytes without channel-swizzling the fu
   expect(color?.[0]).toBeCloseTo(120 / 255, 6);
   expect(color?.[1]).toBeCloseTo(110 / 255, 6);
   expect(color?.[2]).toBeCloseTo(100 / 255, 6);
+});
+
+test('sampleDepthMeters maps normalized view points through normDepthBufferFromNormView', () => {
+  const depth = {
+    data: exactArrayBuffer(new Float32Array([
+      1, 2,
+      3, 4,
+    ])),
+    height: 2,
+    normDepthBufferFromNormView: { matrix: IDENTITY_4X4 },
+    rawValueToMeters: 1,
+    width: 2,
+  } satisfies PanoramicDepthInformation;
+  const mirroredDepthFromView = new Float32Array([
+    -1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    1, 0, 0, 1,
+  ]);
+
+  expect(sampleDepthMeters(new Float32Array(depth.data), depth, mirroredDepthFromView, 0, 0)).toBe(2);
+  expect(sampleDepthMeters(new Float32Array(depth.data), depth, mirroredDepthFromView, 1, 1)).toBe(3);
 });
 
 test('buildModel fuses same-voxel surfels and prefers camera colors over fallback colors', () => {

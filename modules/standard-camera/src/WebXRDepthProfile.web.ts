@@ -105,6 +105,7 @@ export class WebXRFrame {
 }
 
 export class WebXRViewerPose {
+  readonly transform = new WebXRRigidTransform();
   readonly views: WebXRView[] = [];
 }
 

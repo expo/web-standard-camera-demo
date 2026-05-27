@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 
 import {
   WebXRDepthInformation,
+  WebXRViewerPose,
   WebXRView,
   type WebXRFrame,
 } from './WebXRDepthProfile';
@@ -39,10 +40,14 @@ test('XRDepthInformation exposes WebXR view geometry without ARKit intrinsics ex
   } as unknown as WebXRFrame;
 
   const view = new WebXRView(frame);
+  const pose = new WebXRViewerPose([view]);
   const depth = new WebXRDepthInformation(frame);
 
   expect(depth.width).toBe(256);
   expect(depth.height).toBe(192);
+  expect(pose.views).toHaveLength(1);
+  expect(pose.views[0]).toBe(view);
+  expectMatrixClose(pose.transform.matrix, VIEW_TRANSFORM);
   expectMatrixClose(depth.projectionMatrix, PROJECTION);
   expectMatrixClose(depth.transform.matrix, VIEW_TRANSFORM);
   expectMatrixClose(depth.normDepthBufferFromNormView.matrix, DEPTH_TRANSFORM);
