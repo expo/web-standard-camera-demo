@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { cameraConstraintsEqual, mergeCameraConstraints } from '@/lib/camera-constraints';
 import { KNOWN_FACING_AVAILABILITY, type CameraFacingAvailability } from '@/lib/camera-facing';
+import { createCameraOwnershipGate } from '@/lib/camera-ownership';
 
 import {
   NativeStandardCamera,
@@ -151,11 +152,10 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const streamRef = React.useRef<MediaStream | null>(null);
   const getUserMediaInFlightRef = React.useRef<Promise<MediaStream> | null>(null);
   const startRequestRef = React.useRef(0);
-  const startInFlightRef = React.useRef(false);
   const activeLiDARSessionIdRef = React.useRef<number | null>(null);
-  const externalLockedRef = React.useRef(false);
   const standardStopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = React.useRef(true);
+  const cameraOwnershipGate = React.useMemo(() => createCameraOwnershipGate(), []);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -177,7 +177,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const stop = React.useCallback((): void => {
     const stopRequestId = startRequestRef.current + 1;
     startRequestRef.current = stopRequestId;
-    startInFlightRef.current = false;
+    cameraOwnershipGate.setStartInFlight(false);
     if (standardStopTimerRef.current) {
       clearTimeout(standardStopTimerRef.current);
       standardStopTimerRef.current = null;
@@ -198,13 +198,12 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         setStatus('idle');
       }, CAMERA_HARDWARE_RELEASE_DELAY_MS);
     }
-  }, []);
+  }, [cameraOwnershipGate]);
 
   const lockExternal = React.useCallback(async (): Promise<void> => {
     // Invalidate any in-flight start() so its post-await setState calls bail.
-    externalLockedRef.current = true;
+    cameraOwnershipGate.lockExternal();
     startRequestRef.current += 1;
-    startInFlightRef.current = false;
     if (standardStopTimerRef.current) {
       clearTimeout(standardStopTimerRef.current);
       standardStopTimerRef.current = null;
@@ -233,14 +232,14 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         // left to hand off.
       }
     }
-  }, []);
+  }, [cameraOwnershipGate]);
 
   const unlockExternal = React.useCallback((): void => {
-    externalLockedRef.current = false;
+    cameraOwnershipGate.unlockExternal();
     if (mountedRef.current) {
       setExternalLocked(false);
     }
-  }, []);
+  }, [cameraOwnershipGate]);
 
   React.useEffect(() => {
     // @ref LLP 0013#xr-request-session — WebXR research sessions use the same
@@ -253,12 +252,16 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {
-      if (externalLockedRef.current) {
-        console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(next ?? constraints)}`);
+      const effective = next ?? constraints;
+      let blockReason = cameraOwnershipGate.startBlockReason({
+        explicitConstraints: next != null,
+        hasStream: streamRef.current !== null,
+      });
+      if (blockReason === 'external-lock') {
+        console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
         return;
       }
-      const effective = next ?? constraints;
-      if (startInFlightRef.current && next == null && !streamRef.current) {
+      if (blockReason === 'duplicate-default-start') {
         console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
         return;
       }
@@ -266,8 +269,16 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         clearTimeout(standardStopTimerRef.current);
         standardStopTimerRef.current = null;
       }
-      if (externalLockedRef.current) {
+      blockReason = cameraOwnershipGate.startBlockReason({
+        explicitConstraints: next != null,
+        hasStream: streamRef.current !== null,
+      });
+      if (blockReason === 'external-lock') {
         console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
+        return;
+      }
+      if (blockReason === 'duplicate-default-start') {
+        console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
         return;
       }
       const requestId = startRequestRef.current + 1;
@@ -275,10 +286,10 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       // @ref LLP 0012#camera-ownership-handoff — Provider auto-start and
       // screen-level start-on-mount can fire before React commits `requesting`.
       // Coalesce duplicate default starts so a WebXR/LiDAR handoff does not
-      // immediately queue two AVFoundation getUserMedia requests. The external
-      // lock is mirrored in a ref so stale focused-route closures cannot
-      // reopen AVFoundation after WebXR has locked the camera for ARKit.
-      startInFlightRef.current = true;
+      // immediately queue two AVFoundation getUserMedia requests. The gate is
+      // synchronous so stale focused-route closures cannot reopen AVFoundation
+      // after WebXR has locked the camera for ARKit.
+      cameraOwnershipGate.setStartInFlight(true);
       const previous = streamRef.current;
       if (previous) {
         streamRef.current = null;
@@ -346,11 +357,11 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
           getUserMediaInFlightRef.current = null;
         }
         if (requestId === startRequestRef.current) {
-          startInFlightRef.current = false;
+          cameraOwnershipGate.setStartInFlight(false);
         }
       }
     },
-    [constraints]
+    [cameraOwnershipGate, constraints]
   );
 
   const applyConstraints = React.useCallback(
