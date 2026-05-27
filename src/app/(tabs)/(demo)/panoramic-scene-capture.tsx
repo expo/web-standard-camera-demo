@@ -314,6 +314,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   async function startSession(): Promise<void> {
     if (sessionRef.current) return;
+    const preserveCapturedModel = statusRef.current === 'captured' && modelRef.current !== null;
     installWebXRDepthProfile();
     setError(null);
     setStatus('requesting');
@@ -321,13 +322,13 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       const xr = navigator.xr;
       if (!xr) {
         setSupport('WebXR camera/depth unavailable here');
-        setStatus('unsupported');
+        setStatus(preserveCapturedModel ? 'captured' : 'unsupported');
         return;
       }
       const supported = await xr.isSessionSupported('immersive-ar');
       if (!supported) {
         setSupport('WebXR camera/depth unavailable here');
-        setStatus('unsupported');
+        setStatus(preserveCapturedModel ? 'captured' : 'unsupported');
         return;
       }
       const nextSession = await runWithWebXRUserActivation(() =>
@@ -361,7 +362,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     } catch (e) {
       sessionRef.current = null;
       setSession(null);
-      setStatus('error');
+      setStatus(preserveCapturedModel ? 'captured' : 'error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
   }

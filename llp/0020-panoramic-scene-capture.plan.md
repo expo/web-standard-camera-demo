@@ -95,7 +95,9 @@ Implemented:
   that restores the orbit/pinch viewer state without deleting the captured
   model.
 - Restart safety: starting a replacement scan does not clear the displayed or
-  saveable captured model until a new WebXR session has actually been acquired.
+  saveable captured model until a new WebXR session has actually been acquired;
+  if replacement scan startup fails, the previous captured model remains in the
+  captured/saveable state while the error is reported.
 - Export: after explicit Capture, writes an ASCII `.ply` model into the app
   Documents directory before opening any optional share sheet, reports the
   Files-visible filename/size, and relies on iOS document sharing so the
