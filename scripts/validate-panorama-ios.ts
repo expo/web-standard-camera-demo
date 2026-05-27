@@ -17,13 +17,21 @@ const REQUIRED_METRICS = [
   'PANORAMIC_CAPTURE_METRICS',
   'PANORAMIC_RENDER_METRICS',
   'PANORAMIC_EXPORT_METRICS',
-] as const satisfies readonly MetricName[];
+] as const satisfies readonly RequiredMetricName[];
+const OPTIONAL_METRICS = [
+  'PANORAMIC_LIVE_MODEL_PROFILE',
+  'PANORAMIC_MODEL_UPLOAD_PROFILE',
+] as const satisfies readonly OptionalMetricName[];
 
-type MetricName =
+type RequiredMetricName =
   | 'PANORAMIC_KEYFRAME_PROFILE'
   | 'PANORAMIC_CAPTURE_METRICS'
   | 'PANORAMIC_RENDER_METRICS'
   | 'PANORAMIC_EXPORT_METRICS';
+type OptionalMetricName =
+  | 'PANORAMIC_LIVE_MODEL_PROFILE'
+  | 'PANORAMIC_MODEL_UPLOAD_PROFILE';
+type MetricName = RequiredMetricName | OptionalMetricName;
 
 type SeenMetrics = Partial<Record<MetricName, Record<string, unknown>>>;
 
@@ -157,7 +165,10 @@ Options:
 
 Success requires these log lines from a physical run:
   PANORAMIC_KEYFRAME_PROFILE, PANORAMIC_CAPTURE_METRICS,
-  PANORAMIC_RENDER_METRICS, and PANORAMIC_EXPORT_METRICS.`);
+  PANORAMIC_RENDER_METRICS, and PANORAMIC_EXPORT_METRICS.
+
+The validator also prints optional live preview performance telemetry when it
+appears: PANORAMIC_LIVE_MODEL_PROFILE and PANORAMIC_MODEL_UPLOAD_PROFILE.`);
 }
 
 interface DeviceInfo {
@@ -240,7 +251,7 @@ function recordMetricLine(line: string, seen: SeenMetrics): void {
   const match = line.match(/(PANORAMIC_[A-Z_]+)\s+(\{.*\})/);
   if (!match) return;
   const name = match[1] as MetricName;
-  if (!isRequiredMetric(name)) return;
+  if (!isObservedMetric(name)) return;
   const metric = safeParseMetric(match[2] ?? '{}');
   if (!isValidMetric(name, metric)) {
     console.warn(`Ignored invalid ${name}: ${JSON.stringify(metric)}`);
@@ -259,19 +270,22 @@ function safeParseMetric(raw: string): Record<string, unknown> {
   }
 }
 
-function isRequiredMetric(name: string): name is MetricName {
-  return (
-    name === 'PANORAMIC_KEYFRAME_PROFILE' ||
-    name === 'PANORAMIC_CAPTURE_METRICS' ||
-    name === 'PANORAMIC_RENDER_METRICS' ||
-    name === 'PANORAMIC_EXPORT_METRICS'
-  );
+function isObservedMetric(name: string): name is MetricName {
+  return isRequiredMetric(name) || isOptionalMetric(name);
+}
+
+function isRequiredMetric(name: string): name is RequiredMetricName {
+  return (REQUIRED_METRICS as readonly string[]).includes(name);
+}
+
+function isOptionalMetric(name: string): name is OptionalMetricName {
+  return (OPTIONAL_METRICS as readonly string[]).includes(name);
 }
 
 function isValidMetric(name: MetricName, metric: Record<string, unknown>): boolean {
   const surfels = numberField(metric, 'surfelCount');
-  const keyframes = numberField(metric, 'keyframes');
-  if (surfels <= 0 || keyframes <= 0) return false;
+  if (surfels <= 0) return false;
+  if (name !== 'PANORAMIC_MODEL_UPLOAD_PROFILE' && numberField(metric, 'keyframes') <= 0) return false;
   if (name === 'PANORAMIC_CAPTURE_METRICS') {
     return numberField(metric, 'rawSampleCount') > 0;
   }
@@ -280,6 +294,9 @@ function isValidMetric(name: MetricName, metric: Record<string, unknown>): boole
   }
   if (name === 'PANORAMIC_EXPORT_METRICS') {
     return numberField(metric, 'bytes') > 0 && String(metric.filename ?? '').endsWith('.ply');
+  }
+  if (name === 'PANORAMIC_MODEL_UPLOAD_PROFILE') {
+    return numberField(metric, 'surfelBytes') > 0 && numberField(metric, 'uploadMs') >= 0;
   }
   return true;
 }
@@ -293,23 +310,47 @@ function isComplete(seen: SeenMetrics): boolean {
   return missingMetrics(seen).length === 0;
 }
 
-function missingMetrics(seen: SeenMetrics): MetricName[] {
+function missingMetrics(seen: SeenMetrics): RequiredMetricName[] {
   return REQUIRED_METRICS.filter((name) => !seen[name]);
 }
 
 function printMetricSummary(seen: SeenMetrics): void {
   console.log('Panorama physical validation passed.');
-  for (const [name, metric] of Object.entries(seen)) {
-    console.log(`  ${name}: ${JSON.stringify(metric)}`);
+  for (const name of REQUIRED_METRICS) {
+    console.log(`  ${name}: ${JSON.stringify(seen[name])}`);
+  }
+  for (const name of OPTIONAL_METRICS) {
+    if (seen[name]) {
+      console.log(`  ${name}: ${JSON.stringify(seen[name])}`);
+    }
   }
 }
 
 async function sh(cmd: string[]): Promise<void> {
-  const proc = spawn({ cmd, stdout: 'inherit', stderr: 'inherit' });
+  const proc = spawn({ cmd, stdout: 'pipe', stderr: 'pipe' });
+  const stdout = proc.stdout ? streamToText(proc.stdout) : Promise.resolve('');
+  const stderr = proc.stderr ? streamToText(proc.stderr) : Promise.resolve('');
   const code = await proc.exited;
+  const output = [await stdout, await stderr].filter(Boolean).join('\n').trim();
   if (code !== 0) {
-    throw new Error(`Command failed (${code}): ${cmd.join(' ')}`);
+    throw new Error(formatCommandFailure(cmd, code, output));
   }
+}
+
+async function streamToText(stream: ReadableStream<Uint8Array>): Promise<string> {
+  return new Response(stream).text();
+}
+
+function formatCommandFailure(cmd: string[], code: number, output: string): string {
+  const command = cmd.join(' ');
+  if (/\bLocked\b|device was not, or could not be, unlocked|Unable to launch .* because .*locked/i.test(output)) {
+    return [
+      `Device is locked; unlock the iPhone and rerun the validator.`,
+      `Command failed (${code}): ${command}`,
+      output,
+    ].filter(Boolean).join('\n');
+  }
+  return [`Command failed (${code}): ${command}`, output].filter(Boolean).join('\n');
 }
 
 async function shQuiet(cmd: string[]): Promise<void> {
