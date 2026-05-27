@@ -165,7 +165,11 @@ Relevant upstream semantics:
 - `data` is a tight row-major depth buffer with no padding.
 - Members are frame-scoped; access after the frame becomes inactive throws
   `InvalidStateError`.
-- `getDepthInMeters(x, y)` samples at normalized view coordinates.
+- `getDepthInMeters(x, y)` samples at normalized view coordinates, rejecting
+  inputs outside `[0, 1]`.
+- Sampling applies `normDepthBufferFromNormView`, scales the normalized depth
+  coordinate by `width` and `height`, truncates to an integer column/row, clamps
+  to the buffer edge, reads the raw value, and multiplies by `rawValueToMeters`.
 
 LLP 0013 keeps this CPU shape and maps `data` to a tight little-endian
 `Float32Array`-compatible `ArrayBuffer`.

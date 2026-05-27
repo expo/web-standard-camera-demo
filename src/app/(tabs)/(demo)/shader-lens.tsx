@@ -260,21 +260,23 @@ export default function ShaderLensScreen(): React.JSX.Element {
   }, [cameraStatus, setGrabError, stream]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Auto-start only when there is no live stream. We deliberately consume
-  // whatever resolution Home (or the previous demo) negotiated — the demo's
-  // WGSL pipeline scales to whatever frames arrive, and tearing down a live
-  // stream to demand exact 1280x720 used to leave the rest of the app
-  // camera-less if gUM rejected the new constraints. The user can change
-  // resolution from Home if they want a different mode for the demo.
-  React.useEffect(() => {
-    if (didAutoStartCameraRef.current) return;
-    if (userStopped || externalLocked) return;
-    if (cameraStatus === 'requesting' || cameraStatus === 'starting' || cameraStatus === 'stopping') return;
-    didAutoStartCameraRef.current = true;
-    if (stream) return;
-    void start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraStatus, userStopped, externalLocked, stream]);
+  // Auto-start only while focused and only when there is no live stream. Native
+  // navigators may keep routes mounted after leaving the demo; offscreen camera
+  // effects must not reacquire AVFoundation behind WebXR/ARKit.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (didAutoStartCameraRef.current) return undefined;
+      if (userStopped || externalLocked) return undefined;
+      if (cameraStatus === 'requesting' || cameraStatus === 'starting' || cameraStatus === 'stopping') {
+        return undefined;
+      }
+      didAutoStartCameraRef.current = true;
+      if (!stream) {
+        void start();
+      }
+      return undefined;
+    }, [cameraStatus, externalLocked, start, stream, userStopped])
+  );
 
   React.useEffect(() => {
     if (!stream) {

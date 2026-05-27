@@ -214,13 +214,29 @@ As of 2026-05-22 the canonical green-test claim is "49/49 on iPhone 15 Pro / iOS
 4. Build and install the app:
    - `expo prebuild --platform ios --clean` if `ios/` directory is missing or stale (hash-tracked)
    - `xcrun simctl install <UDID> <built .app>` or `expo run:ios --device <UDID>` for the first run
-5. Launch with the deep link: `xcrun simctl openurl <UDID> standardcameraapp://run-tests`.
-6. Open `xcrun simctl spawn <UDID> log stream --predicate 'process == "standard-camera-app"'` (or similar).
-7. Parse `WPT_RESULT:` and `WPT_DONE:` lines.
-8. Pretty-print summary. Exit `0` if `failed === 0` and `timeout === 0`, else `1`.
-9. **Always** shut down the simulator on exit (success, failure, or signal). Use `using` (Node 22+/Bun) for a shutdown disposer.
+5. Reuse an existing Metro server at `http://127.0.0.1:8081` when
+   `/status` reports `packager-status:running`; otherwise start
+   `expo start --dev-client --localhost --port 8081` and wait for the same
+   status endpoint before launching the app.
+6. Launch the installed development build, open
+   `standardcameraapp://expo-development-client/?disableOnboarding=1&url=http%3A%2F%2F127.0.0.1%3A8081`
+   so the JS bundle loads instead of leaving the app on the dev-client
+   launcher or onboarding surface, then open
+   `standardcameraapp:///run-tests?autorun=1`. Retry that test deep link until
+   WPT output appears because a cold dev-client launch can receive route links
+   before the JS bundle has installed the Expo Linking listener.
+7. Open `xcrun simctl spawn <UDID> log stream --predicate 'process == "standard-camera-app"'` (or similar).
+8. Parse `WPT_RESULT:` and `WPT_DONE:` lines.
+9. Pretty-print summary. Exit `0` if `failed === 0` and `timeout === 0`, else `1`.
+10. **Always** shut down the simulator on exit (success, failure, or signal), and kill any Metro/log-stream process that the script started.
 
 ## Triggering
+
+The native development build config sets `expo-dev-client` `skipOnboarding` to
+`true` and `showMenuAtLaunch` to `false`, matching the automation URL above.
+Raw `simctl launch` can still open the launcher because Expo app-specific links
+work only after the dev client has opened a project bundle; use the CLI flow or
+open the `expo-development-client/?url=...` URL first.
 
 The app reads its launch URL via `expo-linking`. The `run-tests` route auto-runs on mount; the demo screen at `/` is unchanged.
 

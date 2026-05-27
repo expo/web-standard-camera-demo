@@ -72,8 +72,9 @@ Section anchors below are stable; code annotations may cite them as
 
 - No general WebXR runtime.
 - No WebXR input sources, controllers, hand tracking, hit testing, anchors,
-  planes, meshes, bounded-floor spaces, DOM overlays, layers, stereo rendering,
-  or world-space UI.
+  planes, bounded-floor spaces, DOM overlays, layers, stereo rendering, or
+  world-space UI. Mesh access is limited to the repo-local
+  `"mesh-detection"` research slice below.
 - No WebGL rendering path for this demo.
 - No attempt to claim compatibility with browsers that implement WebXR.
 - No Media Capture depth track or `videoKind: "depth"` implementation.
@@ -83,10 +84,11 @@ Section anchors below are stable; code annotations may cite them as
 This repo-local profile supports exactly:
 
 - `XRSessionMode`: `"immersive-ar"`
-- `XRReferenceSpaceType`: `"viewer"`
+- `XRReferenceSpaceType`: `"viewer"` and `"local"`
 - Feature descriptors:
   - `"depth-sensing"`
   - `"camera-access"`
+  - `"mesh-detection"` as an optional Real World Meshing draft slice
 - Depth usage:
   - `"cpu-optimized"`
 - Depth data format:
@@ -166,8 +168,8 @@ literal Web IDL.
 
 ```ts
 type XRSessionMode = "immersive-ar";
-type XRReferenceSpaceType = "viewer";
-type XRFeatureDescriptor = "depth-sensing" | "camera-access";
+type XRReferenceSpaceType = "viewer" | "local";
+type XRFeatureDescriptor = "depth-sensing" | "camera-access" | "mesh-detection";
 
 type XRDepthType = "raw" | "smooth";
 type XRDepthUsage = "cpu-optimized";
@@ -225,9 +227,11 @@ type XRFrameRequestCallback = (time: DOMHighResTimeStamp, frame: XRFrame) => voi
 interface XRFrame {
   readonly session: XRSession;
   readonly predictedDisplayTime: DOMHighResTimeStamp;
+  readonly detectedMeshes: XRMeshSet;
 
   getViewerPose(referenceSpace: XRReferenceSpace): XRViewerPose | null;
   getDepthInformation(view: XRView): XRCPUDepthInformation | null;
+  getPose(space: XRMeshSpace, baseSpace: XRReferenceSpace): XRPose | null;
 }
 
 interface XRReferenceSpace extends EventTarget {
@@ -238,6 +242,27 @@ interface XRViewerPose {
   readonly transform: XRRigidTransform;
   readonly views: readonly XRView[];
 }
+
+interface XRPose {
+  readonly transform: XRRigidTransform;
+}
+
+interface XRMeshSet {
+  readonly size: number;
+  entries(): IterableIterator<[XRMesh, XRMesh]>;
+  values(): IterableIterator<XRMesh>;
+}
+
+interface XRMesh {
+  readonly meshSpace: XRMeshSpace;
+  readonly vertices: Float32Array;
+  readonly indices: Uint32Array;
+  readonly normals: Float32Array | null;
+  readonly lastChangedTime: DOMHighResTimeStamp;
+  readonly semanticLabel: string | null;
+}
+
+interface XRMeshSpace extends EventTarget {}
 
 interface XRView {
   readonly eye: "none";
@@ -323,9 +348,9 @@ capability check.
 1. If `mode !== "immersive-ar"`, reject with `NotSupportedError`.
 2. If the call is not made during user activation, reject with `SecurityError`.
 3. Resolve required and optional features.
-4. If neither `"depth-sensing"` nor `"camera-access"` is requested, reject with
-   `NotSupportedError`. This profile exists only for the LiDAR camera/depth
-   demo.
+4. If none of `"depth-sensing"`, `"camera-access"`, or `"mesh-detection"` is
+   requested, reject with `NotSupportedError`. This profile exists only for the
+   LiDAR camera/depth/mesh demo.
 5. If `"depth-sensing"` is required and `options.depthSensing` is missing,
    reject with `NotSupportedError`.
 6. If `"camera-access"` is required and `options.cameraAccess` is missing,
@@ -349,13 +374,18 @@ capability check.
    - This profile does not expose a camera resolution constraint. Camera image
      dimensions are implementation-selected and reported on
      `XRCPUCameraImage.width` and `XRCPUCameraImage.height`.
-9. Request native camera permission. If permission is denied or restricted,
+9. If `"mesh-detection"` is requested, enable it only when
+   `ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)` is true.
+   If it is a required feature and native mesh reconstruction is unavailable,
+   reject with `NotSupportedError`; if it is optional, continue without mesh
+   detection.
+10. Request native camera permission. If permission is denied or restricted,
    reject with `NotAllowedError`.
-10. If another `getUserMedia` or LiDAR session is active, stop or suspend it
+11. If another `getUserMedia` or LiDAR session is active, stop or suspend it
     through the same external-lock mechanism used by LLP 0012.
-11. Start `ARSession` with `ARWorldTrackingConfiguration` and either
+12. Start `ARSession` with `ARWorldTrackingConfiguration` and either
     `.smoothedSceneDepth` or `.sceneDepth`.
-12. Resolve with a new `XRSession`.
+13. Resolve with a new `XRSession`.
 
 At most one immersive session may be active at a time. If a session is active,
 a second `requestSession("immersive-ar")` call MUST reject with
@@ -371,7 +401,7 @@ renderer uploads into WebGPU textures directly. Native WebXR frame delivery uses
 a WebXR-specific frame accessor so preview-size tuning remains an implementation
 detail of this research profile.
 
-The current native tuning requests 1280x960 BGRA camera frames for the WebXR
+The current native tuning requests 256x192 BGRA camera frames for the WebXR
 route. That value MUST NOT be exposed as a request-session option or other
 caller-selectable camera resolution; callers only observe the actual returned
 image dimensions through `XRCPUCameraImage.width` and
@@ -404,14 +434,20 @@ an `end` event, and resolve once no new animation frames will be delivered.
 
 ## `xr-reference-space`
 
-Only `session.requestReferenceSpace("viewer")` is supported.
+`session.requestReferenceSpace(type)` MUST support:
 
-Requests for `"local"`, `"local-floor"`, `"bounded-floor"`, or `"unbounded"`
-MUST reject with `NotSupportedError`.
+- `"viewer"` for screen/view-relative effects where the viewer pose is relative
+  to itself.
+- `"local"` for world-space LiDAR fusion, backed by ARKit's world-tracking
+  origin for the current session.
 
-The `"viewer"` reference space is sufficient for the demo because every effect
-is screen/view relative. The API still exposes transforms so this profile can
-grow into an honest XR mapping later.
+Requests for `"local-floor"`, `"bounded-floor"`, or `"unbounded"` MUST reject
+with `NotSupportedError`.
+
+The LiDAR viewer demo may keep using `"viewer"` because it renders
+screen-relative depth. The panoramic scene capture demo MUST use `"local"` so
+accepted keyframes are fused in a stable WebXR reference space rather than in
+viewer-relative coordinates.
 
 ## `xr-frame-loop`
 
@@ -424,12 +460,21 @@ Each callback receives:
 - `frame`: a fresh `XRFrame` object whose active flag is true only for the
   duration of the callback.
 
+Native AR frame snapshots MUST remain internal to the WebXR runtime. The app
+MUST use WebXR-facing accessors such as `getViewerPose()`,
+`getDepthInformation()`, `view.camera`, `XRCPUCameraBinding.getCameraImage()`,
+and `detectedMeshes`; it MUST NOT read a native backing frame object from
+`XRFrame`.
+
 After the callback returns, attempts to access frame-scoped data such as
 `depth.data`, `depth.getDepthInMeters()`, `camera.data`, or `view.camera` MUST
 throw `InvalidStateError`.
 
 If no new AR frame is available, the implementation MAY skip a callback rather
-than reusing stale depth data.
+than reusing stale depth data. Repeated `requestAnimationFrame()` calls on the
+same `XRSession` MUST NOT re-deliver the same native frame snapshot; the
+implementation must remember the most recently delivered native frame for the
+session, not only for an individual scheduled callback.
 
 `session.cancelAnimationFrame(handle)` MUST prevent the matching callback if it
 has not already started.
@@ -441,12 +486,29 @@ has not already started.
 1. Throw `InvalidStateError` if `frame` is inactive.
 2. Throw `InvalidStateError` if `referenceSpace` does not belong to
    `frame.session`.
-3. Return `null` if the native AR frame is unavailable.
+3. Return `null` if the native AR frame is unavailable or ARKit camera tracking
+   is unavailable/unknown.
 4. Return an `XRViewerPose` with exactly one `XRView`.
 
 The returned `XRViewerPose.transform` MUST expose the viewer pose in the
-requested reference space. In the monocular phone profile this is the same
-ARKit camera transform exposed on the single `XRView.transform`.
+requested reference space. In the monocular phone profile:
+
+- For `"viewer"`, the transform MUST be identity because the viewer is being
+  described relative to the viewer reference space.
+- For `"local"`, the transform MUST be the ARKit camera-to-world transform for
+  the frame. When the projection matrix is derived from the raw
+  scene-depth/captured-image plane, this MUST use the orientation-stable
+  `ARCamera.transform` rather than a UI-display transform.
+
+The implementation MAY return a viewer pose for ARKit `.limited` tracking and
+for any world-mapping bucket when ARKit still provides a camera transform. This
+keeps startup scene-depth frames usable on devices that remain in
+`worldMappingStatus === "notAvailable"` while scene depth is already flowing.
+The WebXR runtime MAY emit throttled internal diagnostic telemetry for both
+null-pose and degraded-pose paths, including the native tracking-state bucket,
+world-mapping bucket, frame number, and whether a pose was returned, but it
+MUST NOT expose tracking or mapping state through `XRFrame`, `XRViewerPose`,
+`XRView`, or `XRDepthInformation`.
 
 The single `XRView` MUST have:
 
@@ -454,11 +516,17 @@ The single `XRView` MUST have:
 - `index === 0`
 - `recommendedViewportScale === null`
 - `projectionMatrix` from ARKit camera intrinsics/projection when available,
-  otherwise an identity-compatible placeholder for this demo profile.
-- `transform` from ARKit camera transform when available, otherwise identity.
+  otherwise an identity-compatible placeholder for this demo profile. When
+  derived from ARKit intrinsics for a scene-depth buffer, the projection MUST
+  align WebXR normalized depth texel centers with ARKit's integer depth-pixel
+  centers; `(column + 0.5) / width` should unproject through the ray for ARKit
+  depth pixel `column`.
+- `transform` matching the viewer pose in the requested reference space.
 
-The current LiDAR demo does not consume world poses, but exposing them here
-keeps the API shape close to WebXR and avoids inventing a non-XR frame object.
+The current LiDAR demo does not consume world poses, but panoramic scene
+capture does. Supporting standard `"local"` reference spaces keeps that
+world-space reconstruction on WebXR terms and avoids inventing a non-XR frame
+object.
 
 ## `xr-depth-information`
 
@@ -476,11 +544,18 @@ keeps the API shape close to WebXR and avoids inventing a non-XR frame object.
 - `width` and `height` MUST match the tight depth buffer dimensions.
 - `projectionMatrix` and `transform` MUST expose the `XRViewGeometry` for the
   depth information. With `matchDepthView === true`, they MUST match the
-  associated `XRView`.
+  associated `XRView`, including the requested reference-space transform.
 - `data` MUST be a tightly packed `ArrayBuffer` containing
   `width * height` little-endian `Float32` values.
 - `rawValueToMeters` MUST be `1` for `float32` ARKit meters.
 - Invalid or unavailable depth pixels MUST be encoded as `0`.
+- When ARKit supplies a confidence map, the native WebXR implementation MAY
+  treat samples below an internal confidence threshold as unavailable and
+  encode them as `0` instead of exposing a non-standard confidence map to
+  application code. The current ARKit bridge uses a stricter high-confidence
+  threshold for raw scene depth and a medium-or-better threshold for smoothed
+  scene depth, but MAY fall back to accepting low-confidence smoothed depth for
+  a frame when the stricter threshold would make the entire payload invalid.
 - `normDepthBufferFromNormView` MUST map normalized view coordinates into
   normalized depth-buffer coordinates. It MAY be identity only if the native
   implementation has already produced view-aligned depth.
@@ -488,14 +563,20 @@ keeps the API shape close to WebXR and avoids inventing a non-XR frame object.
 The implementation MAY return frame metadata from the native animation-frame
 poll before copying CPU depth bytes, as long as `XRCPUDepthInformation.data`
 and `getDepthInMeters()` still expose data for the same active `XRFrame`.
+When the native bridge has already produced an exact tight `ArrayBuffer`, the
+JS WebXR profile MAY return that buffer directly instead of making another
+JavaScript copy.
 
 `getDepthInMeters(x, y)` MUST:
 
 1. Throw `InvalidStateError` if the frame is inactive.
-2. Transform `(x, y)` by `normDepthBufferFromNormView`.
-3. Clamp to the depth buffer.
-4. Read the raw `Float32` value.
-5. Return `raw * rawValueToMeters`.
+2. Throw `RangeError` if either input coordinate is outside `[0, 1]`.
+3. Transform `(x, y)` by `normDepthBufferFromNormView`.
+4. Scale the transformed normalized depth coordinate by `width` and `height`.
+5. Truncate each scaled coordinate to an integer column/row and clamp it to
+   `[0, width - 1]` / `[0, height - 1]`.
+6. Read the raw `Float32` value.
+7. Return `raw * rawValueToMeters`.
 
 The returned depth MUST represent distance from the camera plane to
 real-world geometry, matching the WebXR Depth Sensing model. It MUST NOT be
@@ -534,8 +615,78 @@ The implementation SHOULD return the selected camera format without an extra
 copy when feasible. The current WebGPU renderer creates a `bgra8unorm` texture
 when the XR camera image format is `"bgra8unorm"`, avoiding the per-frame
 BGRA-to-RGBA swizzle that dominated physical-device profiling.
+For ARKit's common bi-planar YCbCr camera buffers, the native WebXR runtime MAY
+generate the requested low-resolution BGRA CPU image by directly downsampling
+and converting YCbCr into the returned tight buffer, falling back to the
+platform image renderer for uncommon pixel formats. This keeps the
+app-facing WebXR camera-image shape unchanged while avoiding a GPU render/sync
+for each colorized surfel keyframe.
+When the native bridge has already produced an exact tight `ArrayBuffer`, the
+JS WebXR profile MAY return that buffer directly instead of making another
+JavaScript copy.
 The implementation MAY also defer camera-image rendering/copying until
 `XRCPUCameraBinding.getCameraImage(camera)` is called for the active frame.
+Implementations MAY emit internal diagnostic telemetry for native payload
+copy/render timing and pose availability, but that telemetry MUST NOT add
+app-facing fields to `XRFrame`, `XRDepthInformation`, `XRCamera`, or
+`XRCPUCameraImage`.
+
+## `xr-mesh-detection`
+
+This repo-local slice follows the WebXR Real World Meshing draft shape without
+claiming browser conformance.
+
+`frame.detectedMeshes` MUST:
+
+1. Throw `InvalidStateError` if the frame is inactive.
+2. Return an empty readonly setlike object when `"mesh-detection"` was not
+   granted.
+3. Return one `XRMesh` per ARKit mesh anchor in the frame snapshot otherwise.
+
+Each `XRMesh` MUST expose anchor-local `Float32Array` `vertices`, optional
+anchor-local `Float32Array` `normals`, `Uint32Array` triangle `indices`,
+`lastChangedTime`, nullable `semanticLabel`, and a `meshSpace`.
+
+`frame.getPose(mesh.meshSpace, localReferenceSpace)` MUST return the mesh
+anchor transform in the WebXR `"local"` reference space. Application code MUST
+consume this pose instead of reading ARKit anchor transforms directly.
+
+The native bridge MAY materialize `detectedMeshes` from lightweight per-anchor
+summaries first, as long as the setlike object corresponds to the active
+`XRFrame` snapshot. In that implementation, reading `XRMesh.meshSpace`,
+`XRMesh.lastChangedTime`, or `XRMesh.semanticLabel` MUST NOT require copying
+the full vertex/index buffers; reading `XRMesh.vertices`, `XRMesh.normals`, or
+`XRMesh.indices` MAY lazily fetch the full geometry for that same frame.
+The bridge MAY cache copied native mesh buffers by anchor identity and
+`lastChangedTime`; if it does, each returned `XRMesh` MUST still expose the
+current frame's `meshSpace` pose and the cached geometry MUST only be reused
+while the native geometry-change timestamp is unchanged.
+The bridge MAY return lower-detail mesh geometry than ARKit's full
+`ARMeshGeometry` buffers for dense anchors, because WebXR exposes
+UA-provided mesh geometry rather than an ARKit buffer identity contract. If it
+does, the returned `vertices`, `normals`, and `indices` MUST still be
+internally consistent typed arrays in anchor-local coordinates, and
+`lastChangedTime` MUST continue to track changes in the native source mesh
+rather than changes in the chosen level of detail.
+Within a session, the WebXR runtime SHOULD reuse the same `XRMesh` object for
+the same logical native mesh anchor across frames and keep `mesh.meshSpace` as a
+`[SameObject]` space whose pose is refreshed through `frame.getPose()`. This
+matches the WebXR Mesh Detection draft's assumption that native mesh objects
+maintain identity across frames, without exposing native anchor identifiers to
+application code.
+For the ARKit-backed implementation, `lastChangedTime` MUST describe mesh
+geometry changes rather than pose-only anchor updates. `ARSessionDelegate`
+updates can still refresh the current `meshSpace` pose for
+`frame.getPose(mesh.meshSpace, ...)` without invalidating cached vertices,
+normals, or indices when the anchor-local mesh geometry is unchanged.
+Mesh data is sensitive room-scale geometry and MUST remain gated behind an
+explicit user-initiated immersive AR session.
+For the ARKit-backed implementation, the native WebXR runtime MAY enable
+`ARWorldTrackingConfiguration.planeDetection` while mesh detection is active so
+ARKit can improve or smooth its scene reconstruction mesh on detected flat
+surfaces. Any `ARPlaneAnchor` values produced by that native analysis MUST stay
+internal to the runtime and MUST NOT be surfaced as `XRMesh` objects or as
+application-visible native anchors.
 
 ## WebGPU Upload
 
@@ -577,17 +728,37 @@ Native implementation sketch:
 | `"raw"` depth type | `.sceneDepth` |
 | `XRCPUDepthInformation.data` | `ARFrame.smoothedSceneDepth?.depthMap` or `ARFrame.sceneDepth.depthMap`, copied as tight `Float32` |
 | `XRCPUCameraImage.data` | `ARFrame.capturedImage`, converted/cropped/scaled to the selected RGBA/BGRA format |
-| `XRView.projectionMatrix` | `ARCamera.projectionMatrix` for the active viewport/orientation |
+| `XRView.projectionMatrix` | A WebXR/OpenGL-style projection matrix derived from `ARCamera.intrinsics`, scaled to the scene-depth buffer and adjusted for WebXR normalized texel centers |
 | `XRView.transform` | `ARCamera.transform` |
+| `"mesh-detection"` support | `ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)` |
+| `XRFrame.detectedMeshes` | `ARMeshAnchor` snapshots from `ARSessionDelegate` |
+| `XRMesh.vertices` / `normals` / `indices` | `ARMeshGeometry.vertices`, `normals`, and triangle faces copied or sampled into tight, internally consistent typed arrays |
+| `XRMesh.meshSpace` pose | `ARMeshAnchor.transform` in `"local"` reference space |
 | `predictedDisplayTime` | `ARFrame.timestamp` converted to `DOMHighResTimeStamp` |
+
+The native implementation may use ARKit intrinsics to construct standard
+`XRViewGeometry`, but it MUST NOT expose those intrinsics as an app-facing
+extension. The depth view is aligned with the scene-depth/captured-image plane;
+`normDepthBufferFromNormView` may therefore be identity when the returned depth
+buffer already uses that coordinate system.
+Internal telemetry MAY report the `ARCamera.imageResolution` basis used to scale
+intrinsics into the projection matrix and the resulting depth-to-projection
+scale, but those diagnostics MUST remain outside the WebXR object model.
+
+`ARFrame.displayTransform(for:viewportSize:)` is a display helper for rotating
+and cropping the raw captured image into a UIKit viewport. It MUST NOT be baked
+into `XRView.transform` or the scene-depth projection for this profile unless a
+future version explicitly defines the XR view as that display-oriented
+viewport. Camera preview crop/scale belongs in `normCameraImageFromNormView`.
 
 The implementation MUST copy frame buffers before returning them to JS, or
 otherwise guarantee their lifetime until the animation-frame callback returns.
 
 Current implementation limit: the native transform/projection metadata is
-computed for a fixed portrait WebXR demo viewport (`960 x 1280`). The CPU camera
-image may remain a landscape-aspect downsampled copy of `ARFrame.capturedImage`
-(`1280 x 960` in the first implementation); callers must use
+computed for the scene-depth/captured-image plane, not for a full compositor
+viewport model. The CPU camera image may remain a landscape-aspect downsampled
+copy of `ARFrame.capturedImage` (`256 x 192` in the current implementation,
+matching common scene-depth buffer dimensions); callers must use
 `normCameraImageFromNormView` to sample it from normalized view coordinates.
 This is enough to make timing and view/camera/depth coordinate objects
 data-backed instead of placeholders, but it is not a general orientation-aware
@@ -648,13 +819,14 @@ Minimum tests for an implementation:
    `NotSupportedError`.
 7. On a LiDAR-capable iPhone with permission granted, `requestSession()` starts
    ARKit and resolves an `XRSession`.
-8. `requestReferenceSpace("viewer")` resolves; every other reference space type
-   rejects.
+8. `requestReferenceSpace("viewer")` and `requestReferenceSpace("local")`
+   resolve; `"local-floor"`, `"bounded-floor"`, and `"unbounded"` reject.
 9. The first frame has exactly one view with `eye === "none"` and `index === 0`.
 10. `frame.getDepthInformation(view)` returns non-null on live LiDAR frames and
     reports `data.byteLength === width * height * 4`.
-11. `depth.getDepthInMeters(0.5, 0.5)` matches the corresponding center
-    `Float32` sample multiplied by `rawValueToMeters`.
+11. `depth.getDepthInMeters(0.5, 0.5)` matches the `Float32` sample at
+    `trunc(0.5 * width), trunc(0.5 * height)` multiplied by
+    `rawValueToMeters`.
 12. Invalid depth samples return `0`.
 13. `view.camera` plus `XRCPUCameraBinding.getCameraImage(camera)` returns non-null and reports
     `data.byteLength === width * height * 4`.
@@ -675,9 +847,9 @@ The first research implementation is present as:
 The implementation is a JavaScript WebXR-shaped profile over the existing
 native LiDAR sidecar from LLP 0012. It installs `navigator.xr` only when the
 WebXR profile installer is called, then implements the supported profile from
-this LLP: `"immersive-ar"`, `"viewer"`, `"depth-sensing"`, `"camera-access"`,
-CPU `float32` depth, CPU camera bytes, one `XRView` with `eye === "none"`, and
-an XR animation-frame loop.
+this LLP: `"immersive-ar"`, `"viewer"`/`"local"` reference spaces,
+`"depth-sensing"`, `"camera-access"`, CPU `float32` depth, CPU camera bytes,
+one `XRView` with `eye === "none"`, and an XR animation-frame loop.
 
 React Native has no browser `navigator.userActivation`. The route bridges this
 with a repo-local `runWithWebXRUserActivation()` helper that must wrap the

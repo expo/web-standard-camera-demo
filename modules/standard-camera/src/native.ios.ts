@@ -13,6 +13,7 @@ export type {
   NativeLiDARDepthSessionEvent,
   NativeLiDARDepthSessionState,
   NativeLiDARDepthType,
+  NativeWebXRMesh,
   NativeMediaStream,
   NativeMediaStreamAudioBuffer,
   NativeMediaStreamFrame,

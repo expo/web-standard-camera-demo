@@ -368,22 +368,27 @@ export default function NeuralLensScreen(): React.JSX.Element {
     sourceRef.current = source;
   }, [source]);
 
-  // Auto-start only when there is no live stream — see shader-lens for the
-  // rationale. We still mark the capture profile as 'demo' for the HUD; the
-  // relaxed-fallback effect handles the case where Home's chosen mode can't
-  // deliver frames the classifier expects.
+  // Auto-start only while focused and only when there is no live stream — see
+  // shader-lens for the rationale. We still mark the capture profile as
+  // 'demo' for the HUD; the relaxed-fallback effect handles the case where
+  // Home's chosen mode can't deliver frames the classifier expects.
   /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing auto-start profile/reset timing. */
-  React.useEffect(() => {
-    if (didAutoStartCameraRef.current) return;
-    if (userStopped || externalLocked) return;
-    if (cameraStatus === 'requesting' || cameraStatus === 'starting' || cameraStatus === 'stopping') return;
-    didAutoStartCameraRef.current = true;
-    setCaptureProfile('demo');
-    if (stream) return;
-    resetFrameState();
-    void start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraStatus, userStopped, externalLocked, stream]);
+  useFocusEffect(
+    React.useCallback(() => {
+      if (didAutoStartCameraRef.current) return undefined;
+      if (userStopped || externalLocked) return undefined;
+      if (cameraStatus === 'requesting' || cameraStatus === 'starting' || cameraStatus === 'stopping') {
+        return undefined;
+      }
+      didAutoStartCameraRef.current = true;
+      setCaptureProfile('demo');
+      if (!stream) {
+        resetFrameState();
+        void start();
+      }
+      return undefined;
+    }, [cameraStatus, externalLocked, resetFrameState, start, stream, userStopped])
+  );
   /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useEffect(() => {

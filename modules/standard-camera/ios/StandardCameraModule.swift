@@ -214,6 +214,17 @@ public final class StandardCameraModule: Module {
       }
     }
 
+    AsyncFunction("startWebXRLiDARDepthAsync") { (depthType: String, enableMeshDetection: Bool, promise: Promise) in
+      DispatchQueue.main.async {
+        LiDARDepthSource.shared.start(
+          preferredDepthType: depthType.isEmpty ? nil : depthType,
+          enableMeshDetection: enableMeshDetection,
+          resolve: { payload in promise.resolve(payload) },
+          reject: { error in promise.reject(error) }
+        )
+      }
+    }
+
     AsyncFunction("stopLiDARDepthAsync") { (promise: Promise) in
       DispatchQueue.main.async {
         LiDARDepthSource.shared.stop()
@@ -245,6 +256,12 @@ public final class StandardCameraModule: Module {
         includeDepthData: includeDepthData,
         includeCameraImage: includeCameraImage
       )
+    }
+
+    Function("getWebXRLiDARDepthFrameMeshes") { (frameNumber: Double) -> [[String: Any]]? in
+      // @ref LLP 0013#xr-mesh-detection — Internal WebXR bridge helper. JS
+      // observes ARKit mesh anchors only through XRFrame.detectedMeshes.
+      LiDARDepthSource.shared.webXRFrameMeshes(frameNumber: UInt64(frameNumber))
     }
 
     // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this

@@ -8,12 +8,15 @@ import { DOMException } from './DOMException';
 import NativeStandardCamera, {
   type NativeLiDARDepthCapabilities,
   type NativeLiDARDepthFrame,
+  type NativeLiDARDepthFramePayload,
   type NativeLiDARDepthSessionEvent,
+  type NativeWebXRMesh,
+  type NativeWebXRMeshSummary,
 } from './native';
 
 export type WebXRSessionMode = 'immersive-ar';
-export type WebXRReferenceSpaceType = 'viewer';
-export type WebXRFeatureDescriptor = 'depth-sensing' | 'camera-access';
+export type WebXRReferenceSpaceType = 'viewer' | 'local';
+export type WebXRFeatureDescriptor = 'depth-sensing' | 'camera-access' | 'mesh-detection';
 export type WebXRDepthType = 'raw' | 'smooth';
 export type WebXRDepthUsage = 'cpu-optimized';
 export type WebXRDepthDataFormat = 'float32';
@@ -57,10 +60,15 @@ declare global {
 
 const INSTALLED_SYMBOL = Symbol.for('standard-camera.webxr-depth.installed');
 const TRANSIENT_ACTIVATION_MS = 900;
+const VIEWER_POSE_PROFILE_INTERVAL_MS = 1000;
+const XR_FRAME_PUMP_PROFILE_INTERVAL_MS = 1500;
 let transientActivationUntil = 0;
 let nextAnimationFrameHandle = 1;
 let activeImmersiveSession: WebXRSession | null = null;
 let cameraLockHandlers: CameraLockHandlers | null = null;
+let lastViewerPoseProfileLoggedAtMs = -Infinity;
+let lastViewerPoseDegradedProfileLoggedAtMs = -Infinity;
+const trackedMeshCacheBySession = new WeakMap<WebXRSession, Map<string, WebXRMesh>>();
 
 const IDENTITY_MATRIX = new Float32Array([
   1, 0, 0, 0,
@@ -70,12 +78,20 @@ const IDENTITY_MATRIX = new Float32Array([
 ]);
 
 const CAMERA_FRAME = Symbol('standard-camera.webxr.camera-frame');
+const WEBXR_FRAME_NATIVE = new WeakMap<object, NativeLiDARDepthFrame>();
 
 function now(): number {
   return globalThis.performance?.now?.() ?? Date.now();
 }
 
 function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  if (
+    bytes.buffer instanceof ArrayBuffer &&
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength
+  ) {
+    return bytes.buffer;
+  }
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
   return buffer;
@@ -107,6 +123,64 @@ function setTransientActivation(): void {
 
 function identityTransform(): WebXRRigidTransform {
   return new WebXRRigidTransform(IDENTITY_MATRIX);
+}
+
+function nativeFrameFor(frame: object): NativeLiDARDepthFrame {
+  const nativeFrame = WEBXR_FRAME_NATIVE.get(frame);
+  if (!nativeFrame) {
+    throw invalidState('XRFrame native data is unavailable');
+  }
+  return nativeFrame;
+}
+
+// @ref LLP 0013#xr-viewer-pose — `getViewerPose()` returns null when the
+// native tracking system cannot provide an ARKit camera pose. Startup frames
+// can still carry usable scene depth while ARKit reports limited tracking or
+// non-mapped world mapping, so those states remain internal diagnostics rather
+// than a hard app-facing pose failure.
+function canReportViewerPose(nativeFrame: NativeLiDARDepthFrame): boolean {
+  const trackingState = nativeFrame.trackingState;
+  return trackingState == null || trackingState === 'normal' || trackingState === 'limited';
+}
+
+function logViewerPoseUnavailable(nativeFrame: NativeLiDARDepthFrame): void {
+  const current = now();
+  if (current - lastViewerPoseProfileLoggedAtMs < VIEWER_POSE_PROFILE_INTERVAL_MS) {
+    return;
+  }
+  lastViewerPoseProfileLoggedAtMs = current;
+  // @ref LLP 0013#xr-viewer-pose - Tracking and mapping state remain internal
+  // WebXR runtime details, but physical-device profiling needs to know why
+  // getViewerPose() is returning null during a slow or empty panorama scan.
+  console.log('PANORAMIC_XR_POSE_PROFILE', JSON.stringify({
+    frameNumber: nativeFrame.frameNumber,
+    returnedPose: false,
+    trackingState: nativeFrame.trackingState ?? 'unknown',
+    worldMappingStatus: nativeFrame.worldMappingStatus ?? 'unknown',
+  }));
+}
+
+function isDegradedViewerPose(nativeFrame: NativeLiDARDepthFrame): boolean {
+  const trackingState = nativeFrame.trackingState ?? 'unknown';
+  const mappingStatus = nativeFrame.worldMappingStatus ?? 'unknown';
+  return trackingState !== 'normal' || (mappingStatus !== 'extending' && mappingStatus !== 'mapped');
+}
+
+function logViewerPoseDegraded(nativeFrame: NativeLiDARDepthFrame): void {
+  const current = now();
+  if (current - lastViewerPoseDegradedProfileLoggedAtMs < VIEWER_POSE_PROFILE_INTERVAL_MS) {
+    return;
+  }
+  lastViewerPoseDegradedProfileLoggedAtMs = current;
+  // @ref LLP 0013#xr-viewer-pose - Keep native pose-quality buckets internal
+  // while giving physical-device profiling enough signal to distinguish
+  // startup-quality poses from complete pose misses.
+  console.log('PANORAMIC_XR_POSE_PROFILE', JSON.stringify({
+    frameNumber: nativeFrame.frameNumber,
+    returnedPose: true,
+    trackingState: nativeFrame.trackingState ?? 'unknown',
+    worldMappingStatus: nativeFrame.worldMappingStatus ?? 'unknown',
+  }));
 }
 
 function matrixFromNative(values: readonly number[] | undefined): Float32Array {
@@ -189,9 +263,17 @@ function transformNormalizedPoint(
   return { x: tx, y: ty };
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
+function assertNormalizedInputCoordinate(value: number, axis: 'x' | 'y'): void {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`${axis} must be between 0 and 1`);
+  }
+}
+
+function normalizedDepthCoordinateToIndex(value: number, size: number): number {
+  if (!Number.isFinite(value) || size <= 0) return 0;
+  const max = Math.max(0, size - 1);
+  const index = Math.trunc(value * size);
+  return Math.min(max, Math.max(0, index));
 }
 
 function selectedDepthType(caps: NativeLiDARDepthCapabilities, request?: WebXRDepthType[]): WebXRDepthType | null {
@@ -203,10 +285,16 @@ function selectedDepthType(caps: NativeLiDARDepthCapabilities, request?: WebXRDe
   return null;
 }
 
+function roundMetric(value: number | undefined, digits = 2): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
+}
+
 function validateRequiredFeatures(features: WebXRFeatureDescriptor[] | undefined): Set<WebXRFeatureDescriptor> {
   const out = new Set<WebXRFeatureDescriptor>();
   for (const feature of features ?? []) {
-    if (feature !== 'depth-sensing' && feature !== 'camera-access') {
+    if (feature !== 'depth-sensing' && feature !== 'camera-access' && feature !== 'mesh-detection') {
       throw unsupported(`Unsupported XR feature: ${String(feature)}`);
     }
     out.add(feature);
@@ -217,7 +305,7 @@ function validateRequiredFeatures(features: WebXRFeatureDescriptor[] | undefined
 function collectKnownOptionalFeatures(features: WebXRFeatureDescriptor[] | undefined): Set<WebXRFeatureDescriptor> {
   const out = new Set<WebXRFeatureDescriptor>();
   for (const feature of features ?? []) {
-    if (feature === 'depth-sensing' || feature === 'camera-access') {
+    if (feature === 'depth-sensing' || feature === 'camera-access' || feature === 'mesh-detection') {
       out.add(feature);
     }
   }
@@ -361,15 +449,20 @@ export class WebXRSystem extends EventTarget {
       (optionalFeatures.has('depth-sensing') && options.depthSensing != null);
     const wantsCamera = requiredFeatures.has('camera-access') ||
       (optionalFeatures.has('camera-access') && options.cameraAccess != null);
-    if (!wantsDepth && !wantsCamera) {
-      throw unsupported('This profile requires depth-sensing or camera-access');
-    }
+    const wantsMeshRequest = requiredFeatures.has('mesh-detection') || optionalFeatures.has('mesh-detection');
     validateDepthInit(wantsDepth, requiredFeatures.has('depth-sensing'), options.depthSensing);
     validateCameraInit(wantsCamera, requiredFeatures.has('camera-access'), options.cameraAccess);
 
     const caps = NativeStandardCamera.getLiDARDepthCapabilities();
     if (!caps.supported) {
       throw unsupported(caps.reason ?? 'LiDAR scene depth is unavailable');
+    }
+    const wantsMesh = caps.meshDetection === true && wantsMeshRequest;
+    if (requiredFeatures.has('mesh-detection') && !wantsMesh) {
+      throw unsupported('WebXR mesh-detection is unavailable');
+    }
+    if (!wantsDepth && !wantsCamera && !wantsMesh) {
+      throw unsupported('This profile requires depth-sensing, camera-access, or mesh-detection');
     }
 
     // @ref LLP 0013#xr-request-session — Pick one supported observable
@@ -383,9 +476,7 @@ export class WebXRSystem extends EventTarget {
     try {
       await cameraLockHandlers?.lockExternal();
       locked = true;
-      started = depthType
-        ? await NativeStandardCamera.startLiDARDepthWithTypeAsync(depthType)
-        : await NativeStandardCamera.startLiDARDepthAsync();
+      started = await NativeStandardCamera.startWebXRLiDARDepthAsync(depthType ?? '', wantsMesh);
     } catch (e) {
       if (locked) {
         cameraLockHandlers?.unlockExternal();
@@ -398,6 +489,7 @@ export class WebXRSystem extends EventTarget {
       cameraFormat: wantsCamera ? selectedCameraFormat(options.cameraAccess) : 'bgra8unorm',
       depthEnabled: wantsDepth,
       depthType: wantsDepth ? (started.depthType ?? depthType) : null,
+      meshDetectionEnabled: wantsMesh,
       sessionId: started.sessionId ?? null,
     });
     activeImmersiveSession = session;
@@ -410,13 +502,13 @@ type WebXRSessionConfig = {
   cameraFormat: WebXRCameraFormat;
   depthEnabled: boolean;
   depthType: WebXRDepthType | null;
+  meshDetectionEnabled: boolean;
   sessionId: number | null;
 };
 
 type ScheduledXRCallback = {
   cancelled: boolean;
   rafId: number | null;
-  lastSeenFrameNumber: number;
 };
 
 // @ref LLP 0013#xr-session
@@ -426,10 +518,17 @@ export class WebXRSession extends EventTarget {
   #cameraFormat: WebXRCameraFormat;
   #depthEnabled: boolean;
   #depthType: WebXRDepthType | null;
+  #meshDetectionEnabled: boolean;
   #sessionId: number | null;
   #depthActive = true;
   #ended = false;
   #callbacks = new Map<number, ScheduledXRCallback>();
+  #lastDeliveredFrameNumber = 0;
+  #lastFramePumpProfileLoggedAtMs = 0;
+  #lastProfileARFrameNumber = 0;
+  #lastProfileDepthFrameNumber = 0;
+  #noFramePolls = 0;
+  #staleFramePolls = 0;
   #nativeTimestampOriginMs: number | null = null;
   #domTimestampOriginMs: number | null = null;
   #nativeStateSubscription: { remove(): void } | null = null;
@@ -440,6 +539,7 @@ export class WebXRSession extends EventTarget {
     this.#cameraFormat = config.cameraFormat;
     this.#depthEnabled = config.depthEnabled;
     this.#depthType = config.depthType;
+    this.#meshDetectionEnabled = config.meshDetectionEnabled;
     this.#sessionId = config.sessionId;
     this.#nativeStateSubscription = NativeStandardCamera.addListener(
       'onLiDARDepthSessionState',
@@ -508,6 +608,10 @@ export class WebXRSession extends EventTarget {
     return this.#cameraAccessEnabled;
   }
 
+  hasMeshDetection(): boolean {
+    return this.#meshDetectionEnabled;
+  }
+
   isDepthActiveForFrame(): boolean {
     return this.#depthEnabled && this.#depthActive && !this.#ended;
   }
@@ -552,8 +656,8 @@ export class WebXRSession extends EventTarget {
     if (this.#ended) {
       throw invalidState('XRSession has ended');
     }
-    if (type !== 'viewer') {
-      throw unsupported('Only viewer reference spaces are supported');
+    if (type !== 'viewer' && type !== 'local') {
+      throw unsupported('Only viewer and local reference spaces are supported');
     }
     return new WebXRReferenceSpace(this, type);
   }
@@ -568,7 +672,6 @@ export class WebXRSession extends EventTarget {
     const scheduled: ScheduledXRCallback = {
       cancelled: false,
       rafId: null,
-      lastSeenFrameNumber: 0,
     };
     this.#callbacks.set(handle, scheduled);
 
@@ -580,12 +683,20 @@ export class WebXRSession extends EventTarget {
       // @ref LLP 0013#xr-camera-resolution - The WebXR profile owns this
       // CPU-visible camera image size as a private implementation detail.
       const nativeFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame();
-      if (!nativeFrame || nativeFrame.frameNumber === scheduled.lastSeenFrameNumber) {
+      if (!nativeFrame) {
+        this.#noFramePolls += 1;
+        this.#maybeLogFramePumpProfile('no-frame', null);
+        scheduled.rafId = globalThis.requestAnimationFrame(pump);
+        return;
+      }
+      if (nativeFrame.frameNumber <= this.#lastDeliveredFrameNumber) {
+        this.#staleFramePolls += 1;
+        this.#maybeLogFramePumpProfile('stale-frame', nativeFrame);
         scheduled.rafId = globalThis.requestAnimationFrame(pump);
         return;
       }
 
-      scheduled.lastSeenFrameNumber = nativeFrame.frameNumber;
+      this.#lastDeliveredFrameNumber = nativeFrame.frameNumber;
       this.#callbacks.delete(handle);
       const time = this.frameTime(nativeFrame, now());
       const frame = new WebXRFrame(this, nativeFrame, time);
@@ -598,6 +709,33 @@ export class WebXRSession extends EventTarget {
 
     scheduled.rafId = globalThis.requestAnimationFrame(pump);
     return handle;
+  }
+
+  #maybeLogFramePumpProfile(reason: 'no-frame' | 'stale-frame', nativeFrame: NativeLiDARDepthFrame | null): void {
+    const current = now();
+    if (current - this.#lastFramePumpProfileLoggedAtMs < XR_FRAME_PUMP_PROFILE_INTERVAL_MS) {
+      return;
+    }
+    this.#lastFramePumpProfileLoggedAtMs = current;
+    const latestFrameNumber = nativeFrame?.frameNumber ?? 0;
+    const arFrameNumber = nativeFrame?.arFrameNumber ?? 0;
+    console.log('PANORAMIC_XR_FRAME_PUMP_PROFILE', JSON.stringify({
+      arFrameDelta: Math.max(0, arFrameNumber - this.#lastProfileARFrameNumber),
+      arFrameNumber,
+      consecutiveDepthMisses: nativeFrame?.consecutiveDepthMisses ?? 0,
+      depthFrameArFrameNumber: nativeFrame?.depthFrameArFrameNumber ?? 0,
+      depthFrameDelta: Math.max(0, latestFrameNumber - this.#lastProfileDepthFrameNumber),
+      depthMisses: nativeFrame?.depthMisses ?? 0,
+      lastDeliveredFrameNumber: this.#lastDeliveredFrameNumber,
+      latestFrameNumber,
+      noFramePolls: this.#noFramePolls,
+      reason,
+      staleFramePolls: this.#staleFramePolls,
+    }));
+    this.#lastProfileARFrameNumber = arFrameNumber;
+    this.#lastProfileDepthFrameNumber = latestFrameNumber;
+    this.#noFramePolls = 0;
+    this.#staleFramePolls = 0;
   }
 
   cancelAnimationFrame(handle: number): void {
@@ -659,6 +797,208 @@ export class WebXRReferenceSpace extends EventTarget {
   }
 }
 
+export class WebXRPose {
+  readonly transform: WebXRRigidTransform;
+
+  constructor(transform: WebXRRigidTransform) {
+    this.transform = transform;
+  }
+}
+
+export class WebXRMeshSpace extends EventTarget {
+  readonly session: WebXRSession;
+  #transform: WebXRRigidTransform;
+
+  constructor(session: WebXRSession, transform: WebXRRigidTransform) {
+    super();
+    this.session = session;
+    this.#transform = transform;
+  }
+
+  get transform(): WebXRRigidTransform {
+    return this.#transform;
+  }
+
+  updateTransform(transform: WebXRRigidTransform): void {
+    this.#transform = transform;
+  }
+}
+
+export class WebXRMesh {
+  #frame: WebXRFrame;
+  readonly #id: string;
+  #nativeMesh: NativeWebXRMesh | null;
+  #indices: Uint32Array | null = null;
+  #lastChangedTime: DOMHighResTimeStamp;
+  #normals: Float32Array | null | undefined;
+  #semanticLabel: string | null;
+  #vertices: Float32Array | null = null;
+  readonly meshSpace: WebXRMeshSpace;
+
+  constructor(
+    session: WebXRSession,
+    frame: WebXRFrame,
+    nativeSummary: NativeWebXRMeshSummary,
+    nativeMesh: NativeWebXRMesh | null = null
+  ) {
+    const transform = transformFromNative(nativeSummary.transform);
+    this.#frame = frame;
+    this.#id = nativeSummary.id;
+    this.#nativeMesh = nativeMesh;
+    this.meshSpace = new WebXRMeshSpace(session, transform);
+    this.#lastChangedTime = nativeSummary.lastChangedTime;
+    this.#semanticLabel = nativeSummary.semanticLabel ?? null;
+  }
+
+  get lastChangedTime(): DOMHighResTimeStamp {
+    return this.#lastChangedTime;
+  }
+
+  get semanticLabel(): string | null {
+    return this.#semanticLabel;
+  }
+
+  updateFromNativeFrame(
+    frame: WebXRFrame,
+    nativeSummary: NativeWebXRMeshSummary,
+    nativeMesh: NativeWebXRMesh | null = null
+  ): void {
+    const changed = nativeSummary.lastChangedTime !== this.#lastChangedTime;
+    this.#frame = frame;
+    this.#nativeMesh = nativeMesh;
+    this.#semanticLabel = nativeSummary.semanticLabel ?? null;
+    this.meshSpace.updateTransform(transformFromNative(nativeSummary.transform));
+    if (changed) {
+      this.#indices = null;
+      this.#normals = undefined;
+      this.#vertices = null;
+      this.#lastChangedTime = nativeSummary.lastChangedTime;
+    }
+  }
+
+  get vertices(): Float32Array {
+    this.#vertices ??= new Float32Array(exactArrayBuffer(this.#nativePayload()?.vertices ?? new Uint8Array()));
+    return this.#vertices;
+  }
+
+  get indices(): Uint32Array {
+    this.#indices ??= new Uint32Array(exactArrayBuffer(this.#nativePayload()?.indices ?? new Uint8Array()));
+    return this.#indices;
+  }
+
+  get normals(): Float32Array | null {
+    if (this.#normals !== undefined) return this.#normals;
+    const normals = this.#nativePayload()?.normals;
+    this.#normals = normals ? new Float32Array(exactArrayBuffer(normals)) : null;
+    return this.#normals;
+  }
+
+  #nativePayload(): NativeWebXRMesh | null {
+    if (this.#nativeMesh) return this.#nativeMesh;
+    this.#nativeMesh = this.#frame.nativeMeshById(this.#id);
+    return this.#nativeMesh;
+  }
+}
+
+export class WebXRMeshSet implements Iterable<WebXRMesh> {
+  readonly #meshes: readonly WebXRMesh[];
+  static readonly #empty = new WebXRMeshSet([]);
+
+  private constructor(meshes: readonly WebXRMesh[]) {
+    this.#meshes = meshes;
+  }
+
+  static empty(): WebXRMeshSet {
+    return WebXRMeshSet.#empty;
+  }
+
+  static fromTrackedMeshes(meshes: readonly WebXRMesh[]): WebXRMeshSet {
+    if (meshes.length === 0) return WebXRMeshSet.empty();
+    return new WebXRMeshSet(meshes);
+  }
+
+  static fromNative(session: WebXRSession, frame: WebXRFrame, nativeMeshes: readonly NativeWebXRMesh[]): WebXRMeshSet {
+    return trackedMeshSetFromNative(session, frame, nativeMeshes, true);
+  }
+
+  static fromNativeSummaries(
+    session: WebXRSession,
+    frame: WebXRFrame,
+    nativeMeshes: readonly NativeWebXRMeshSummary[]
+  ): WebXRMeshSet {
+    return trackedMeshSetFromNative(session, frame, nativeMeshes, false);
+  }
+
+  get size(): number {
+    return this.#meshes.length;
+  }
+
+  has(mesh: WebXRMesh): boolean {
+    return this.#meshes.includes(mesh);
+  }
+
+  values(): IterableIterator<WebXRMesh> {
+    return this.#meshes[Symbol.iterator]();
+  }
+
+  keys(): IterableIterator<WebXRMesh> {
+    return this.values();
+  }
+
+  entries(): IterableIterator<[WebXRMesh, WebXRMesh]> {
+    return this.#meshes.map((mesh): [WebXRMesh, WebXRMesh] => [mesh, mesh])[Symbol.iterator]();
+  }
+
+  forEach(callback: (value: WebXRMesh, key: WebXRMesh, parent: WebXRMeshSet) => void): void {
+    for (const mesh of this.#meshes) {
+      callback(mesh, mesh, this);
+    }
+  }
+
+  [Symbol.iterator](): IterableIterator<WebXRMesh> {
+    return this.values();
+  }
+}
+
+function trackedMeshSetFromNative(
+  session: WebXRSession,
+  frame: WebXRFrame,
+  nativeMeshes: readonly NativeWebXRMeshSummary[],
+  includesPayload: boolean
+): WebXRMeshSet {
+  if (nativeMeshes.length === 0) {
+    trackedMeshCacheBySession.get(session)?.clear();
+    return WebXRMeshSet.empty();
+  }
+  let cache = trackedMeshCacheBySession.get(session);
+  if (!cache) {
+    cache = new Map();
+    trackedMeshCacheBySession.set(session, cache);
+  }
+  const seenIds = new Set<string>();
+  const meshes = nativeMeshes.map((nativeMesh) => {
+    seenIds.add(nativeMesh.id);
+    const payload = includesPayload ? nativeMesh as NativeWebXRMesh : null;
+    let mesh = cache.get(nativeMesh.id);
+    if (mesh) {
+      // @ref LLP 0013#xr-mesh-detection — WebXR Mesh Detection tracks native
+      // mesh identity across frames. Reuse the XRMesh object and its SameObject
+      // meshSpace while refreshing the current-frame pose and geometry snapshot.
+      mesh.updateFromNativeFrame(frame, nativeMesh, payload);
+    } else {
+      mesh = new WebXRMesh(session, frame, nativeMesh, payload);
+      cache.set(nativeMesh.id, mesh);
+    }
+    return mesh;
+  });
+  for (const id of cache.keys()) {
+    if (!seenIds.has(id)) {
+      cache.delete(id);
+    }
+  }
+  return WebXRMeshSet.fromTrackedMeshes(meshes);
+}
+
 // @ref LLP 0014#xr-rigid-transform
 export class WebXRRigidTransform {
   readonly matrix: Float32Array;
@@ -680,17 +1020,17 @@ export class WebXRRigidTransform {
 export class WebXRFrame {
   readonly session: WebXRSession;
   readonly predictedDisplayTime: DOMHighResTimeStamp;
-  readonly nativeFrame: NativeLiDARDepthFrame;
   #active = true;
-  #view: WebXRView | null = null;
-  #depthInformation: WebXRCPUDepthInformation | null = null;
+  #detectedMeshes: WebXRMeshSet | null = null;
+  #depthInformation = new WeakMap<WebXRView, WebXRCPUDepthInformation>();
   #depthData: Uint8Array | null = null;
   #cameraData: Uint8Array | null = null;
   #cameraDataFormat: 'bgra8unorm' | null = null;
+  #nativeMeshPayloads: readonly NativeWebXRMesh[] | null = null;
 
   constructor(session: WebXRSession, nativeFrame: NativeLiDARDepthFrame, time: DOMHighResTimeStamp) {
     this.session = session;
-    this.nativeFrame = nativeFrame;
+    WEBXR_FRAME_NATIVE.set(this, nativeFrame);
     this.predictedDisplayTime = time;
   }
 
@@ -707,11 +1047,18 @@ export class WebXRFrame {
   nativeDepthData(): Uint8Array | null {
     this.assertActive();
     if (this.#depthData) return this.#depthData;
+    const requestStart = now();
+    const nativeFrame = nativeFrameFor(this);
     const payload = NativeStandardCamera.getWebXRLiDARDepthFramePayload(
-      this.nativeFrame.frameNumber,
+      nativeFrame.frameNumber,
       true,
       false
     );
+    logNativePayloadProfile(payload, nativeFrame, {
+      includeCameraImage: false,
+      includeDepthData: true,
+      requestMs: now() - requestStart,
+    });
     this.#depthData = payload?.depthData ?? null;
     return this.#depthData;
   }
@@ -721,17 +1068,41 @@ export class WebXRFrame {
     if (this.#cameraData && this.#cameraDataFormat) {
       return { data: this.#cameraData, format: this.#cameraDataFormat };
     }
+    const requestStart = now();
+    const nativeFrame = nativeFrameFor(this);
     const payload = NativeStandardCamera.getWebXRLiDARDepthFramePayload(
-      this.nativeFrame.frameNumber,
+      nativeFrame.frameNumber,
       false,
       true
     );
+    logNativePayloadProfile(payload, nativeFrame, {
+      includeCameraImage: true,
+      includeDepthData: false,
+      requestMs: now() - requestStart,
+    });
     if (!payload?.colorData || payload.colorFormat !== 'bgra8unorm') {
       return null;
     }
     this.#cameraData = payload.colorData;
     this.#cameraDataFormat = payload.colorFormat;
     return { data: this.#cameraData, format: this.#cameraDataFormat };
+  }
+
+  nativeMeshById(id: string): NativeWebXRMesh | null {
+    this.assertActive();
+    return this.nativeMeshPayloads().find((mesh) => mesh.id === id) ?? null;
+  }
+
+  private nativeMeshPayloads(): readonly NativeWebXRMesh[] {
+    if (this.#nativeMeshPayloads) {
+      return this.#nativeMeshPayloads;
+    }
+    const requestStart = now();
+    const nativeFrame = nativeFrameFor(this);
+    const nativeMeshes = NativeStandardCamera.getWebXRLiDARDepthFrameMeshes(nativeFrame.frameNumber) ?? [];
+    logNativeMeshPayloadProfile(nativeMeshes, nativeFrame, now() - requestStart);
+    this.#nativeMeshPayloads = nativeMeshes;
+    return this.#nativeMeshPayloads;
   }
 
   // @ref LLP 0013#xr-viewer-pose
@@ -741,10 +1112,15 @@ export class WebXRFrame {
     if (referenceSpace.session !== this.session) {
       throw invalidState('XRReferenceSpace belongs to a different XRSession');
     }
-    if (!this.#view) {
-      this.#view = new WebXRView(this);
+    const nativeFrame = nativeFrameFor(this);
+    if (!canReportViewerPose(nativeFrame)) {
+      logViewerPoseUnavailable(nativeFrame);
+      return null;
     }
-    return new WebXRViewerPose([this.#view]);
+    if (isDegradedViewerPose(nativeFrame)) {
+      logViewerPoseDegraded(nativeFrame);
+    }
+    return new WebXRViewerPose([new WebXRView(this, referenceSpace)]);
   }
 
   // @ref LLP 0013#xr-depth-information
@@ -760,9 +1136,169 @@ export class WebXRFrame {
     if (!this.session.isDepthActiveForFrame()) {
       return null;
     }
-    this.#depthInformation ??= new WebXRCPUDepthInformation(this);
-    return this.#depthInformation;
+    let depthInformation = this.#depthInformation.get(view) ?? null;
+    if (!depthInformation) {
+      depthInformation = new WebXRCPUDepthInformation(this, view);
+      this.#depthInformation.set(view, depthInformation);
+    }
+    return depthInformation;
   }
+
+  // @ref LLP 0013#xr-mesh-detection — Real-world mesh access follows the
+  // WebXR Mesh Detection draft's `XRFrame.detectedMeshes` shape. Native ARKit
+  // mesh anchors remain hidden behind XRMesh objects and mesh spaces.
+  get detectedMeshes(): WebXRMeshSet {
+    this.assertActive();
+    if (!this.session.hasMeshDetection()) {
+      return WebXRMeshSet.empty();
+    }
+    if (!this.#detectedMeshes) {
+      // @ref LLP 0013#xr-mesh-detection — `detectedMeshes` can be observed
+      // through lightweight native mesh summaries. Full vertex/index buffers
+      // are fetched only if app code reads standard XRMesh geometry fields.
+      const nativeMeshSummaries = nativeFrameFor(this).detectedMeshes;
+      this.#detectedMeshes = nativeMeshSummaries
+        ? WebXRMeshSet.fromNativeSummaries(this.session, this, nativeMeshSummaries)
+        : WebXRMeshSet.fromNative(this.session, this, this.nativeMeshPayloads());
+    }
+    return this.#detectedMeshes;
+  }
+
+  // @ref LLP 0013#xr-mesh-detection — Mesh poses are exposed through the
+  // standard `getPose(space, baseSpace)` pattern instead of app-facing ARKit
+  // anchor transforms.
+  getPose(space: WebXRMeshSpace, baseSpace: WebXRReferenceSpace): WebXRPose | null {
+    this.assertActive();
+    if (space.session !== this.session || baseSpace.session !== this.session) {
+      throw invalidState('XRSpace belongs to a different XRSession');
+    }
+    if (baseSpace.type !== 'local') {
+      throw unsupported('Mesh poses are currently available only in local reference space');
+    }
+    return new WebXRPose(space.transform);
+  }
+}
+
+function logNativePayloadProfile(
+  payload: NativeLiDARDepthFramePayload | null | undefined,
+  frame: NativeLiDARDepthFrame,
+  request: { includeCameraImage: boolean; includeDepthData: boolean; requestMs: number }
+): void {
+  if (!payload) return;
+  const depthPixelCount = payload.depthData ? Math.max(0, frame.width * frame.height) : 0;
+  const capturedImageWidth = frame.capturedImageWidth ?? 0;
+  const capturedImageHeight = frame.capturedImageHeight ?? 0;
+  const projectionCameraImageWidth = finitePositiveNumber(frame.projectionCameraImageResolution?.[0]);
+  const projectionCameraImageHeight = finitePositiveNumber(frame.projectionCameraImageResolution?.[1]);
+  const confidenceFilteredDepthCount = payload.confidenceFilteredDepthCount ?? 0;
+  const validDepthCount = payload.validDepthCount ?? 0;
+  const invalidDepthCount = payload.invalidDepthCount ?? 0;
+  const lowConfidenceDepthCount = payload.lowConfidenceDepthCount ?? 0;
+  const mediumConfidenceDepthCount = payload.mediumConfidenceDepthCount ?? 0;
+  const highConfidenceDepthCount = payload.highConfidenceDepthCount ?? 0;
+  console.log('PANORAMIC_NATIVE_PAYLOAD_PROFILE', JSON.stringify({
+    cameraBytes: payload.colorData?.byteLength ?? 0,
+    cameraCapturedSize: [capturedImageWidth, capturedImageHeight],
+    cameraPreviewMs: roundMetric(payload.cameraPreviewMs),
+    cameraPreviewPath: payload.cameraPreviewPath ?? 'unknown',
+    colorBytesPerPixel: payload.colorData ? 4 : 0,
+    colorSize: [frame.colorWidth ?? 0, frame.colorHeight ?? 0],
+    confidenceFilteredDepthCount,
+    confidenceFilteredPercent: depthPixelCount > 0 ? roundMetric(100 * confidenceFilteredDepthCount / depthPixelCount, 1) : 0,
+    confidenceFallbackUsed: payload.confidenceFallbackUsed ?? false,
+    confidenceMapUsed: payload.confidenceMapUsed ?? false,
+    confidenceThreshold: payload.confidenceThreshold ?? 0,
+    depthBytes: payload.depthData?.byteLength ?? 0,
+    depthBytesPerPixel: payload.depthData ? 4 : 0,
+    depthCopyMs: roundMetric(payload.depthCopyMs),
+    depthMaxMeters: roundMetric(payload.maxDepth, 3),
+    depthMeanMeters: roundMetric(payload.meanDepth, 3),
+    depthMinMeters: roundMetric(payload.minDepth, 3),
+    depthPixelCount,
+    depthSize: [frame.width, frame.height],
+    depthToCameraScale: [
+      capturedImageWidth > 0 ? roundMetric(frame.width / capturedImageWidth, 4) : 0,
+      capturedImageHeight > 0 ? roundMetric(frame.height / capturedImageHeight, 4) : 0,
+    ],
+    depthType: frame.depthType ?? 'none',
+    frameNumber: payload.frameNumber,
+    highConfidenceDepthCount,
+    highConfidencePercent: depthPixelCount > 0 ? roundMetric(100 * highConfidenceDepthCount / depthPixelCount, 1) : 0,
+    includeCameraImage: request.includeCameraImage,
+    includeDepthData: request.includeDepthData,
+    invalidDepthCount,
+    invalidDepthPercent: depthPixelCount > 0 ? roundMetric(100 * invalidDepthCount / depthPixelCount, 1) : 0,
+    lowConfidenceDepthCount,
+    lowConfidencePercent: depthPixelCount > 0 ? roundMetric(100 * lowConfidenceDepthCount / depthPixelCount, 1) : 0,
+    mediumConfidenceDepthCount,
+    mediumConfidencePercent: depthPixelCount > 0 ? roundMetric(100 * mediumConfidenceDepthCount / depthPixelCount, 1) : 0,
+    payloadMs: roundMetric(payload.payloadMs),
+    projectionCameraImageResolution: [projectionCameraImageWidth, projectionCameraImageHeight],
+    projectionDepthToCameraScale: [
+      projectionCameraImageWidth > 0 ? roundMetric(frame.width / projectionCameraImageWidth, 4) : 0,
+      projectionCameraImageHeight > 0 ? roundMetric(frame.height / projectionCameraImageHeight, 4) : 0,
+    ],
+    requestMs: roundMetric(request.requestMs),
+    validDepthCount,
+    validDepthPercent: depthPixelCount > 0 ? roundMetric(100 * validDepthCount / depthPixelCount, 1) : 0,
+  }));
+}
+
+function logNativeMeshPayloadProfile(
+  nativeMeshes: readonly NativeWebXRMesh[],
+  frame: NativeLiDARDepthFrame,
+  requestMs: number
+): void {
+  let indexBytes = 0;
+  let indexCount = 0;
+  let cachedMeshCount = 0;
+  let decimatedMeshCount = 0;
+  let normalBytes = 0;
+  let normalCount = 0;
+  let sourceIndexCount = 0;
+  let sourceVertexCount = 0;
+  let vertexBytes = 0;
+  let vertexCount = 0;
+  for (const mesh of nativeMeshes) {
+    if (mesh.cached === true) cachedMeshCount += 1;
+    const meshSourceIndexCount = mesh.sourceIndexCount ?? mesh.indexCount;
+    const meshSourceVertexCount = mesh.sourceVertexCount ?? mesh.vertexCount;
+    if (meshSourceIndexCount > mesh.indexCount || meshSourceVertexCount > mesh.vertexCount) {
+      decimatedMeshCount += 1;
+    }
+    indexBytes += mesh.indices.byteLength;
+    indexCount += mesh.indexCount;
+    sourceIndexCount += meshSourceIndexCount;
+    sourceVertexCount += meshSourceVertexCount;
+    const meshNormalBytes = mesh.normals?.byteLength ?? 0;
+    normalBytes += meshNormalBytes;
+    normalCount += Math.floor(meshNormalBytes / (3 * Float32Array.BYTES_PER_ELEMENT));
+    vertexBytes += mesh.vertices.byteLength;
+    vertexCount += mesh.vertexCount;
+  }
+  console.log('PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE', JSON.stringify({
+    cachedMeshCount,
+    copiedMeshCount: Math.max(0, nativeMeshes.length - cachedMeshCount),
+    decimatedMeshCount,
+    frameNumber: frame.frameNumber,
+    indexBytes,
+    indexCount,
+    meshBytes: indexBytes + normalBytes + vertexBytes,
+    meshCount: nativeMeshes.length,
+    normalBytes,
+    normalCount,
+    requestMs: roundMetric(requestMs),
+    sourceIndexCount,
+    sourceTriangleCount: Math.floor(sourceIndexCount / 3),
+    sourceVertexCount,
+    triangleCount: Math.floor(indexCount / 3),
+    vertexBytes,
+    vertexCount,
+  }));
+}
+
+function finitePositiveNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 export class WebXRViewerPose {
@@ -772,8 +1308,8 @@ export class WebXRViewerPose {
   constructor(views: readonly WebXRView[]) {
     this.views = views;
     // @ref LLP 0013#xr-viewer-pose — XRViewerPose is an XRPose for the
-    // viewer. In this monocular phone profile, the single XRView carries that
-    // same ARKit camera-to-reference-space transform.
+    // viewer. In this monocular phone profile, the single XRView carries the
+    // same camera-to-reference-space transform.
     this.transform = views[0]?.transform ?? identityTransform();
   }
 }
@@ -787,14 +1323,19 @@ export class WebXRView {
   readonly transform: WebXRRigidTransform;
   readonly projectionMatrix: Float32Array;
   readonly frame: WebXRFrame;
+  readonly referenceSpace: WebXRReferenceSpace;
   #camera: WebXRCamera | null | undefined;
 
-  constructor(frame: WebXRFrame) {
+  constructor(frame: WebXRFrame, referenceSpace: WebXRReferenceSpace) {
     this.frame = frame;
-    // @ref LLP 0013#xr-viewer-pose — XRView exposes the per-frame ARKit camera
-    // transform and projection matrix supplied by the native sidecar.
-    this.transform = transformFromNative(frame.nativeFrame.viewTransform);
-    this.projectionMatrix = matrixFromNative(frame.nativeFrame.projectionMatrix);
+    this.referenceSpace = referenceSpace;
+    const nativeFrame = nativeFrameFor(frame);
+    // @ref LLP 0013#xr-viewer-pose — `local` exposes ARKit camera-to-world as
+    // the viewer pose; `viewer` is the viewer-relative reference space.
+    this.transform = referenceSpace.type === 'viewer'
+      ? identityTransform()
+      : transformFromNative(nativeFrame.viewTransform);
+    this.projectionMatrix = matrixFromNative(nativeFrame.projectionMatrix);
   }
 
   // @ref LLP 0013#xr-camera-image
@@ -805,7 +1346,7 @@ export class WebXRView {
       return this.#camera;
     }
     if (!this.frame.session.hasCameraAccess()) return null;
-    const native = this.frame.nativeFrame;
+    const native = nativeFrameFor(this.frame);
     if (!native.colorWidth || !native.colorHeight) return null;
     this.#camera = new WebXRCamera(
       this.frame,
@@ -849,16 +1390,17 @@ export class WebXRDepthInformation {
   readonly rawValueToMeters = 1;
   protected readonly frame: WebXRFrame;
 
-  constructor(frame: WebXRFrame) {
+  constructor(frame: WebXRFrame, view: WebXRView) {
     this.frame = frame;
-    this.width = frame.nativeFrame.width;
-    this.height = frame.nativeFrame.height;
+    const nativeFrame = nativeFrameFor(frame);
+    this.width = nativeFrame.width;
+    this.height = nativeFrame.height;
     // @ref LLP 0013#xr-depth-information — The WebXR Depth Sensing spec mixes
     // XRViewGeometry into XRDepthInformation; for matchDepthView=true these
     // geometry fields match the associated XRView.
-    this.projectionMatrix = matrixFromNative(frame.nativeFrame.projectionMatrix);
-    this.transform = transformFromNative(frame.nativeFrame.viewTransform);
-    this.normDepthBufferFromNormView = transformFromNative(frame.nativeFrame.normDepthBufferFromNormView);
+    this.projectionMatrix = new Float32Array(view.projectionMatrix);
+    this.transform = view.transform;
+    this.normDepthBufferFromNormView = transformFromNative(nativeFrame.normDepthBufferFromNormView);
   }
 }
 
@@ -877,13 +1419,15 @@ export class WebXRCPUDepthInformation extends WebXRDepthInformation {
 
   getDepthInMeters(x: number, y: number): number {
     this.frame.assertActive();
+    assertNormalizedInputCoordinate(x, 'x');
+    assertNormalizedInputCoordinate(y, 'y');
     const bytes = this.frame.nativeDepthData();
     if (!bytes) {
       throw invalidState('Depth data for this XRFrame is no longer available');
     }
     const point = transformNormalizedPoint(this.normDepthBufferFromNormView, x, y);
-    const px = Math.round(clamp01(point.x) * Math.max(0, this.width - 1));
-    const py = Math.round(clamp01(point.y) * Math.max(0, this.height - 1));
+    const px = normalizedDepthCoordinateToIndex(point.x, this.width);
+    const py = normalizedDepthCoordinateToIndex(point.y, this.height);
     const values = new Float32Array(
       bytes.buffer,
       bytes.byteOffset,

@@ -156,6 +156,10 @@ export interface NativeStandardCameraModule {
   getLiDARDepthCapabilities(): NativeLiDARDepthCapabilities;
   startLiDARDepthAsync(): Promise<NativeLiDARDepthCapabilities>;
   startLiDARDepthWithTypeAsync(depthType: NativeLiDARDepthType): Promise<NativeLiDARDepthCapabilities>;
+  startWebXRLiDARDepthAsync(
+    depthType: NativeLiDARDepthType | '',
+    enableMeshDetection: boolean
+  ): Promise<NativeLiDARDepthCapabilities>;
   stopLiDARDepthAsync(): Promise<void>;
   stopLiDARDepth(): void;
   getLatestWebXRLiDARDepthFrame(): NativeLiDARDepthFrame | null;
@@ -164,6 +168,7 @@ export interface NativeStandardCameraModule {
     includeDepthData: boolean,
     includeCameraImage: boolean
   ): NativeLiDARDepthFramePayload | null;
+  getWebXRLiDARDepthFrameMeshes(frameNumber: number): NativeWebXRMesh[] | null;
   addListener(
     eventName: 'onLiDARDepthSessionState',
     listener: (event: NativeLiDARDepthSessionEvent) => void
@@ -196,6 +201,13 @@ export type NativeLiDARDepthSessionState =
   | 'stopped';
 
 export type NativeLiDARDepthType = 'raw' | 'smooth';
+export type NativeLiDARDepthTrackingState = 'normal' | 'limited' | 'notAvailable' | 'unknown';
+export type NativeLiDARDepthWorldMappingStatus =
+  | 'notAvailable'
+  | 'limited'
+  | 'extending'
+  | 'mapped'
+  | 'unknown';
 
 export interface NativeLiDARDepthCapabilities {
   readonly supported: boolean;
@@ -205,6 +217,7 @@ export interface NativeLiDARDepthCapabilities {
   readonly frameNumber?: number;
   readonly sceneDepth: boolean;
   readonly smoothedSceneDepth: boolean;
+  readonly meshDetection?: boolean;
   readonly depthType?: NativeLiDARDepthType;
   readonly reason?: string;
 }
@@ -223,10 +236,22 @@ export interface NativeLiDARDepthFrame {
   readonly depthData?: Uint8Array;
   readonly depthFormat: 'r32float';
   readonly depthType?: NativeLiDARDepthType;
+  /** ARCamera.trackingState, kept inside the WebXR implementation. */
+  readonly trackingState?: NativeLiDARDepthTrackingState;
+  /** ARFrame.worldMappingStatus, kept inside the WebXR implementation. */
+  readonly worldMappingStatus?: NativeLiDARDepthWorldMappingStatus;
   /** ARFrame.timestamp, seconds on ARKit's monotonic clock. */
   readonly timestamp?: number;
+  /** Internal ARFrame delivery counters for WebXR frame-pump profiling. */
+  readonly arFrameNumber?: number;
+  readonly arFrameTimestamp?: number;
+  readonly consecutiveDepthMisses?: number;
+  readonly depthFrameArFrameNumber?: number;
+  readonly depthMisses?: number;
   /** Column-major 4x4 matrices in WebXR-compatible order. */
   readonly projectionMatrix?: readonly number[];
+  /** ARCamera.imageResolution used to scale intrinsics into projectionMatrix. */
+  readonly projectionCameraImageResolution?: readonly number[];
   readonly viewTransform?: readonly number[];
   readonly normDepthBufferFromNormView?: readonly number[];
   /** ARKit camera preview paired with the depth frame, when available. */
@@ -236,10 +261,18 @@ export interface NativeLiDARDepthFrame {
   readonly colorData?: Uint8Array;
   readonly colorFormat?: 'bgra8unorm';
   readonly normCameraImageFromNormView?: readonly number[];
+  /** Captured AR camera image dimensions before the internal CPU preview crop/scale. */
+  readonly capturedImageWidth?: number;
+  readonly capturedImageHeight?: number;
   readonly frameNumber: number;
   readonly minDepth: number;
   readonly maxDepth: number;
   readonly meanDepth: number;
+  /** Lightweight WebXR mesh objects for `XRFrame.detectedMeshes`; geometry is fetched lazily. */
+  readonly detectedMeshes?: readonly NativeWebXRMeshSummary[];
+  readonly meshAnchorCount?: number;
+  readonly meshTriangleCount?: number;
+  readonly meshVertexCount?: number;
 }
 
 export interface NativeLiDARDepthFramePayload {
@@ -248,9 +281,44 @@ export interface NativeLiDARDepthFramePayload {
   readonly depthData?: Uint8Array;
   readonly colorData?: Uint8Array;
   readonly colorFormat?: 'bgra8unorm';
+  readonly cameraPreviewMs?: number;
+  readonly cameraPreviewPath?: 'core-image' | 'ycbcr-direct';
+  readonly confidenceFilteredDepthCount?: number;
+  readonly confidenceMapUsed?: boolean;
+  readonly confidenceFallbackUsed?: boolean;
+  readonly confidenceThreshold?: number;
+  readonly depthCopyMs?: number;
+  readonly highConfidenceDepthCount?: number;
+  readonly invalidDepthCount?: number;
+  readonly lowConfidenceDepthCount?: number;
   readonly minDepth?: number;
   readonly maxDepth?: number;
+  readonly mediumConfidenceDepthCount?: number;
   readonly meanDepth?: number;
+  readonly payloadMs?: number;
+  readonly validDepthCount?: number;
+}
+
+export interface NativeWebXRMeshSummary {
+  readonly id: string;
+  /** ARKit mesh-anchor transform in the WebXR local reference space. */
+  readonly transform: readonly number[];
+  readonly vertexCount: number;
+  readonly indexCount: number;
+  readonly lastChangedTime: number;
+  readonly semanticLabel?: string | null;
+}
+
+export interface NativeWebXRMesh extends NativeWebXRMeshSummary {
+  readonly cached?: boolean;
+  readonly sourceVertexCount?: number;
+  readonly sourceIndexCount?: number;
+  /** Tight-packed Float32 xyz triplets in mesh-local coordinates. */
+  readonly vertices: Uint8Array;
+  /** Tight-packed Float32 xyz triplets in mesh-local coordinates. */
+  readonly normals?: Uint8Array;
+  /** Tight-packed Uint32 triangle indices. */
+  readonly indices: Uint8Array;
 }
 
 function unavailable(method: string): never {
@@ -273,10 +341,12 @@ const unavailableBackend: NativeStandardCameraModule = {
   getLiDARDepthCapabilities: () => unavailable('StandardCamera.getLiDARDepthCapabilities'),
   startLiDARDepthAsync: () => unavailable('StandardCamera.startLiDARDepthAsync'),
   startLiDARDepthWithTypeAsync: () => unavailable('StandardCamera.startLiDARDepthWithTypeAsync'),
+  startWebXRLiDARDepthAsync: () => unavailable('StandardCamera.startWebXRLiDARDepthAsync'),
   stopLiDARDepthAsync: () => unavailable('StandardCamera.stopLiDARDepthAsync'),
   stopLiDARDepth: () => unavailable('StandardCamera.stopLiDARDepth'),
   getLatestWebXRLiDARDepthFrame: () => unavailable('StandardCamera.getLatestWebXRLiDARDepthFrame'),
   getWebXRLiDARDepthFramePayload: () => unavailable('StandardCamera.getWebXRLiDARDepthFramePayload'),
+  getWebXRLiDARDepthFrameMeshes: () => unavailable('StandardCamera.getWebXRLiDARDepthFrameMeshes'),
   addListener: () => unavailable('StandardCamera.addListener'),
 };
 

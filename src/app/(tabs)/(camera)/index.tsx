@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { SymbolView, type AndroidSymbol, type SFSymbol } from 'expo-symbols';
+import { useFocusEffect } from 'expo-router';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useCamera, type CameraConstraints } from '@/contexts/CameraContext';
@@ -84,23 +85,23 @@ export default function HomeScreen(): React.JSX.Element {
   // Run-tests deeplink stops the camera so the WPT runner gets a clean slate.
   React.useEffect(() => addTestRunStartListener(stop), [stop]);
 
-  // Defense-in-depth start-on-mount. The provider also auto-starts at app
-  // launch, but Fast Refresh can strand that effect mid-session; consuming
-  // screens that want the camera ask explicitly. Honor an explicit user Stop
-  // so this effect doesn't fight the Stop button.
-  React.useEffect(() => {
-    if (userStopped || externalLocked) return;
-    if (
-      !stream &&
-      status !== 'requesting' &&
-      status !== 'starting' &&
-      status !== 'stopping' &&
-      status !== 'error'
-    ) {
-      void start();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream, status, userStopped, externalLocked]);
+  // Focus-scoped auto-start. Native tabs can keep offscreen routes mounted;
+  // tying this to focus avoids reopening AVFoundation behind WebXR/ARKit demos.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (userStopped || externalLocked) return undefined;
+      if (
+        !stream &&
+        status !== 'requesting' &&
+        status !== 'starting' &&
+        status !== 'stopping' &&
+        status !== 'error'
+      ) {
+        void start();
+      }
+      return undefined;
+    }, [externalLocked, start, status, stream, userStopped])
+  );
 
   // @ref LLP 0021#decision — Web browsers can omit `settings.facingMode` for
   // desktop cameras; this demo treats that missing signal as front/self-view.

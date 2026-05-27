@@ -17,7 +17,12 @@ const APP_BUNDLE_ID = 'dev.ide.standardcameraapp';
 const URL_SCHEME = 'standardcameraapp';
 const DEFAULT_DEVICE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro';
 const TEST_DEVICE_NAME = 'standard-camera-app';
+const METRO_HOST = '127.0.0.1';
+const METRO_PORT = 8081;
+const METRO_URL = `http://${METRO_HOST}:${METRO_PORT}`;
+const METRO_START_TIMEOUT_MS = 120_000;
 const LOG_TIMEOUT_MS = 300_000;
+const TEST_DEEPLINK_RETRY_MS = 5_000;
 const VERBOSE = process.env.VERBOSE === '1';
 
 interface ParsedResult {
@@ -79,6 +84,8 @@ async function runOnSimulator(): Promise<number> {
   const shouldShutdownOnExit = !(await isBooted(udid));
 
   let exitCode = 1;
+  let logProc: ReturnType<typeof startLogStream> | null = null;
+  let metroServer: MetroServer | null = null;
   try {
     if (shouldShutdownOnExit) {
       await sh(['xcrun', 'simctl', 'boot', udid]);
@@ -89,6 +96,8 @@ async function runOnSimulator(): Promise<number> {
 
     // Ensure the build is installed; bail with a clear error if not.
     await ensureAppInstalled(udid);
+
+    metroServer = await ensureMetroRunning();
 
     // @ref LLP 0007#cli-flow — grant camera + microphone so
     // AVCaptureDevice.requestAccess returns true for both kinds.
@@ -104,28 +113,40 @@ async function runOnSimulator(): Promise<number> {
     await sh(['xcrun', 'simctl', 'terminate', udid, APP_BUNDLE_ID]).catch(() => undefined);
 
     // Start the log stream FIRST so we don't miss early WPT_RESULT lines.
-    const logProc = startLogStream(udid);
+    logProc = startLogStream(udid);
 
     // iOS 26 simulator: `simctl openurl` does not reliably cold-launch the app.
-    // Explicitly launch the bundle first, then deep-link to the test runner.
-    // The launch alone navigates to `/index`; the openurl then switches the
-    // tab via Expo Router's URL handler.
+    // Explicitly launch the bundle first, connect the dev client to Metro, then
+    // deep-link to the test runner after the JS bundle has a live server.
     await sh(['xcrun', 'simctl', 'launch', udid, APP_BUNDLE_ID]).catch(() => undefined);
-    await sleep(1500);
-    await sh(['xcrun', 'simctl', 'openurl', udid, `${URL_SCHEME}:///run-tests?autorun=1`]);
-    console.log('Opened test URL; waiting for results…');
+    await sleep(750);
+    await sh(['xcrun', 'simctl', 'openurl', udid, buildDevelopmentClientUrl(metroServer.url)]);
+    console.log(`Opened development client with Metro ${metroServer.url}`);
+    await sleep(2500);
+    const stopTestUrlRetry = startOpenUrlRetry(
+      udid,
+      `${URL_SCHEME}:///run-tests?autorun=1`,
+      'test URL'
+    );
+    console.log('Opened test URL; retrying until WPT output appears…');
 
-    const summary = await parseWPTOutput(logProc.stdout);
+    let summary: ParsedSummary;
     try {
-      logProc.kill();
-    } catch {
-      // ignore
+      summary = await parseWPTOutput(logProc.stdout);
+    } finally {
+      stopTestUrlRetry();
     }
 
     printSummary(summary);
     // Skips are environment-blocked (e.g. simulator has no AVCaptureDevice), not regressions.
     exitCode = summary.failed === 0 && summary.timeout === 0 ? 0 : 1;
   } finally {
+    try {
+      logProc?.kill();
+    } catch {
+      // ignore
+    }
+    metroServer?.stop();
     if (shouldShutdownOnExit) {
       await sh(['xcrun', 'simctl', 'shutdown', udid]).catch(() => undefined);
       console.log('Shut down simulator');
@@ -362,6 +383,132 @@ async function ensureAppInstalled(udid: string): Promise<void> {
   }
 }
 
+interface MetroServer {
+  url: string;
+  stop(): void;
+}
+
+function buildDevelopmentClientUrl(metroUrl: string): string {
+  return `${URL_SCHEME}://expo-development-client/?${new URLSearchParams({
+    disableOnboarding: '1',
+    url: metroUrl,
+  }).toString()}`;
+}
+
+async function ensureMetroRunning(): Promise<MetroServer> {
+  if (await isMetroRunning(METRO_URL)) {
+    console.log(`Using existing Metro at ${METRO_URL}`);
+    return { url: METRO_URL, stop: () => undefined };
+  }
+
+  console.log(`Starting Metro at ${METRO_URL}`);
+  const proc = spawn({
+    cmd: [
+      'bunx',
+      'expo',
+      'start',
+      '--dev-client',
+      '--localhost',
+      '--port',
+      String(METRO_PORT),
+    ],
+    env: {
+      ...process.env,
+      EXPO_NO_TELEMETRY: '1',
+    },
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+
+  try {
+    await waitForMetro(METRO_URL, proc);
+  } catch (e) {
+    try {
+      proc.kill();
+    } catch {
+      // ignore
+    }
+    throw e;
+  }
+
+  return {
+    url: METRO_URL,
+    stop: () => {
+      try {
+        proc.kill();
+      } catch {
+        // ignore
+      }
+    },
+  };
+}
+
+async function waitForMetro(
+  url: string,
+  proc?: ReturnType<typeof spawn>
+): Promise<void> {
+  const startedAt = Date.now();
+  const exited = proc?.exited.then((code) => ({ code }));
+  while (Date.now() - startedAt < METRO_START_TIMEOUT_MS) {
+    if (await isMetroRunning(url)) return;
+    const exit = exited
+      ? await Promise.race([exited, sleep(500).then(() => null)])
+      : null;
+    if (exit) {
+      throw new Error(`Metro exited before becoming ready (${exit.code}): ${url}`);
+    }
+  }
+  throw new Error(`Timed out after ${METRO_START_TIMEOUT_MS}ms waiting for Metro at ${url}`);
+}
+
+async function isMetroRunning(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(`${url.replace(/\/$/, '')}/status`, {
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    return response.ok && text.includes('packager-status:running');
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function startOpenUrlRetry(udid: string, url: string, label: string): () => void {
+  let stopped = false;
+  let inFlight = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const open = (): void => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    void sh(['xcrun', 'simctl', 'openurl', udid, url])
+      .catch((e) => {
+        if (!stopped) {
+          console.warn(`Could not open ${label}: ${(e as Error).message}`);
+        }
+      })
+      .finally(() => {
+        inFlight = false;
+        if (!stopped) {
+          timer = setTimeout(open, TEST_DEEPLINK_RETRY_MS);
+        }
+      });
+  };
+
+  open();
+  return () => {
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+
 // MARK: - Log stream parsing
 
 function startLogStream(udid: string): { stdout: ReadableStream<Uint8Array>; kill(): void } {
@@ -373,6 +520,8 @@ function startLogStream(udid: string): { stdout: ReadableStream<Uint8Array>; kil
       udid,
       'log',
       'stream',
+      '--level',
+      'debug',
       '--predicate',
       'eventMessage CONTAINS "WPT_RESULT:" OR eventMessage CONTAINS "WPT_DONE:"',
       '--style',
@@ -391,16 +540,26 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let pendingRead: ReturnType<typeof reader.read> | null = null;
   let summary: ParsedSummary | null = null;
   const start = Date.now();
 
   while (Date.now() - start < LOG_TIMEOUT_MS) {
-    const { value, done } = await Promise.race([
-      reader.read(),
-      new Promise<{ value?: undefined; done: true }>((resolve) =>
-        setTimeout(() => resolve({ done: true }), 5_000)
-      ),
+    // @ref LLP 0007#cli-flow — Keep exactly one read pending on the simulator
+    // log stream. Dropping a timed-out read can lose the WPT_DONE chunk when
+    // the app is still bundling from Metro.
+    pendingRead ??= reader.read();
+    const readPromise = pendingRead;
+    const readResult = await Promise.race([
+      readPromise.then((result) => ({ kind: 'read' as const, result })),
+      sleep(5_000).then(() => ({ kind: 'poll' as const })),
     ]);
+    if (readResult.kind === 'poll') {
+      if (summary) break;
+      continue;
+    }
+    pendingRead = null;
+    const { value, done } = readResult.result;
     if (done) {
       if (summary) break;
       continue; // poll again

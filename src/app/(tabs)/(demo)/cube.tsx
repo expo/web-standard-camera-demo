@@ -160,24 +160,23 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
     [applyConstraints, backFacingDisabled, cameraFacing]
   );
 
-  // Defense-in-depth start-on-mount: the provider auto-starts at app launch,
-  // but Fast Refresh can strand that effect. Honor an explicit user Stop so
-  // this effect doesn't fight the Stop button. Also bail while `externalLocked`
-  // so we don't fight ARKit (the LiDAR demo) for the AVCaptureDevice when its
-  // screen sits above ours in the stack.
-  React.useEffect(() => {
-    if (userStopped || externalLocked) return;
-    if (
-      !stream &&
-      cameraStatus !== 'requesting' &&
-      cameraStatus !== 'starting' &&
-      cameraStatus !== 'stopping' &&
-      cameraStatus !== 'error'
-    ) {
-      void start();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream, cameraStatus, userStopped, externalLocked]);
+  // Focus-scoped auto-start: native tabs/stacks can keep routes mounted in the
+  // background, so only the focused camera demo should reopen AVFoundation.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (userStopped || externalLocked) return undefined;
+      if (
+        !stream &&
+        cameraStatus !== 'requesting' &&
+        cameraStatus !== 'starting' &&
+        cameraStatus !== 'stopping' &&
+        cameraStatus !== 'error'
+      ) {
+        void start();
+      }
+      return undefined;
+    }, [cameraStatus, externalLocked, start, stream, userStopped])
+  );
   const [status, setStatus] = React.useState('initializing');
   const [source, setSource] = React.useState<'pending' | 'camera'>('pending');
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);

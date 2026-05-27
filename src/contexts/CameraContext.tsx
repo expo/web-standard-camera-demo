@@ -1,4 +1,3 @@
-import * as Linking from 'expo-linking';
 import * as React from 'react';
 
 import { cameraConstraintsEqual, mergeCameraConstraints } from '@/lib/camera-constraints';
@@ -21,10 +20,9 @@ import {
 // that plus the LiDAR ARKit state into stopped / starting / started / stopping
 // so navigation chrome can render the right control from frame zero of a push.
 // Pickers funnel through `applyConstraints` so the merge semantics live in one
-// place. The provider auto-starts the camera once on app launch unless the app
-// was opened via a run-tests deep link (so the WPT runner gets a clean
-// AVCaptureSession). After that, Start / Stop is driven by whichever tab the
-// user is on.
+// place. Start / Stop is driven by focused screens that actually consume the
+// standard camera stream. WebXR/LiDAR routes can therefore enter ARKit without
+// first paying for an unrelated AVFoundation getUserMedia startup.
 
 export type CameraStatus =
   | 'idle'
@@ -46,7 +44,6 @@ export type LiDARCameraStatus =
   | 'stopped'
   | 'unsupported'
   | 'error';
-type AutoStartGate = 'pending' | 'allowed' | 'blocked-by-tests';
 
 export interface CameraHardwareState {
   owner: CameraHardwareOwner;
@@ -94,9 +91,8 @@ export interface CameraContextValue {
   stop: () => void;
   /**
    * Tear down the getUserMedia stream so another subsystem can take the
-   * AVCaptureDevice (ARKit), and gate the auto-start effect off until
-   * `unlockExternal()` runs. Does not touch `userStopped`, so when the lock
-   * lifts the camera resumes for users who hadn't explicitly stopped.
+   * AVCaptureDevice (ARKit), and gate focused standard-camera consumers until
+   * `unlockExternal()` runs. Does not touch `userStopped`.
    */
   lockExternal: () => Promise<void>;
   unlockExternal: () => void;
@@ -115,12 +111,6 @@ const CAMERA_HARDWARE_RELEASE_DELAY_MS = 150;
 // Module-load trace so we can confirm fresh JS reached the phone — appears
 // at the top of the JS evaluation, before any React renders.
 console.log(`CAMERA_CTX module-load @ ${new Date().toISOString()}`);
-
-const initialUrlPromise = Linking.getInitialURL();
-
-function isTestsLaunchUrl(url: string | null): boolean {
-  return url != null && /(?:^|[/?:#])run-tests(?:$|[/?#&])/.test(url);
-}
 
 type ReleasableNativeStream = {
   _native?: {
@@ -157,10 +147,11 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const [externalLocked, setExternalLocked] = React.useState(false);
   const [lidarStatus, setLiDARStatus] = React.useState<LiDARCameraStatus>('idle');
   const [lidarError, setLiDARError] = React.useState<string | null>(null);
-  const [autoStartGate, setAutoStartGate] = React.useState<AutoStartGate>('pending');
 
   const streamRef = React.useRef<MediaStream | null>(null);
+  const getUserMediaInFlightRef = React.useRef<Promise<MediaStream> | null>(null);
   const startRequestRef = React.useRef(0);
+  const startInFlightRef = React.useRef(false);
   const activeLiDARSessionIdRef = React.useRef<number | null>(null);
   const standardStopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = React.useRef(true);
@@ -185,6 +176,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const stop = React.useCallback((): void => {
     const stopRequestId = startRequestRef.current + 1;
     startRequestRef.current = stopRequestId;
+    startInFlightRef.current = false;
     if (standardStopTimerRef.current) {
       clearTimeout(standardStopTimerRef.current);
       standardStopTimerRef.current = null;
@@ -210,11 +202,13 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const lockExternal = React.useCallback(async (): Promise<void> => {
     // Invalidate any in-flight start() so its post-await setState calls bail.
     startRequestRef.current += 1;
+    startInFlightRef.current = false;
     if (standardStopTimerRef.current) {
       clearTimeout(standardStopTimerRef.current);
       standardStopTimerRef.current = null;
     }
     const live = streamRef.current;
+    const pendingMedia = getUserMediaInFlightRef.current;
     streamRef.current = null;
     if (mountedRef.current) {
       setStreamState(null);
@@ -224,6 +218,18 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     }
     if (live) {
       await stopTracksAndWaitForCaptureRelease(live);
+    }
+    if (pendingMedia) {
+      try {
+        const pendingStream = await pendingMedia;
+        if (pendingStream !== live) {
+          await stopTracksAndWaitForCaptureRelease(pendingStream);
+        }
+      } catch {
+        // The in-flight getUserMedia request may fail after the external lock
+        // invalidates it; the lock still succeeded because there is no stream
+        // left to hand off.
+      }
     }
   }, []);
 
@@ -245,13 +251,22 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {
       if (externalLocked) return;
+      const effective = next ?? constraints;
+      if (startInFlightRef.current && next == null && !streamRef.current) {
+        console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
+        return;
+      }
       if (standardStopTimerRef.current) {
         clearTimeout(standardStopTimerRef.current);
         standardStopTimerRef.current = null;
       }
-      const effective = next ?? constraints;
       const requestId = startRequestRef.current + 1;
       startRequestRef.current = requestId;
+      // @ref LLP 0012#camera-ownership-handoff — Provider auto-start and
+      // screen-level start-on-mount can fire before React commits `requesting`.
+      // Coalesce duplicate default starts so a WebXR/LiDAR handoff does not
+      // immediately queue two AVFoundation getUserMedia requests.
+      startInFlightRef.current = true;
       const previous = streamRef.current;
       if (previous) {
         streamRef.current = null;
@@ -277,13 +292,16 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         video.frameRate = { ideal: effective.frameRate };
       }
 
+      let mediaRequest: Promise<MediaStream> | null = null;
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ video });
+        mediaRequest = navigator.mediaDevices.getUserMedia({ video });
+        getUserMediaInFlightRef.current = mediaRequest;
+        const s = await mediaRequest;
         console.log(
           `CAMERA_CTX gUM-ok req=${requestId} tracks=${s.getVideoTracks().length}`
         );
         if (!mountedRef.current || requestId !== startRequestRef.current) {
-          for (const t of s.getTracks()) t.stop();
+          await stopTracksAndWaitForCaptureRelease(s);
           return;
         }
         streamRef.current = s;
@@ -311,6 +329,13 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         setSettings(null);
         setError(`${err.name ?? 'Error'}${constraintHint}: ${err.message}`);
         setStatus('error');
+      } finally {
+        if (mediaRequest && getUserMediaInFlightRef.current === mediaRequest) {
+          getUserMediaInFlightRef.current = null;
+        }
+        if (requestId === startRequestRef.current) {
+          startInFlightRef.current = false;
+        }
       }
     },
     [constraints, externalLocked]
@@ -401,43 +426,6 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       subscription.remove();
     };
   }, [unlockExternal]);
-
-  // Resolve the run-tests-deeplink gate once on first mount. Until it's
-  // resolved we hold off on auto-starting so a tests deeplink reliably skips
-  // the camera. Subsequent JS reloads keep the resolved value.
-  React.useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const initialUrl = await initialUrlPromise;
-        if (cancelled) return;
-        const gated = isTestsLaunchUrl(initialUrl);
-        console.log(`CAMERA_CTX gate resolved isTestsLaunch=${gated} initialUrl=${initialUrl}`);
-        setAutoStartGate(gated ? 'blocked-by-tests' : 'allowed');
-      } catch (e) {
-        if (cancelled) return;
-        console.log(`CAMERA_CTX gate failed; allowing auto-start ${String(e)}`);
-        setAutoStartGate('allowed');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Auto-start whenever there's no live stream and the user hasn't explicitly
-  // stopped. Driven by state (not a ref) so HMR can't strand the launch
-  // intent. Idempotent thanks to the transition-state guard.
-  // Suppressed while `externalLocked` so we don't fight ARKit/LiDAR for the
-  // AVCaptureDevice during their session.
-  /* eslint-disable react-hooks/set-state-in-effect -- Preserve current auto-start scheduling. */
-  React.useEffect(() => {
-    if (autoStartGate !== 'allowed' || userStopped || externalLocked) return;
-    if (stream || status === 'requesting' || status === 'starting' || status === 'stopping') return;
-    console.log(`CAMERA_CTX auto-start firing (status=${status})`);
-    void start();
-  }, [autoStartGate, userStopped, externalLocked, stream, status, start]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const hardware: CameraHardwareState = React.useMemo(() => {
     if (lidarStatus === 'starting') return { owner: 'lidar', phase: 'starting' };

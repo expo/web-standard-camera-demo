@@ -4,8 +4,8 @@
 // demo routes import.
 
 export type WebXRSessionMode = 'immersive-ar';
-export type WebXRReferenceSpaceType = 'viewer';
-export type WebXRFeatureDescriptor = 'depth-sensing' | 'camera-access';
+export type WebXRReferenceSpaceType = 'viewer' | 'local';
+export type WebXRFeatureDescriptor = 'depth-sensing' | 'camera-access' | 'mesh-detection';
 export type WebXRDepthType = 'raw' | 'smooth';
 export type WebXRDepthUsage = 'cpu-optimized';
 export type WebXRDepthDataFormat = 'float32';
@@ -86,6 +86,47 @@ export class WebXRSession extends EventTarget {
 
 export class WebXRReferenceSpace extends EventTarget {}
 
+export class WebXRPose {
+  readonly transform = new WebXRRigidTransform();
+}
+
+export class WebXRMeshSpace extends EventTarget {}
+
+export class WebXRMesh {
+  readonly meshSpace = new WebXRMeshSpace();
+  readonly vertices = new Float32Array(0);
+  readonly indices = new Uint32Array(0);
+  readonly lastChangedTime = 0;
+  readonly semanticLabel: string | null = null;
+  readonly normals: Float32Array | null = null;
+}
+
+export class WebXRMeshSet implements Iterable<WebXRMesh> {
+  readonly size = 0;
+
+  has(_mesh: WebXRMesh): boolean {
+    return false;
+  }
+
+  values(): IterableIterator<WebXRMesh> {
+    return [][Symbol.iterator]();
+  }
+
+  keys(): IterableIterator<WebXRMesh> {
+    return this.values();
+  }
+
+  entries(): IterableIterator<[WebXRMesh, WebXRMesh]> {
+    return [][Symbol.iterator]();
+  }
+
+  forEach(_callback: (value: WebXRMesh, key: WebXRMesh, parent: WebXRMeshSet) => void): void {}
+
+  [Symbol.iterator](): IterableIterator<WebXRMesh> {
+    return this.values();
+  }
+}
+
 export class WebXRRigidTransform {
   readonly matrix: Float32Array;
 
@@ -95,11 +136,17 @@ export class WebXRRigidTransform {
 }
 
 export class WebXRFrame {
+  readonly detectedMeshes = new WebXRMeshSet();
+
   getViewerPose(_referenceSpace: WebXRReferenceSpace): WebXRViewerPose | null {
     return null;
   }
 
   getDepthInformation(_view: WebXRView): WebXRCPUDepthInformation | null {
+    return null;
+  }
+
+  getPose(_space: WebXRMeshSpace, _baseSpace: WebXRReferenceSpace): WebXRPose | null {
     return null;
   }
 }

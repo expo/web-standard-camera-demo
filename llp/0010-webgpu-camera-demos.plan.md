@@ -75,8 +75,11 @@ screen has mounted and before any per-screen WebGPU state has initialized.
 The LiDAR route is part of this same control plane even though it is not a W3C
 camera demo: ARKit and the AVFoundation session behind `getUserMedia` compete
 for the same iOS camera hardware. Starting LiDAR first tears down and locks out
-the standard camera; stopping LiDAR releases that lock so the shared standard
-camera can auto-resume only when the user had not explicitly stopped it.
+the standard camera; stopping LiDAR releases that lock so a focused
+standard-camera route can resume only when the user had not explicitly stopped
+it. Native tabs and stacks may keep screens mounted after navigation, so camera
+demo auto-start effects must be focus-scoped and must not reacquire AVFoundation
+while a WebXR/LiDAR route is the visible route.
 
 ## Frame-bound demo mirroring
 

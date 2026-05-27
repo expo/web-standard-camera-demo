@@ -393,6 +393,8 @@ The native module exposes demo-only calls for the WebXR-shaped profile:
   depth frame plus the WebXR route's BGRA ARKit camera preview, or `null` while
   no frame is available.
 
+### Camera ownership handoff
+
 ARKit and AVFoundation must hand camera ownership over deterministically. The
 demo must not rely on fixed sleeps between stopping a `getUserMedia` stream and
 starting ARKit, or between pausing ARKit and letting AVFoundation resume. The
@@ -401,7 +403,13 @@ awaits the native capture source's serialized release point before calling
 `startLiDARDepthWithTypeAsync()`. The native LiDAR start promise resolves only
 after ARKit has produced a first scene-depth frame, so a WebXR session only
 resolves after both camera ownership and depth delivery are proven. The stop
-path awaits ARKit pause before clearing the external camera lock.
+path awaits ARKit pause before clearing the external camera lock. Standard
+`getUserMedia` auto-starts are owned by focused camera-consuming routes, not by
+the global provider or offscreen native-tab scenes, so WebXR/LiDAR demos do not
+pay for an unrelated AVFoundation startup before ARKit can take the camera. The
+shared standard-camera provider still SHOULD coalesce duplicate default
+`getUserMedia` starts from focused route-level start effects; only explicit
+constraint changes should supersede an in-flight start.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,
