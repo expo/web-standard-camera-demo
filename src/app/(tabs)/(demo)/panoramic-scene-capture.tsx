@@ -315,7 +315,6 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   async function startSession(): Promise<void> {
     if (sessionRef.current) return;
     installWebXRDepthProfile();
-    resetCapture();
     setError(null);
     setStatus('requesting');
     try {
@@ -347,6 +346,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           },
         })
       );
+      resetCapture();
       sessionRef.current = nextSession;
       setSession(nextSession);
       setStatus('scanning');

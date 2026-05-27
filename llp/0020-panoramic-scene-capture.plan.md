@@ -94,6 +94,8 @@ Implemented:
 - Model-view reset: after capture, the Reset slot becomes a Recenter action
   that restores the orbit/pinch viewer state without deleting the captured
   model.
+- Restart safety: starting a replacement scan does not clear the displayed or
+  saveable captured model until a new WebXR session has actually been acquired.
 - Export: after explicit Capture, writes an ASCII `.ply` model into the app
   Documents directory before opening any optional share sheet, reports the
   Files-visible filename/size, and relies on iOS document sharing so the
