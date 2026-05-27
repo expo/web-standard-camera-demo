@@ -302,6 +302,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const requestRenderRef = React.useRef<(() => void) | null>(null);
   const lastGestureRenderProfileLoggedAtMsRef = React.useRef(0);
   const statusRef = React.useRef<PanoramicCaptureStatus>('checking');
+  // Accepted raw samples are bounded by MAX_SURFELS; displayed/model surfels
+  // are the fused voxel count in fusionRef.current.voxels.
   const surfelCountRef = React.useRef(0);
   const supportCheckedRef = React.useRef(false);
   const viewerGestureActiveRef = React.useRef(false);
@@ -523,6 +525,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       depthPrecheckSkips: stats.depthPrecheckSkips,
       depthType: sessionRef.current?.depthType ?? null,
       frameCount: stats.frameCount,
+      fusedSurfelCount: fusionRef.current.voxels.size,
       keyframes: keyframeCountRef.current,
       rawSampleCount: fusionRef.current.rawSampleCount,
       reason: reason ?? 'unknown',
@@ -552,6 +555,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       depthPrecheckSkips: stats.depthPrecheckSkips,
       elapsedMs: roundMetric(elapsedMs),
       frameCount: stats.frameCount,
+      fusedSurfelCount: fusionRef.current.voxels.size,
       maxAppendMs: roundMetric(stats.maxAppendMs),
       meshRequested: meshDetectionRequested,
       newVoxelCount: stats.totalNewVoxelCount,
@@ -562,6 +566,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       poseMisses: stats.poseMisses,
       reason,
       rejectedByReason: stats.rejectedByReason,
+      rawSampleCount: fusionRef.current.rawSampleCount,
       retainedSamples: surfelCountRef.current,
       scanFps: roundMetric(1000 * stats.frameCount / Math.max(elapsedMs, 1), 1),
       updatedVoxelCount: stats.totalUpdatedVoxelCount,
@@ -578,6 +583,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       captureInFlight: captureInFlightRef.current,
       depthMisses: stats.depthMisses,
       frameCount: stats.frameCount,
+      fusedSurfelCount: fusionRef.current.voxels.size,
       keyframes: keyframeCountRef.current,
       poseMisses: stats.poseMisses,
       rawSampleCount: fusionRef.current.rawSampleCount,
@@ -1989,13 +1995,15 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     stats.totalNewVoxelCount += totalNewVoxelCount;
     stats.totalUpdatedVoxelCount += totalUpdatedVoxelCount;
     addScanForward(forward);
-    setLiveSurfelCount(surfelCountRef.current);
+    const fusedSurfelCount = fusionRef.current.voxels.size;
+    const rawSampleCount = fusionRef.current.rawSampleCount;
+    setLiveSurfelCount(fusedSurfelCount);
     setCoveragePercent(panoramicCoveragePercent(coverageSectorsRef.current));
     setQualityInfo(
       `scan profile: append ${(appendMs + meshAppendMs).toFixed(1)}ms - camera ${totalCameraColoredSurfels}/${totalSurfelCount}`
     );
     setFrameInfo(
-      `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - samples: ${surfelCountRef.current}/${MAX_SURFELS} - mesh: ${meshAdded.surfelCount} - camera color: ${totalCameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
+      `keyframes: ${keyframeCountRef.current}/${MAX_KEYFRAMES} - raw samples: ${rawSampleCount}/${MAX_SURFELS} - fused: ${fusedSurfelCount} - mesh: ${meshAdded.surfelCount} - camera color: ${totalCameraColoredSurfels > 0 ? 'yes' : 'fallback'}`
     );
     const livePublishStart = performanceNow();
     const livePublished = maybePublishLiveModel();
@@ -2030,12 +2038,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       position,
       preSampleMs,
       projectionMatrix,
+      rawSampleCount,
       retainedSamples: surfelCountRef.current,
       rotationDeg: sampleDecision.rotationDeg,
       rotationSpeedDegPerSec: sampleDecision.rotationSpeedDegPerSec,
       sampleDecisionMs,
       transform: cameraToWorld,
       surfelCount: totalSurfelCount,
+      fusedSurfelCount,
       translationM: sampleDecision.translationM,
       translationSpeedMPerSec: sampleDecision.translationSpeedMPerSec,
       updatedVoxelCount: totalUpdatedVoxelCount,
@@ -2045,7 +2055,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
     if (!livePublished) {
       setModelInfo(
-        `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - ${surfelCountRef.current}/${MAX_SURFELS} samples retained - live model ${modelRef.current?.surfelCount ?? 0} surfels`
+        `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - ${rawSampleCount}/${MAX_SURFELS} raw samples - ${fusedSurfelCount} fused surfels - live model ${modelRef.current?.surfelCount ?? 0} surfels`
       );
     }
     return true;
@@ -2283,6 +2293,7 @@ function logKeyframeProfile({
   depthRecoveryAppendMs,
   depthRecoverySkipped,
   depthType,
+  fusedSurfelCount,
   fusionMs,
   keyframes,
   livePublished,
@@ -2302,6 +2313,7 @@ function logKeyframeProfile({
   position,
   preSampleMs,
   projectionMatrix,
+  rawSampleCount,
   retainedSamples,
   rotationDeg,
   rotationSpeedDegPerSec,
@@ -2321,6 +2333,7 @@ function logKeyframeProfile({
   depthRecoveryAppendMs: number;
   depthRecoverySkipped: boolean;
   depthType: string | null;
+  fusedSurfelCount: number;
   fusionMs: number;
   keyframes: number;
   livePublished: boolean;
@@ -2340,6 +2353,7 @@ function logKeyframeProfile({
   position: Vec3;
   preSampleMs: number;
   projectionMatrix: Float32Array;
+  rawSampleCount: number;
   retainedSamples: number;
   rotationDeg: number;
   rotationSpeedDegPerSec: number;
@@ -2389,6 +2403,7 @@ function logKeyframeProfile({
     depthTransformMode: appendProfile.depthTransformMode ?? 'unknown',
     depthType: depthType ?? 'unknown',
     detailedTiming: appendProfile.detailedTiming ?? false,
+    fusedSurfelCount,
     fusionMs: roundMetric(fusionMs),
     fusionMode: 'inline',
     keyframes,
@@ -2448,6 +2463,7 @@ function logKeyframeProfile({
     preflightSurfels: appendProfile.preflightSurfels ?? 0,
     preflightUpdatedVoxels: appendProfile.preflightUpdatedVoxels ?? 0,
     profiledSampleCount: appendProfile.profiledSampleCount ?? 0,
+    rawSampleCount,
     retainedSamples,
     rotationDeg: roundMetric(rotationDeg, 1),
     rotationSpeedDegPerSec: roundMetric(rotationSpeedDegPerSec, 1),

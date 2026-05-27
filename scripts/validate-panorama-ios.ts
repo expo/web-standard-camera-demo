@@ -1082,7 +1082,12 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
   if (surfels <= 0) return false;
   if (name !== 'PANORAMIC_MODEL_UPLOAD_PROFILE' && numberField(metric, 'keyframes') <= 0) return false;
   if (name === 'PANORAMIC_KEYFRAME_PROFILE') {
-    return numberField(metric, 'retainedSamples') >= surfels;
+    const rawSamples = Math.max(
+      numberField(metric, 'rawSampleCount'),
+      numberField(metric, 'retainedSamples')
+    );
+    const fusedSurfels = numberField(metric, 'fusedSurfelCount');
+    return rawSamples >= surfels && (fusedSurfels <= 0 || rawSamples >= fusedSurfels);
   }
   if (name === 'PANORAMIC_CAPTURE_METRICS') {
     return numberField(metric, 'rawSampleCount') >= surfels &&
@@ -1118,6 +1123,12 @@ function hasNonzeroBounds(metric: Record<string, unknown>, field: string): boole
 function numberField(metric: Record<string, unknown>, field: string): number {
   const value = metric[field];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function fusedSurfelDetail(metric: Record<string, unknown>): string {
+  return typeof metric.fusedSurfelCount === 'number' && Number.isFinite(metric.fusedSurfelCount)
+    ? `, fused ${metric.fusedSurfelCount} surfels`
+    : '';
 }
 
 function stringField(metric: Record<string, unknown>, field: string): string {
@@ -1158,12 +1169,20 @@ export function metricSetValidationError(
   const captureKeyframes = numberField(capture, 'keyframes');
   const captureSurfels = numberField(capture, 'surfelCount');
   const captureRawSamples = numberField(capture, 'rawSampleCount');
+  const keyframeRawSamples = Math.max(
+    numberField(keyframe, 'rawSampleCount'),
+    numberField(keyframe, 'retainedSamples')
+  );
+  const keyframeFusedSurfels = numberField(keyframe, 'fusedSurfelCount');
 
   if (numberField(keyframe, 'keyframes') !== captureKeyframes) {
     return `Keyframe/capture telemetry mismatch: keyframes ${numberField(keyframe, 'keyframes')} !== ${captureKeyframes}`;
   }
-  if (numberField(keyframe, 'retainedSamples') !== captureRawSamples) {
-    return `Keyframe/capture telemetry mismatch: retained samples ${numberField(keyframe, 'retainedSamples')} !== ${captureRawSamples}`;
+  if (keyframeRawSamples !== captureRawSamples) {
+    return `Keyframe/capture telemetry mismatch: accepted raw samples ${keyframeRawSamples} !== ${captureRawSamples}`;
+  }
+  if (keyframeFusedSurfels > 0 && keyframeFusedSurfels !== captureSurfels) {
+    return `Keyframe/capture telemetry mismatch: fused surfels ${keyframeFusedSurfels} !== ${captureSurfels}`;
   }
   for (const [label, metric] of [
     ['render', render],
@@ -1491,7 +1510,7 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `scan ${formatNumber(numberField(scan, 'scanFps'), 1)} fps, ` +
       `accepted ${formatNumber(numberField(scan, 'acceptedKeyframeFps'), 2)} fps, ` +
       `new voxels ${formatPercent(numberField(scan, 'newVoxelPercent'))}, ` +
-      `retained ${numberField(scan, 'retainedSamples')} samples, ` +
+      `retained ${numberField(scan, 'retainedSamples')} samples${fusedSurfelDetail(scan)}, ` +
       `avg pose ${formatMs(numberField(scan, 'avgPoseMs'))}, ` +
       `avg depth ${formatMs(numberField(scan, 'avgDepthInfoMs'))}, ` +
       `avg append ${formatMs(numberField(scan, 'avgAppendMs'))}`
@@ -1532,7 +1551,7 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     lines.push(
       `Keyframe rejection: ${stringField(rejectionProfile, 'reason') || 'unknown'}, ` +
       `${numberField(rejectionProfile, 'keyframes')} keyframes, frame ${numberField(rejectionProfile, 'frameCount')}, ` +
-      `retained ${numberField(rejectionProfile, 'retainedSamples')} samples, ` +
+      `retained ${numberField(rejectionProfile, 'retainedSamples')} samples${fusedSurfelDetail(rejectionProfile)}, ` +
       `translation ${formatMeters(numberField(rejectionProfile, 'translationM'))}, ` +
       `rotation ${formatNumber(numberField(rejectionProfile, 'rotationDeg'), 1)}deg${errorDetail}${surfelDetail}`
     );
@@ -1566,7 +1585,7 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `XR scan loop stopped: ${stringField(loopStop, 'reason') || 'unknown'}, ` +
       `status ${stringField(loopStop, 'status') || 'unknown'}, ` +
       `${numberField(loopStop, 'acceptedKeyframes')}/${numberField(loopStop, 'frameCount')} frames accepted, ` +
-      `retained ${numberField(loopStop, 'retainedSamples')} samples, ` +
+      `retained ${numberField(loopStop, 'retainedSamples')} samples${fusedSurfelDetail(loopStop)}, ` +
       `captureInFlight ${loopStop.captureInFlight === true ? 'yes' : 'no'}, ` +
       `sessionEnded ${loopStop.sessionEnded === true ? 'yes' : 'no'}, ` +
       `sessionMatches ${loopStop.sessionMatches === false ? 'no' : 'yes'}`
@@ -1593,6 +1612,20 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     numberField(rejectionProfile ?? {}, 'keyframes')
   );
   if (acceptedKeyframes > 1) {
+    const latestKeyframeSamples = numberField(keyframeProfile ?? {}, 'surfelCount');
+    const rawSamples = Math.max(
+      numberField(keyframeProfile ?? {}, 'rawSampleCount'),
+      numberField(keyframeProfile ?? {}, 'retainedSamples')
+    );
+    const displayedSurfels = Math.max(
+      numberField(keyframeProfile ?? {}, 'fusedSurfelCount'),
+      numberField(seen.PANORAMIC_LIVE_MODEL_PROFILE ?? {}, 'surfelCount'),
+      numberField(seen.PANORAMIC_PREVIEW_METRICS ?? {}, 'surfelCount'),
+      numberField(seen.PANORAMIC_RENDER_FRAME_PROFILE ?? {}, 'surfelCount')
+    );
+    if (latestKeyframeSamples > 0 && rawSamples > latestKeyframeSamples && displayedSurfels > 0 && displayedSurfels <= latestKeyframeSamples) {
+      return `Displayed-surfels diagnosis: ${acceptedKeyframes} keyframes accepted and ${rawSamples} raw samples observed, but only ${displayedSurfels} fused/displayed surfels remain; this points to voxel fusion collapsing later samples or stale model publication rather than frame delivery`;
+    }
     return '';
   }
 

@@ -161,16 +161,21 @@ Implemented:
   before any keyframe is accepted and again when the user stops scanning, so a
   profile-only physical-device run can diagnose pose misses, depth misses,
   precheck skips, and rejection reasons even when Preview/Capture is never
-  reached. Validator summaries SHOULD compare WebXR depth-frame counters with
-  ARKit frame counters so a one-keyframe scan can be classified as JS keyframe
-  rejection, full native frame-pump starvation, or native scene-depth
-  starvation while ARKit camera frames continue. The WebXR frame-pump profiler
-  SHOULD emit its first sample immediately instead of waiting for its periodic
-  interval, because first-frame-only failures often happen before a second
-  profile window opens. If ARKit frames arrive before the first scene-depth
-  snapshot, native SHOULD expose a non-deliverable frame-number-zero diagnostic
-  so logs can distinguish pre-first-depth starvation from total ARKit startup
-  failure. If the JS frame pump throws before it can invoke the route's XR frame
+  reached. Scan-loop and keyframe telemetry MUST report accepted raw sample
+  counts separately from the fused/displayed surfel count, because later
+  keyframes can update existing voxels without increasing the rendered surfel
+  count; device logs need to distinguish "no post-first frames accepted" from
+  "post-first samples collapsed into the first frame's fused voxels" and from a
+  stale live model publish. Validator summaries SHOULD compare WebXR
+  depth-frame counters with ARKit frame counters so a one-keyframe scan can be
+  classified as JS keyframe rejection, full native frame-pump starvation, or
+  native scene-depth starvation while ARKit camera frames continue. The WebXR
+  frame-pump profiler SHOULD emit its first sample immediately instead of
+  waiting for its periodic interval, because first-frame-only failures often
+  happen before a second profile window opens. If ARKit frames arrive before the
+  first scene-depth snapshot, native SHOULD expose a non-deliverable
+  frame-number-zero diagnostic so logs can distinguish pre-first-depth
+  starvation from total ARKit startup failure. If the JS frame pump throws before it can invoke the route's XR frame
   callback, for example while fetching the latest native frame, it SHOULD keep
   polling and emit a frame-pump error reason with the exception name/message
   because route-level scan-loop diagnostics cannot observe pre-callback

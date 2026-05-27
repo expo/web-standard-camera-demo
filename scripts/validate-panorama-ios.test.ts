@@ -39,6 +39,15 @@ test('panorama validator rejects mismatched exported model metrics', () => {
   expect(() => validateRequiredMetricSet(seen)).toThrow('Capture/export telemetry mismatch');
 });
 
+test('panorama validator rejects mismatched keyframe fused surfel metrics', () => {
+  const seen = completeMetricSet({
+    PANORAMIC_KEYFRAME_PROFILE: { fusedSurfelCount: 41 },
+  });
+
+  expect(metricSetValidationError(seen)).toContain('Keyframe/capture telemetry mismatch: fused surfels');
+  expect(() => validateRequiredMetricSet(seen)).toThrow('Keyframe/capture telemetry mismatch: fused surfels');
+});
+
 test('panorama validator rejects telemetry outside performance and quality budgets', () => {
   expect(metricSetValidationError(completeMetricSet({
     PANORAMIC_KEYFRAME_PROFILE: { appendMs: DEFAULT_VALIDATION_BUDGETS.maxKeyframeAppendMs + 1 },
@@ -150,7 +159,7 @@ test('panorama validator reports scan configuration used for profile-only isolat
 
 test('panorama validator parses copied log text for offline profiling', () => {
   const seen = parseMetricLogText(`
- LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.68,"cameraColorPercent":100,"keyframes":23,"retainedSamples":12866,"surfelCount":830}
+ LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.68,"cameraColorPercent":100,"fusedSurfelCount":9388,"keyframes":23,"rawSampleCount":12866,"retainedSamples":12866,"surfelCount":830}
  noise
  LOG PANORAMIC_LIVE_MODEL_PROFILE {"buildMs":14.95,"intervalMs":1600,"keyframes":23,"reason":"stale","rawSampleCount":12866,"surfelCount":9388}
  LOG PANORAMIC_MODEL_UPLOAD_PROFILE {"allocated":false,"capacityBytes":262144,"modelRevision":12,"surfelBytes":450624,"surfelCount":9388,"uploadMs":0.08}
@@ -160,7 +169,9 @@ test('panorama validator parses copied log text for offline profiling', () => {
   expect(seen.PANORAMIC_KEYFRAME_PROFILE).toMatchObject({
     appendMs: 31.68,
     cameraColorPercent: 100,
+    fusedSurfelCount: 9388,
     keyframes: 23,
+    rawSampleCount: 12866,
     retainedSamples: 12866,
   });
   expect(seen.PANORAMIC_LIVE_MODEL_PROFILE).toMatchObject({
@@ -676,6 +687,28 @@ test('panorama validator diagnoses scan loop scheduling stops', () => {
   );
 });
 
+test('panorama validator diagnoses accepted raw samples that do not grow displayed surfels', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      fusedSurfelCount: 780,
+      keyframes: 4,
+      rawSampleCount: 3200,
+      retainedSamples: 3200,
+      surfelCount: 780,
+    },
+    PANORAMIC_LIVE_MODEL_PROFILE: {
+      buildMs: 12,
+      keyframes: 4,
+      rawSampleCount: 3200,
+      surfelCount: 780,
+    },
+  } satisfies SeenMetrics;
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'Displayed-surfels diagnosis: 4 keyframes accepted and 3200 raw samples observed, but only 780 fused/displayed surfels remain; this points to voxel fusion collapsing later samples or stale model publication rather than frame delivery'
+  );
+});
+
 test('panorama validator diagnoses native WebXR frame fetch errors', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
@@ -835,10 +868,12 @@ function completeMetricSet(
       cameraSampleMode: 'precomputed-axis',
       depthGridSampleMode: 'precomputed-identity',
       depthType: 'smooth',
+      fusedSurfelCount: 42,
       keyframes: 3,
       newVoxelCount: 24,
       newVoxelPercent: 70.6,
       observedDepthSurfels: 34,
+      rawSampleCount: 100,
       retainedSamples: 100,
       surfelCount: 34,
       updatedVoxelCount: 10,
