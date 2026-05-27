@@ -607,7 +607,7 @@ test('panorama validator builds a durable profiling report payload', () => {
 });
 
 test('panorama validator surfaces scan loop callback errors', () => {
-  const seen = completeMetricSet({
+  const seen = {
     PANORAMIC_KEYFRAME_REJECTION_PROFILE: {
       errorMessage: 'undefined is not a function',
       errorName: 'TypeError',
@@ -618,15 +618,29 @@ test('panorama validator surfaces scan loop callback errors', () => {
       rotationDeg: 0,
       translationM: 0,
     },
-  });
+  } satisfies SeenMetrics;
 
-  expect(panoramaBottleneckSummary(seen)).toContain(
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
     'Keyframe rejection: scan-loop-error, 1 keyframes, frame 2, retained 781 samples, translation 0m, rotation 0deg, error TypeError: undefined is not a function'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: scan loop callback threw after 1 keyframe(s): TypeError: undefined is not a function'
   );
 });
 
 test('panorama validator distinguishes delivered WebXR frames from stale polling', () => {
-  const seen = completeMetricSet({
+  const seen = {
+    PANORAMIC_SCAN_STATS: {
+      acceptedKeyframes: 1,
+      elapsedMs: 1200,
+      frameCount: 44,
+      rejectedByReason: {
+        'too-fast': 9,
+        'too-similar': 12,
+      },
+    },
     PANORAMIC_XR_FRAME_PUMP_PROFILE: {
       arFrameDelta: 24,
       arFrameNumber: 48,
@@ -639,10 +653,37 @@ test('panorama validator distinguishes delivered WebXR frames from stale polling
       reason: 'delivered-frame',
       staleFramePolls: 1,
     },
-  });
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'XR frame pump: delivered-frame, depth frame 44 delivered 44, AR frame 48 (+24), depth misses 0 consecutive 0, delivered polls 22, stale polls 1'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: WebXR frames are still being delivered (22 polls), but post-first frames are not accepted by the panorama keyframe gates; rejected too-similar 12, too-fast 9'
+  );
+});
+
+test('panorama validator diagnoses native frame starvation after the first surfel batch', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 1,
+      retainedSamples: 781,
+      surfelCount: 781,
+    },
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      deliveredFramePolls: 0,
+      lastDeliveredFrameNumber: 1,
+      latestFrameNumber: 1,
+      noFramePolls: 0,
+      reason: 'stale-frame',
+      staleFramePolls: 89,
+    },
+  } satisfies SeenMetrics;
 
   expect(panoramaBottleneckSummary(seen)).toContain(
-    'XR frame pump: delivered-frame, depth frame 44 delivered 44, AR frame 48 (+24), depth misses 0 consecutive 0, delivered polls 22, stale polls 1'
+    'First-frame diagnosis: WebXR native frame delivery stalled (stale-frame; no-frame 0, stale 89) before the app could add more surfels'
   );
 });
 

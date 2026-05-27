@@ -1248,7 +1248,10 @@ that simply did not cover enough sectors is separable from one with slow model
 work or bad projection math. When geometry telemetry is present, the
 summary SHOULD also include the normal-projected span/RMS thickness and normal
 coherence so a flat-wall scan can be checked for world-coordinate smear from
-logs alone. A `--out-json <path>` mode SHOULD write the same merged metrics,
+logs alone. When only the first keyframe is accepted, the summary SHOULD also
+classify the likely first-frame failure mode as native frame starvation,
+scan-loop callback failure, or post-first keyframe-gate rejection. A
+`--out-json <path>` mode SHOULD write the same merged metrics,
 missing required metric list, validation/profile-only status, timestamp, and
 bottleneck summary to a durable JSON report so physical-device collections can
 be attached or reanalyzed without terminal scrollback. A `--log-file` mode MAY

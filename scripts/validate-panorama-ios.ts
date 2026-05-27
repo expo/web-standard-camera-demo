@@ -1523,7 +1523,55 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     );
   }
 
+  const firstFrameDiagnosis = panoramaFirstFrameDiagnosis(seen);
+  if (firstFrameDiagnosis) {
+    lines.push(firstFrameDiagnosis);
+  }
+
   return lines;
+}
+
+function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
+  const keyframeProfile = seen.PANORAMIC_KEYFRAME_PROFILE;
+  const scan = seen.PANORAMIC_SCAN_STATS;
+  const rejectionProfile = seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE;
+  const framePump = seen.PANORAMIC_XR_FRAME_PUMP_PROFILE;
+  const acceptedKeyframes = Math.max(
+    numberField(keyframeProfile ?? {}, 'keyframes'),
+    numberField(scan ?? {}, 'acceptedKeyframes'),
+    numberField(rejectionProfile ?? {}, 'keyframes')
+  );
+  if (acceptedKeyframes > 1) {
+    return '';
+  }
+
+  if (stringField(rejectionProfile ?? {}, 'reason') === 'scan-loop-error') {
+    const errorName = stringField(rejectionProfile ?? {}, 'errorName') || 'Error';
+    const errorMessage = stringField(rejectionProfile ?? {}, 'errorMessage') || 'see keyframe rejection profile';
+    return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}`;
+  }
+
+  if (framePump) {
+    const deliveredFramePolls = numberField(framePump, 'deliveredFramePolls');
+    const noFramePolls = numberField(framePump, 'noFramePolls');
+    const staleFramePolls = numberField(framePump, 'staleFramePolls');
+    const reason = stringField(framePump, 'reason') || 'unknown';
+    if (deliveredFramePolls <= 0 && (noFramePolls > 0 || staleFramePolls > 0)) {
+      return `First-frame diagnosis: WebXR native frame delivery stalled (${reason}; no-frame ${noFramePolls}, stale ${staleFramePolls}) before the app could add more surfels`;
+    }
+    if (deliveredFramePolls > 1) {
+      const rejected = scan ? scanRejectionSummary(scan) : stringField(rejectionProfile ?? {}, 'reason');
+      const detail = rejected ? `; rejected ${rejected}` : '';
+      return `First-frame diagnosis: WebXR frames are still being delivered (${deliveredFramePolls} polls), but post-first frames are not accepted by the panorama keyframe gates${detail}`;
+    }
+  }
+
+  if (scan && numberField(scan, 'frameCount') > 1) {
+    const rejected = scanRejectionSummary(scan);
+    return `First-frame diagnosis: scan loop ran ${numberField(scan, 'frameCount')} frames but accepted ${acceptedKeyframes}; ${rejected ? `rejected ${rejected}` : 'check pose/depth rejection profiles'}`;
+  }
+
+  return '';
 }
 
 function scanRejectionSummary(scan: Record<string, unknown>): string {
