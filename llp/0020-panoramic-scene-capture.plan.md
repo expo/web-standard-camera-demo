@@ -103,6 +103,9 @@ Implemented:
   Files-visible filename/size, and relies on iOS document sharing so the
   Documents directory is visible in Files. Optional share-sheet failure or
   dismissal does not turn an already-written Files export into a save failure.
+  The PLY header vertex count is derived from the actually serialized surfel
+  rows, so the saved artifact stays self-consistent if a future model buffer is
+  preallocated or truncated.
   The PLY vertices preserve surfel radius, fused weight, and observation count
   in addition to position, normal, and color, so the saved file carries the
   display model's splat metadata rather than just bare points.

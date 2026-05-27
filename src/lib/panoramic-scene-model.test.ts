@@ -275,6 +275,27 @@ test('serializeModelAsPly emits vertex colors and normals for Files export', () 
   expect(ply.endsWith('\n')).toBe(true);
 });
 
+test('serializeModelAsPly keeps vertex header aligned with serialized surfel rows', () => {
+  const model = buildModel([
+    ...surfelSample({ x: 0, y: 0, z: -1, r: 1, g: 0.5, b: 0, weight: 1 }),
+  ], 1);
+
+  expect(model).not.toBeNull();
+  const withExtraBacking = {
+    ...model!,
+    surfelCount: 1,
+    surfels: new Float32Array([
+      ...Array.from(model!.surfels),
+      ...surfelSample({ x: 1, y: 0, z: -1, r: 0, g: 1, b: 0, weight: 1 }),
+    ]),
+  };
+  const ply = serializeModelAsPly(withExtraBacking);
+  const rows = ply.trimEnd().split('\n').slice(ply.split('\n').findIndex((line) => line === 'end_header') + 1);
+
+  expect(ply).toContain('element vertex 1\n');
+  expect(rows).toHaveLength(1);
+});
+
 test('formatFilesLocation reports the app Documents path shown to the user', () => {
   expect(formatFilesLocation('scan.ply', 1536)).toBe('Files: standard-camera-app/scan.ply (1.5 KB)');
 });

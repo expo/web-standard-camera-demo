@@ -585,6 +585,10 @@ export function formatQualityInfo(model: CaptureModel): string {
 }
 
 export function serializeModelAsPly(model: CaptureModel): string {
+  const serializableSurfels = Math.min(
+    Math.max(0, Math.floor(model.surfelCount)),
+    Math.floor(model.surfels.length / SURFEL_STRIDE_FLOATS)
+  );
   const lines = [
     'ply',
     'format ascii 1.0',
@@ -595,7 +599,7 @@ export function serializeModelAsPly(model: CaptureModel): string {
     `comment estimated_normal_surfels ${model.normalEstimatedSurfels}`,
     `comment raw_surfel_samples ${model.rawSampleCount}`,
     `comment voxel_size_meters ${model.voxelSizeMeters.toFixed(3)}`,
-    `element vertex ${model.surfelCount}`,
+    `element vertex ${serializableSurfels}`,
     'property float x',
     'property float y',
     'property float z',
@@ -610,7 +614,7 @@ export function serializeModelAsPly(model: CaptureModel): string {
     'property uchar blue',
     'end_header',
   ];
-  for (let i = 0; i < model.surfels.length; i += SURFEL_STRIDE_FLOATS) {
+  for (let i = 0; i < serializableSurfels * SURFEL_STRIDE_FLOATS; i += SURFEL_STRIDE_FLOATS) {
     lines.push([
       plyNumber(model.surfels[i] ?? 0),
       plyNumber(model.surfels[i + 1] ?? 0),
