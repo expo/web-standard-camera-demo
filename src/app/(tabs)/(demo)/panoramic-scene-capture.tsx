@@ -323,6 +323,22 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     statusRef.current = status;
   }, [status]);
 
+  function setCaptureStatus(
+    nextStatus: PanoramicCaptureStatus | ((current: PanoramicCaptureStatus) => PanoramicCaptureStatus)
+  ): void {
+    if (typeof nextStatus === 'function') {
+      statusRef.current = nextStatus(statusRef.current);
+      setStatus((current) => {
+        const resolvedStatus = nextStatus(current);
+        statusRef.current = resolvedStatus;
+        return resolvedStatus;
+      });
+      return;
+    }
+    statusRef.current = nextStatus;
+    setStatus(nextStatus);
+  }
+
   const setViewerState = React.useCallback((nextViewer: ViewerState): void => {
     // @ref LLP 0020#model-view - WebGPU reads the viewer from a ref each
     // frame; drag updates avoid React state so touch rotation stays responsive.
@@ -356,17 +372,17 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const xr = navigator.xr;
     if (!xr) {
       setSupport('WebXR camera/depth unavailable here');
-      setStatus('unsupported');
+      setCaptureStatus('unsupported');
       return;
     }
     void xr.isSessionSupported('immersive-ar')
       .then((supported) => {
         setSupport(supported ? 'immersive-ar camera/depth available' : 'WebXR camera/depth unavailable here');
-        setStatus(supported ? 'idle' : 'unsupported');
+        setCaptureStatus(supported ? 'idle' : 'unsupported');
       })
       .catch((e) => {
         setSupport('WebXR camera/depth check failed');
-        setStatus('error');
+        setCaptureStatus('error');
         setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
       });
   }, []);
@@ -423,7 +439,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setSaveInfo('save after capture');
     setError(null);
     if (!sessionRef.current) {
-      setStatus((current) => (current === 'unsupported' ? current : 'idle'));
+      setCaptureStatus((current) => (current === 'unsupported' ? current : 'idle'));
     }
   }
 
@@ -570,18 +586,18 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const preserveCapturedModel = statusRef.current === 'captured' && modelRef.current !== null;
     installWebXRDepthProfile();
     setError(null);
-    setStatus('requesting');
+    setCaptureStatus('requesting');
     try {
       const xr = navigator.xr;
       if (!xr) {
         setSupport('WebXR camera/depth unavailable here');
-        setStatus(preserveCapturedModel ? 'captured' : 'unsupported');
+        setCaptureStatus(preserveCapturedModel ? 'captured' : 'unsupported');
         return;
       }
       const supported = await xr.isSessionSupported('immersive-ar');
       if (!supported) {
         setSupport('WebXR camera/depth unavailable here');
-        setStatus(preserveCapturedModel ? 'captured' : 'unsupported');
+        setCaptureStatus(preserveCapturedModel ? 'captured' : 'unsupported');
         return;
       }
       const nextSession = await runWithWebXRUserActivation(() =>
@@ -607,20 +623,20 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       resetCapture();
       sessionRef.current = nextSession;
       setSession(nextSession);
-      setStatus('scanning');
+      setCaptureStatus('scanning');
       setFrameInfo(`depth: ${nextSession.depthType ?? 'none'} - waiting for depth frames`);
       nextSession.addEventListener('end', () => {
         if (sessionRef.current === nextSession) {
           sessionRef.current = null;
           setSession(null);
-          setStatus((current) => (current === 'captured' ? current : 'idle'));
+          setCaptureStatus((current) => (current === 'captured' ? current : 'idle'));
         }
       });
       startXRLoopSafely(nextSession);
     } catch (e) {
       sessionRef.current = null;
       setSession(null);
-      setStatus(preserveCapturedModel ? 'captured' : 'error');
+      setCaptureStatus(preserveCapturedModel ? 'captured' : 'error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
   }
@@ -634,7 +650,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   async function stopSession(): Promise<void> {
     const current = sessionRef.current;
     if (!current) return;
-    setStatus('ending');
+    setCaptureStatus('ending');
     cancelXRLoop();
     if (scanStatsRef.current.frameCount > 0) {
       logScanStats('stop');
@@ -643,9 +659,9 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       await current.end();
       sessionRef.current = null;
       setSession(null);
-      setStatus('idle');
+      setCaptureStatus('idle');
     } catch (e) {
-      setStatus('error');
+      setCaptureStatus('error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
   }
@@ -656,7 +672,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const captureSession = sessionRef.current;
     cancelXRLoop();
     setError(null);
-    setStatus('building-model');
+    setCaptureStatus('building-model');
     setModelInfo('building captured model');
     try {
       await nextAnimationFrame();
@@ -666,7 +682,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         if (captureSession && sessionRef.current === captureSession) {
           startXRLoopSafely(captureSession);
         }
-        setStatus(captureSession && sessionRef.current === captureSession ? 'scanning' : 'idle');
+        setCaptureStatus(captureSession && sessionRef.current === captureSession ? 'scanning' : 'idle');
         setError('No valid depth samples have been captured yet.');
         return;
       }
@@ -678,7 +694,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       logScanStats('capture');
       setSaveInfo('ready to save .ply');
       statusRef.current = 'captured';
-      setStatus('captured');
+      setCaptureStatus('captured');
       requestRenderRef.current?.();
       try {
         await stopActiveSession();
@@ -692,9 +708,9 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     } catch (e) {
       if (captureSession && sessionRef.current === captureSession) {
         startXRLoopSafely(captureSession);
-        setStatus('scanning');
+        setCaptureStatus('scanning');
       } else {
-        setStatus('error');
+        setCaptureStatus('error');
       }
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     } finally {
@@ -708,7 +724,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const previewSession = sessionRef.current;
     setError(null);
     statusRef.current = 'building-model';
-    setStatus('building-model');
+    setCaptureStatus('building-model');
     setModelInfo('building preview model');
     try {
       await nextAnimationFrame();
@@ -732,7 +748,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         const nextStatus =
           previewSession && sessionRef.current === previewSession && !previewSession.ended ? 'scanning' : 'idle';
         statusRef.current = nextStatus;
-        setStatus(nextStatus);
+        setCaptureStatus(nextStatus);
       }
     }
   }
@@ -1240,7 +1256,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           uniformBuffer.destroy();
         };
       } catch (e) {
-        setStatus('error');
+        setCaptureStatus('error');
         setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
       }
     };
@@ -1549,7 +1565,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       if (sessionRef.current !== nextSession || nextSession.ended) {
         return;
       }
-      setStatus('error');
+      setCaptureStatus('error');
       setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     });
   }
