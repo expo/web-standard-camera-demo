@@ -60,6 +60,7 @@ const LEAF_TITLES: Record<string, string> = {
   'shader-lens': 'Shader Lens',
   'neural-lens': 'Neural Lens',
   'lidar-depth-webxr': 'WebXR LiDAR',
+  'panoramic-scene-capture': 'Scene Capture',
   'webgpu-spike': 'WebGPU Spike',
 };
 
