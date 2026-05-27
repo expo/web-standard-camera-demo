@@ -673,11 +673,15 @@ The validator launches the dev-client build, opens the panorama demo route, and
 then waits for the phone interaction. Use the phone to Start Scan, pan slowly
 until surfels appear, Capture, and Save. The validator passes only after it sees
 nonzero keyframe, capture, WebGPU-render, and Files-export telemetry from the
-physical app logs. It also prints optional live-preview performance telemetry
-(`PANORAMIC_LIVE_MODEL_PROFILE` and `PANORAMIC_MODEL_UPLOAD_PROFILE`) when
-those lines appear before the required end-to-end metrics complete. If
-CoreDevice refuses launch because the phone is locked, unlock the iPhone and
-rerun the same validator command.
+physical app logs, and the required capture/render/export metrics agree on the
+captured model's keyframe, sample, and surfel counts. Export telemetry must also
+name the Files-visible `.ply` path. The validator prints optional live-preview
+performance telemetry (`PANORAMIC_LIVE_MODEL_PROFILE` and
+`PANORAMIC_MODEL_UPLOAD_PROFILE`) when those lines appear before the required
+end-to-end metrics complete. Its parsing and consistency checks are covered by
+`bun test scripts/validate-panorama-ios.test.ts`. If CoreDevice refuses launch
+because the phone is locked, unlock the iPhone and rerun the same validator
+command.
 
 Also run the `ref-check` skill so any `@ref LLP 0020#...` annotations added in
 code point to real anchors.

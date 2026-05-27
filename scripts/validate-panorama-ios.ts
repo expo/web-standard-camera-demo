@@ -23,17 +23,17 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_MODEL_UPLOAD_PROFILE',
 ] as const satisfies readonly OptionalMetricName[];
 
-type RequiredMetricName =
+export type RequiredMetricName =
   | 'PANORAMIC_KEYFRAME_PROFILE'
   | 'PANORAMIC_CAPTURE_METRICS'
   | 'PANORAMIC_RENDER_METRICS'
   | 'PANORAMIC_EXPORT_METRICS';
-type OptionalMetricName =
+export type OptionalMetricName =
   | 'PANORAMIC_LIVE_MODEL_PROFILE'
   | 'PANORAMIC_MODEL_UPLOAD_PROFILE';
-type MetricName = RequiredMetricName | OptionalMetricName;
+export type MetricName = RequiredMetricName | OptionalMetricName;
 
-type SeenMetrics = Partial<Record<MetricName, Record<string, unknown>>>;
+export type SeenMetrics = Partial<Record<MetricName, Record<string, unknown>>>;
 
 interface Options {
   device?: string;
@@ -43,12 +43,14 @@ interface Options {
   timeoutMs: number;
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((e: unknown) => {
-    console.error('validate-panorama-ios failed:', e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+if (import.meta.main) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((e: unknown) => {
+      console.error('validate-panorama-ios failed:', e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    });
+}
 
 async function main(): Promise<number> {
   const options = parseArgs(process.argv.slice(2));
@@ -99,6 +101,7 @@ async function main(): Promise<number> {
     }
 
     const seen = await collectMetrics(logProc, options.timeoutMs);
+    validateRequiredMetricSet(seen);
     printMetricSummary(seen);
     return 0;
   } finally {
@@ -166,6 +169,8 @@ Options:
 Success requires these log lines from a physical run:
   PANORAMIC_KEYFRAME_PROFILE, PANORAMIC_CAPTURE_METRICS,
   PANORAMIC_RENDER_METRICS, and PANORAMIC_EXPORT_METRICS.
+The required capture, render, and export metrics must describe the same model,
+and export telemetry must include the Files-visible .ply path.
 
 The validator also prints optional live preview performance telemetry when it
 appears: PANORAMIC_LIVE_MODEL_PROFILE and PANORAMIC_MODEL_UPLOAD_PROFILE.`);
@@ -247,7 +252,7 @@ async function collectMetrics(
   throw new Error(`Log stream ended before telemetry completed. Missing: ${missingMetrics(seen).join(', ')}`);
 }
 
-function recordMetricLine(line: string, seen: SeenMetrics): void {
+export function recordMetricLine(line: string, seen: SeenMetrics): void {
   const match = line.match(/(PANORAMIC_[A-Z_]+)\s+(\{.*\})/);
   if (!match) return;
   const name = match[1] as MetricName;
@@ -282,18 +287,29 @@ function isOptionalMetric(name: string): name is OptionalMetricName {
   return (OPTIONAL_METRICS as readonly string[]).includes(name);
 }
 
-function isValidMetric(name: MetricName, metric: Record<string, unknown>): boolean {
+export function isValidMetric(name: MetricName, metric: Record<string, unknown>): boolean {
   const surfels = numberField(metric, 'surfelCount');
   if (surfels <= 0) return false;
   if (name !== 'PANORAMIC_MODEL_UPLOAD_PROFILE' && numberField(metric, 'keyframes') <= 0) return false;
+  if (name === 'PANORAMIC_KEYFRAME_PROFILE') {
+    return numberField(metric, 'retainedSamples') >= surfels;
+  }
   if (name === 'PANORAMIC_CAPTURE_METRICS') {
-    return numberField(metric, 'rawSampleCount') > 0;
+    return numberField(metric, 'rawSampleCount') >= surfels &&
+      numberField(metric, 'cameraColorPercent') > 0 &&
+      hasNonzeroBounds(metric, 'boundsMeters');
   }
   if (name === 'PANORAMIC_RENDER_METRICS') {
-    return numberField(metric, 'canvasWidth') > 0 && numberField(metric, 'canvasHeight') > 0;
+    return numberField(metric, 'canvasWidth') > 0 &&
+      numberField(metric, 'canvasHeight') > 0 &&
+      numberField(metric, 'rawSampleCount') >= surfels;
   }
   if (name === 'PANORAMIC_EXPORT_METRICS') {
-    return numberField(metric, 'bytes') > 0 && String(metric.filename ?? '').endsWith('.ply');
+    const filename = String(metric.filename ?? '');
+    return numberField(metric, 'bytes') > 0 &&
+      filename.endsWith('.ply') &&
+      String(metric.filesVisiblePath ?? '') === `standard-camera-app/${filename}` &&
+      String(metric.uri ?? '').length > 0;
   }
   if (name === 'PANORAMIC_MODEL_UPLOAD_PROFILE') {
     return numberField(metric, 'surfelBytes') > 0 && numberField(metric, 'uploadMs') >= 0;
@@ -301,17 +317,68 @@ function isValidMetric(name: MetricName, metric: Record<string, unknown>): boole
   return true;
 }
 
+function hasNonzeroBounds(metric: Record<string, unknown>, field: string): boolean {
+  const value = metric[field];
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((entry) => typeof entry === 'number' && Number.isFinite(entry) && entry >= 0) &&
+    value.some((entry) => entry > 0);
+}
+
 function numberField(metric: Record<string, unknown>, field: string): number {
   const value = metric[field];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function isComplete(seen: SeenMetrics): boolean {
+export function isComplete(seen: SeenMetrics): boolean {
   return missingMetrics(seen).length === 0;
 }
 
-function missingMetrics(seen: SeenMetrics): RequiredMetricName[] {
+export function missingMetrics(seen: SeenMetrics): RequiredMetricName[] {
   return REQUIRED_METRICS.filter((name) => !seen[name]);
+}
+
+export function metricSetValidationError(seen: SeenMetrics): string | null {
+  const missing = missingMetrics(seen);
+  if (missing.length > 0) {
+    return `Missing required metrics: ${missing.join(', ')}`;
+  }
+  const keyframe = seen.PANORAMIC_KEYFRAME_PROFILE!;
+  const capture = seen.PANORAMIC_CAPTURE_METRICS!;
+  const render = seen.PANORAMIC_RENDER_METRICS!;
+  const exported = seen.PANORAMIC_EXPORT_METRICS!;
+  const captureKeyframes = numberField(capture, 'keyframes');
+  const captureSurfels = numberField(capture, 'surfelCount');
+  const captureRawSamples = numberField(capture, 'rawSampleCount');
+
+  if (numberField(keyframe, 'keyframes') !== captureKeyframes) {
+    return `Keyframe/capture telemetry mismatch: keyframes ${numberField(keyframe, 'keyframes')} !== ${captureKeyframes}`;
+  }
+  if (numberField(keyframe, 'retainedSamples') !== captureRawSamples) {
+    return `Keyframe/capture telemetry mismatch: retained samples ${numberField(keyframe, 'retainedSamples')} !== ${captureRawSamples}`;
+  }
+  for (const [label, metric] of [
+    ['render', render],
+    ['export', exported],
+  ] as const) {
+    if (numberField(metric, 'keyframes') !== captureKeyframes) {
+      return `Capture/${label} telemetry mismatch: keyframes ${captureKeyframes} !== ${numberField(metric, 'keyframes')}`;
+    }
+    if (numberField(metric, 'surfelCount') !== captureSurfels) {
+      return `Capture/${label} telemetry mismatch: surfels ${captureSurfels} !== ${numberField(metric, 'surfelCount')}`;
+    }
+  }
+  if (numberField(render, 'rawSampleCount') !== captureRawSamples) {
+    return `Capture/render telemetry mismatch: raw samples ${captureRawSamples} !== ${numberField(render, 'rawSampleCount')}`;
+  }
+  return null;
+}
+
+export function validateRequiredMetricSet(seen: SeenMetrics): void {
+  const error = metricSetValidationError(seen);
+  if (error) {
+    throw new Error(error);
+  }
 }
 
 function printMetricSummary(seen: SeenMetrics): void {
