@@ -10,10 +10,22 @@ type ControlSizeValue = 'mini' | 'small' | 'regular' | 'large' | 'extraLarge';
 type ButtonStyleModifier = { readonly kind: 'buttonStyle'; readonly value: ButtonStyleValue };
 type ControlSizeModifier = { readonly kind: 'controlSize'; readonly value: ControlSizeValue };
 type TintModifier = { readonly kind: 'tint'; readonly value: string };
+type ForegroundColorModifier = { readonly kind: 'foregroundColor'; readonly value: string };
+type FrameModifierValue = {
+  readonly height?: number;
+  readonly maxHeight?: number;
+  readonly maxWidth?: number;
+  readonly minHeight?: number;
+  readonly minWidth?: number;
+  readonly width?: number;
+};
+type FrameModifier = { readonly kind: 'frame'; readonly value: FrameModifierValue };
 type DemoModifier =
   | ButtonStyleModifier
   | ControlSizeModifier
   | DisabledModifier
+  | ForegroundColorModifier
+  | FrameModifier
   | PickerStyleModifier
   | TagModifier
   | TintModifier;
@@ -34,6 +46,14 @@ export function controlSize(value: ControlSizeValue): ControlSizeModifier {
   return { kind: 'controlSize', value };
 }
 
+export function frame(value: FrameModifierValue): FrameModifier {
+  return { kind: 'frame', value };
+}
+
+export function foregroundColor(value: string): ForegroundColorModifier {
+  return { kind: 'foregroundColor', value };
+}
+
 export function tint(value: string): TintModifier {
   return { kind: 'tint', value };
 }
@@ -51,17 +71,69 @@ export function Host({ children, style }: HostProps): React.JSX.Element {
   return <View style={style}>{children}</View>;
 }
 
+export interface HStackProps {
+  alignment?: 'top' | 'center' | 'bottom' | 'firstTextBaseline' | 'lastTextBaseline';
+  children?: React.ReactNode;
+  modifiers?: readonly DemoModifier[];
+  spacing?: number;
+  style?: StyleProp<ViewStyle>;
+}
+
+export function HStack({ alignment = 'center', children, modifiers = [], spacing = 0, style }: HStackProps): React.JSX.Element {
+  const alignItems = alignment === 'top' || alignment === 'firstTextBaseline'
+    ? 'flex-start'
+    : alignment === 'bottom' || alignment === 'lastTextBaseline'
+      ? 'flex-end'
+      : 'center';
+  const frameStyle = modifiers.find((modifier): modifier is FrameModifier => modifier.kind === 'frame')?.value;
+  return (
+    <View
+      style={[
+        {
+          alignItems,
+          flexDirection: 'row',
+          gap: spacing,
+          justifyContent: 'center',
+        },
+        frameStyle ? frameToStyle(frameStyle) : null,
+        style,
+      ]}>
+      {children}
+    </View>
+  );
+}
+
+export interface VStackProps {
+  alignment?: 'leading' | 'center' | 'trailing';
+  children?: React.ReactNode;
+  spacing?: number;
+  style?: StyleProp<ViewStyle>;
+}
+
+export function VStack({ alignment = 'center', children, spacing = 0, style }: VStackProps): React.JSX.Element {
+  const alignItems = alignment === 'leading'
+    ? 'flex-start'
+    : alignment === 'trailing'
+      ? 'flex-end'
+      : 'center';
+  return <View style={[{ alignItems, gap: spacing }, style]}>{children}</View>;
+}
+
 export interface TextProps {
   children?: React.ReactNode;
   modifiers?: readonly DemoModifier[];
   style?: StyleProp<TextStyle>;
 }
 
-export function Text({ children, style }: TextProps): React.JSX.Element {
-  return <RNText style={style}>{children}</RNText>;
+export function Text({ children, modifiers = [], style }: TextProps): React.JSX.Element {
+  const textColor = modifiers.find(
+    (modifier): modifier is ForegroundColorModifier => modifier.kind === 'foregroundColor'
+  )?.value;
+  return <RNText style={[textColor ? { color: textColor } : null, style]}>{children}</RNText>;
 }
 
 export interface ButtonProps {
+  children?: React.ReactNode;
   label?: string;
   modifiers?: readonly DemoModifier[];
   onPress?: () => void;
@@ -69,10 +141,11 @@ export interface ButtonProps {
   systemImage?: string;
 }
 
-export function Button({ label, modifiers = [], onPress, role = 'default' }: ButtonProps): React.JSX.Element {
+export function Button({ children, label, modifiers = [], onPress, role = 'default' }: ButtonProps): React.JSX.Element {
   const disabled = modifiers.some((modifier): modifier is DisabledModifier => modifier.kind === 'disabled' && modifier.value);
   const style = modifiers.find((modifier): modifier is ButtonStyleModifier => modifier.kind === 'buttonStyle')?.value;
   const size = modifiers.find((modifier): modifier is ControlSizeModifier => modifier.kind === 'controlSize')?.value;
+  const frameStyle = modifiers.find((modifier): modifier is FrameModifier => modifier.kind === 'frame')?.value;
   const tintColor =
     modifiers.find((modifier): modifier is TintModifier => modifier.kind === 'tint')?.value ??
     (role === 'destructive' ? '#ef4444' : '#38bdf8');
@@ -86,6 +159,7 @@ export function Button({ label, modifiers = [], onPress, role = 'default' }: But
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
+        frameStyle ? frameToStyle(frameStyle) : null,
         size === 'large' || size === 'extraLarge' ? styles.buttonLarge : null,
         prominent
           ? { backgroundColor: tintColor, borderColor: tintColor }
@@ -93,11 +167,34 @@ export function Button({ label, modifiers = [], onPress, role = 'default' }: But
         disabled ? styles.buttonDisabled : null,
         pressed && !disabled ? styles.buttonPressed : null,
       ]}>
-      <RNText style={[styles.buttonText, prominent ? styles.buttonTextProminent : { color: tintColor }]}>
-        {label}
-      </RNText>
+      {children ?? (
+        <RNText style={[styles.buttonText, prominent ? styles.buttonTextProminent : { color: tintColor }]}>
+          {label}
+        </RNText>
+      )}
     </Pressable>
   );
+}
+
+export interface ImageProps {
+  color?: string;
+  size?: number;
+  systemName?: string;
+}
+
+export function Image({ color = '#94a3b8', size = 16 }: ImageProps): React.JSX.Element {
+  return <SymbolView size={size} tintColor={color} />;
+}
+
+function frameToStyle(value: FrameModifierValue): ViewStyle {
+  return {
+    height: value.height,
+    maxHeight: value.maxHeight,
+    maxWidth: value.maxWidth,
+    minHeight: value.minHeight,
+    minWidth: value.minWidth,
+    width: value.width,
+  };
 }
 
 export interface PickerProps<T extends SelectionValue = SelectionValue> {

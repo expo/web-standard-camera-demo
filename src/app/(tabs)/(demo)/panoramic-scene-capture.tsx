@@ -12,12 +12,14 @@ import {
   Button as UIButton,
   HStack,
   Host,
+  Image as UIImage,
   Picker,
   Text as UIText,
   VStack,
   buttonStyle,
   controlSize,
   disabled as disabledModifier,
+  foregroundColor,
   frame,
   pickerStyle,
   tag,
@@ -69,7 +71,8 @@ import {
 
 const QUAD_VERTEX_COUNT = 6;
 const COMMAND_BUTTON_GAP = 8;
-const COMMAND_BUTTON_HEIGHT = 44;
+const COMMAND_BUTTON_HEIGHT = 38;
+const COMMAND_BUTTON_NATIVE_CHROME_WIDTH = 36;
 const MODEL_VIEW_MODES = [
   { label: 'Color', value: 0 },
   { label: 'Depth', value: 1 },
@@ -1024,20 +1027,23 @@ function CommandButton({
     if (tone === 'reset') return '#f59e0b';
     return '#14b8a6';
   })();
+  const labelColor = prominent ? '#f8fafc' : tintColor;
+  const labelWidth = Math.max(88, width - COMMAND_BUTTON_NATIVE_CHROME_WIDTH);
   return (
     <UIButton
-      label={label}
       onPress={disabled ? undefined : onPress}
       role={tone === 'danger' ? 'destructive' : 'default'}
-      systemImage={icon}
       modifiers={[
         buttonStyle(prominent ? 'borderedProminent' : 'bordered'),
         controlSize('regular'),
-        frame({ height: COMMAND_BUTTON_HEIGHT, width }),
         tint(tintColor),
         disabledModifier(disabled),
-      ]}
-    />
+      ]}>
+      <HStack modifiers={[frame({ width: labelWidth })]} spacing={6}>
+        <UIImage color={labelColor} size={15} systemName={icon} />
+        <UIText modifiers={[foregroundColor(labelColor)]}>{label}</UIText>
+      </HStack>
+    </UIButton>
   );
 }
 
