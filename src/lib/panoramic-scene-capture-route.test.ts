@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
-const routeSource = readFileSync(new URL('./panoramic-scene-capture.tsx', import.meta.url), 'utf8');
+const routeSource = readFileSync(
+  new URL('../app/(tabs)/(demo)/panoramic-scene-capture.tsx', import.meta.url),
+  'utf8'
+);
 
 test('panorama route keeps AR access behind the WebXR-shaped API', () => {
   expect(routeSource).toContain("xr.requestSession('immersive-ar'");
