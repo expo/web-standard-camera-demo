@@ -33,6 +33,8 @@ export interface CaptureModel {
 
 export interface ViewerState {
   distanceScale: number;
+  panX: number;
+  panY: number;
   pitch: number;
   yaw: number;
 }
@@ -697,7 +699,7 @@ export function makeModelViewProjection(
   if (!model) {
     return mat4Multiply(perspective(Math.PI / 3.1, aspect, 0.01, 100), lookAt([0, 0.4, 3.4], [0, 0, 0], [0, 1, 0]));
   }
-  const center: Vec3 = [
+  const modelCenter: Vec3 = [
     (model.boundsMin[0] + model.boundsMax[0]) / 2,
     (model.boundsMin[1] + model.boundsMax[1]) / 2,
     (model.boundsMin[2] + model.boundsMax[2]) / 2,
@@ -710,11 +712,20 @@ export function makeModelViewProjection(
   const radius = Math.max(1.2, Math.hypot(span[0], span[1], span[2]) * 0.72) * viewer.distanceScale;
   const yaw = orbit + viewer.yaw;
   const horizontalRadius = Math.cos(viewer.pitch) * radius;
-  const eye: Vec3 = [
-    center[0] + Math.sin(yaw) * horizontalRadius,
-    center[1] + Math.sin(viewer.pitch) * radius,
-    center[2] + Math.cos(yaw) * horizontalRadius,
+  const baseEye: Vec3 = [
+    modelCenter[0] + Math.sin(yaw) * horizontalRadius,
+    modelCenter[1] + Math.sin(viewer.pitch) * radius,
+    modelCenter[2] + Math.cos(yaw) * horizontalRadius,
   ];
+  const forward = normalize(subtract(modelCenter, baseEye));
+  const right = normalize(cross(forward, [0, 1, 0]));
+  const up = normalize(cross(right, forward));
+  const panOffset = addVec3(
+    scaleVec3(right, viewer.panX * radius),
+    scaleVec3(up, viewer.panY * radius)
+  );
+  const center = addVec3(modelCenter, panOffset);
+  const eye = addVec3(baseEye, panOffset);
   return mat4Multiply(perspective(Math.PI / 3.0, aspect, 0.01, Math.max(20, radius * 8)), lookAt(eye, center, [0, 1, 0]));
 }
 
@@ -818,6 +829,10 @@ export function distance(a: Vec3, b: Vec3): number {
 
 function subtract(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function addVec3(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }
 
 function scaleVec3(v: Vec3, scale: number): Vec3 {

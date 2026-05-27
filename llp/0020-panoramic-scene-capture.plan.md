@@ -73,6 +73,9 @@ Implemented:
   Files-visible path, file URI, byte count, keyframe count, and surfel count.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
+- Scan preview: an explicit Preview action builds a temporary WebGPU model
+  snapshot from the current incremental surfel fusion state without ending the
+  WebXR session or enabling export.
 - Model-view display modes: a segmented View control switches the WebGPU
   surfel renderer between camera color, geometric depth/distance, and fused
   normal inspection.
@@ -203,7 +206,7 @@ privacy boundary obvious.
 The app displays the frozen model in a WebGPU viewer:
 
 - one-finger orbit or turntable rotation
-- pinch zoom / two-finger pan if the app has gesture support
+- pinch zoom and two-finger pan
 - reset view
 - model stats: points, keyframes, approximate bounds
 - optional mode picker: color, depth, normal/confidence

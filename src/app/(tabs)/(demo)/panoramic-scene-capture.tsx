@@ -10,12 +10,15 @@ import type { SFSymbol } from 'sf-symbols-typescript';
 
 import {
   Button as UIButton,
+  HStack,
   Host,
   Picker,
   Text as UIText,
+  VStack,
   buttonStyle,
   controlSize,
   disabled as disabledModifier,
+  frame,
   pickerStyle,
   tag,
   tint,
@@ -65,6 +68,8 @@ import {
 // rendered with WebGPU.
 
 const QUAD_VERTEX_COUNT = 6;
+const COMMAND_BUTTON_GAP = 8;
+const COMMAND_BUTTON_HEIGHT = 44;
 const MODEL_VIEW_MODES = [
   { label: 'Color', value: 0 },
   { label: 'Depth', value: 1 },
@@ -168,6 +173,8 @@ type CaptureStatus =
 
 const DEFAULT_VIEWER_STATE: ViewerState = {
   distanceScale: 1,
+  panX: 0,
+  panY: 0,
   pitch: 0.34,
   yaw: 0,
 };
@@ -192,6 +199,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const viewerRef = React.useRef<ViewerState>(DEFAULT_VIEWER_STATE);
   const viewerGestureStartRef = React.useRef<ViewerState>(DEFAULT_VIEWER_STATE);
   const pinchDistanceStartRef = React.useRef<number | null>(null);
+  const panMidpointStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [session, setSession] = React.useState<WebXRSession | null>(null);
   const [status, setStatus] = React.useState<CaptureStatus>('checking');
   const [support, setSupport] = React.useState('checking WebXR camera/depth support');
@@ -213,6 +221,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     ? Math.max(360, Math.min(windowWidth - 448, 980, Math.max(360, windowHeight - 190) * 4 / 3))
     : Math.min(Math.max(288, windowWidth - 32), 430);
   const stageHeight = Math.round(isDesktop ? stageWidth * 3 / 4 : stageWidth * 4 / 3);
+  const commandButtonWidth = Math.floor((stageWidth - COMMAND_BUTTON_GAP) / 2);
 
   React.useEffect(() => {
     viewerRef.current = viewer;
@@ -294,6 +303,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     viewerRef.current = DEFAULT_VIEWER_STATE;
     viewerGestureStartRef.current = DEFAULT_VIEWER_STATE;
     pinchDistanceStartRef.current = null;
+    panMidpointStartRef.current = null;
     setViewer(DEFAULT_VIEWER_STATE);
   }
 
@@ -371,7 +381,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   async function captureModel(): Promise<void> {
-    const nextModel = buildModelFromFusion(fusionRef.current, keyframeCountRef.current);
+    const nextModel = buildPreviewModel();
     if (!nextModel || nextModel.surfelCount === 0) {
       setError('No valid depth samples have been captured yet.');
       return;
@@ -383,6 +393,21 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setSaveInfo('ready to save .ply');
     setStatus('captured');
     await stopActiveSession();
+  }
+
+  function previewModel(): void {
+    const nextModel = buildPreviewModel();
+    if (!nextModel || nextModel.surfelCount === 0) {
+      setError('No valid depth samples have been captured yet.');
+      return;
+    }
+    publishModel(nextModel);
+    setModelInfo(`preview: ${formatModelInfo(nextModel)}`);
+    setQualityInfo(formatQualityInfo(nextModel));
+  }
+
+  function buildPreviewModel(): CaptureModel | null {
+    return buildModelFromFusion(fusionRef.current, keyframeCountRef.current);
   }
 
   // @ref LLP 0020#privacy-and-permissions - Export is an explicit user action
@@ -432,9 +457,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const running = session !== null;
   const capturedModelAvailable = status === 'captured' && model !== null;
   const canStart = status === 'idle' || status === 'captured';
+  const transitioning = status === 'requesting' || status === 'ending';
+  const canPreview = liveSurfelCount > 0 && !transitioning;
   const canCapture = status === 'scanning' && liveSurfelCount > 0;
   const canSave = capturedModelAvailable && !saving;
-  const transitioning = status === 'requesting' || status === 'ending';
   const unsupported = status === 'unsupported';
   const displayError = error ?? lidarError;
   const badgeState = (() => {
@@ -455,15 +481,23 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         onPanResponderGrant: (event) => {
           viewerGestureStartRef.current = viewerRef.current;
           pinchDistanceStartRef.current = touchDistance(event.nativeEvent.touches);
+          panMidpointStartRef.current = touchMidpoint(event.nativeEvent.touches);
         },
         onPanResponderMove: (event, gesture) => {
           if (!model) return;
           const start = viewerGestureStartRef.current;
-          const pinchDistance = touchDistance(event.nativeEvent.touches);
+          const touches = event.nativeEvent.touches;
+          const pinchDistance = touchDistance(touches);
+          const midpoint = touchMidpoint(touches);
           if (pinchDistance !== null && pinchDistanceStartRef.current !== null) {
+            const startMidpoint = panMidpointStartRef.current ?? midpoint;
+            const panDx = midpoint && startMidpoint ? midpoint.x - startMidpoint.x : 0;
+            const panDy = midpoint && startMidpoint ? midpoint.y - startMidpoint.y : 0;
             setViewer({
               ...start,
               distanceScale: clamp(start.distanceScale * pinchDistanceStartRef.current / pinchDistance, 0.45, 2.4),
+              panX: clamp(start.panX - panDx * 0.0022, -1.6, 1.6),
+              panY: clamp(start.panY + panDy * 0.0022, -1.6, 1.6),
             });
             return;
           }
@@ -475,9 +509,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         },
         onPanResponderRelease: () => {
           pinchDistanceStartRef.current = null;
+          panMidpointStartRef.current = null;
         },
         onPanResponderTerminate: () => {
           pinchDistanceStartRef.current = null;
+          panMidpointStartRef.current = null;
         },
         onStartShouldSetPanResponder: (event) => model !== null && event.nativeEvent.touches.length > 1,
       }),
@@ -610,8 +646,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           );
           const uniforms = new Float32Array(20);
           uniforms.set(viewProjection, 0);
-          uniforms[16] = 10 / Math.max(width, 1);
-          uniforms[17] = 10 / Math.max(height, 1);
+          uniforms[16] = 5.5 / Math.max(width, 1);
+          uniforms[17] = 5.5 / Math.max(height, 1);
           uniforms[18] = elapsed;
           uniforms[19] = modelViewModeRef.current;
           device.queue.writeBuffer(uniformBuffer, 0, uniforms);
@@ -714,7 +750,9 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
               </View>
               <View style={styles.stageReadout}>
                 <Text style={styles.stageReadoutLabel}>MODEL</Text>
-                <Text style={styles.stageReadoutValue}>{model ? `${model.surfelCount}` : liveSurfelCount}</Text>
+                <Text style={styles.stageReadoutValue}>
+                  {status === 'scanning' ? liveSurfelCount : model ? `${model.surfelCount}` : liveSurfelCount}
+                </Text>
                 <Text style={styles.stageReadoutSub}>surfels</Text>
               </View>
               <View style={styles.coveragePanel}>
@@ -730,36 +768,46 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           }
           controls={
             <>
-              <View style={[styles.commandRow, { width: stageWidth }]}>
-                <CommandButton
-                  disabled={transitioning || (!running && !canStart) || unsupported}
-                  icon={running ? 'stop.fill' : 'play.fill'}
-                  label={running ? 'Stop' : 'Start'}
-                  onPress={running ? () => void stopSession() : () => void startSession()}
-                  tone={running ? 'danger' : 'primary'}
-                />
-                <CommandButton
-                  disabled={!canCapture}
-                  icon="camera.fill"
-                  label="Capture"
-                  onPress={() => void captureModel()}
-                  tone="primary"
-                />
-                <CommandButton
-                  disabled={!canSave}
-                  icon="square.and.arrow.down"
-                  label={saving ? 'Saving' : 'Save'}
-                  onPress={() => void saveModel()}
-                  tone="primary"
-                />
-                <CommandButton
-                  disabled={transitioning}
-                  icon="arrow.counterclockwise"
-                  label={capturedModelAvailable ? 'Recenter' : 'Reset'}
-                  onPress={capturedModelAvailable ? resetViewer : resetCapture}
-                  tone="secondary"
-                />
-              </View>
+              <Host colorScheme="dark" style={[styles.commandHost, { width: stageWidth }]}>
+                <VStack spacing={COMMAND_BUTTON_GAP}>
+                  <HStack spacing={COMMAND_BUTTON_GAP}>
+                    <CommandButton
+                      disabled={!canCapture}
+                      icon="camera.fill"
+                      label="Capture"
+                      onPress={() => void captureModel()}
+                      tone="primary"
+                      width={commandButtonWidth}
+                    />
+                    <CommandButton
+                      disabled={!canPreview}
+                      icon="eye.fill"
+                      label="Preview"
+                      onPress={previewModel}
+                      tone="preview"
+                      width={commandButtonWidth}
+                    />
+                  </HStack>
+                  <HStack spacing={COMMAND_BUTTON_GAP}>
+                    <CommandButton
+                      disabled={!canSave}
+                      icon="square.and.arrow.down"
+                      label={saving ? 'Saving' : 'Save'}
+                      onPress={() => void saveModel()}
+                      tone="primary"
+                      width={commandButtonWidth}
+                    />
+                    <CommandButton
+                      disabled={transitioning}
+                      icon="arrow.counterclockwise"
+                      label={capturedModelAvailable ? 'Recenter' : 'Reset'}
+                      onPress={capturedModelAvailable ? resetViewer : resetCapture}
+                      tone="reset"
+                      width={commandButtonWidth}
+                    />
+                  </HStack>
+                </VStack>
+              </Host>
               {model ? (
                 // @ref LLP 0020#model-view - Model-view exposes inspection
                 // modes for camera color, geometric depth, and fused normals.
@@ -960,30 +1008,36 @@ function CommandButton({
   label,
   onPress,
   tone,
+  width,
 }: {
   disabled: boolean;
   icon: SFSymbol;
   label: string;
   onPress: () => void;
-  tone: 'danger' | 'primary' | 'secondary';
+  tone: 'danger' | 'preview' | 'primary' | 'reset';
+  width: number;
 }): React.JSX.Element {
   const prominent = tone === 'primary' || tone === 'danger';
-  const tintColor = tone === 'danger' ? '#ff453a' : tone === 'primary' ? '#14b8a6' : '#94a3b8';
+  const tintColor = (() => {
+    if (tone === 'danger') return '#ff453a';
+    if (tone === 'preview') return '#38bdf8';
+    if (tone === 'reset') return '#f59e0b';
+    return '#14b8a6';
+  })();
   return (
-    <Host colorScheme="dark" style={styles.commandHost}>
-      <UIButton
-        label={label}
-        onPress={disabled ? undefined : onPress}
-        role={tone === 'danger' ? 'destructive' : 'default'}
-        systemImage={icon}
-        modifiers={[
-          buttonStyle(prominent ? 'borderedProminent' : 'bordered'),
-          controlSize('large'),
-          tint(tintColor),
-          disabledModifier(disabled),
-        ]}
-      />
-    </Host>
+    <UIButton
+      label={label}
+      onPress={disabled ? undefined : onPress}
+      role={tone === 'danger' ? 'destructive' : 'default'}
+      systemImage={icon}
+      modifiers={[
+        buttonStyle(prominent ? 'borderedProminent' : 'bordered'),
+        controlSize('regular'),
+        frame({ height: COMMAND_BUTTON_HEIGHT, width }),
+        tint(tintColor),
+        disabledModifier(disabled),
+      ]}
+    />
   );
 }
 
@@ -1073,6 +1127,16 @@ function touchDistance(touches: readonly { pageX: number; pageY: number }[]): nu
   const [a, b] = touches;
   if (!a || !b) return null;
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+}
+
+function touchMidpoint(touches: readonly { pageX: number; pageY: number }[]): { x: number; y: number } | null {
+  if (touches.length < 2) return null;
+  const [a, b] = touches;
+  if (!a || !b) return null;
+  return {
+    x: (a.pageX + b.pageX) / 2,
+    y: (a.pageY + b.pageY) / 2,
+  };
 }
 
 const styles = StyleSheet.create({
@@ -1202,15 +1266,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     height: 5,
   },
-  commandRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
   commandHost: {
-    flexBasis: '48%',
-    flexGrow: 1,
-    minHeight: 42,
+    minHeight: COMMAND_BUTTON_HEIGHT * 2 + COMMAND_BUTTON_GAP,
   },
   modeControl: {
     gap: 6,
