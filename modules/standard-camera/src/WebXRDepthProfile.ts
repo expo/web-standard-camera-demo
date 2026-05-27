@@ -528,6 +528,7 @@ export class WebXRSession extends EventTarget {
   #lastProfileARFrameNumber = 0;
   #lastProfileDepthFrameNumber = 0;
   #deliveredFramePolls = 0;
+  #nativeFrameErrorPolls = 0;
   #noFramePolls = 0;
   #staleFramePolls = 0;
   #nativeTimestampOriginMs: number | null = null;
@@ -684,7 +685,18 @@ export class WebXRSession extends EventTarget {
       }
       // @ref LLP 0013#xr-camera-resolution - The WebXR profile owns this
       // CPU-visible camera image size as a private implementation detail.
-      const nativeFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame();
+      let nativeFrame: NativeLiDARDepthFrame | null = null;
+      try {
+        nativeFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame();
+      } catch (e) {
+        // @ref LLP 0020#testing-and-validation - A native bridge/frame-fetch
+        // exception happens before the app's XR frame callback, so route-level
+        // scan-loop diagnostics cannot see it. Keep polling and log the failure.
+        this.#nativeFrameErrorPolls += 1;
+        this.#maybeLogFramePumpProfile('native-frame-error', null, e);
+        scheduled.rafId = globalThis.requestAnimationFrame(pump);
+        return;
+      }
       if (!nativeFrame) {
         this.#noFramePolls += 1;
         this.#maybeLogFramePumpProfile('no-frame', null);
@@ -716,8 +728,9 @@ export class WebXRSession extends EventTarget {
   }
 
   #maybeLogFramePumpProfile(
-    reason: 'delivered-frame' | 'no-frame' | 'stale-frame',
-    nativeFrame: NativeLiDARDepthFrame | null
+    reason: 'delivered-frame' | 'native-frame-error' | 'no-frame' | 'stale-frame',
+    nativeFrame: NativeLiDARDepthFrame | null,
+    error?: unknown
   ): void {
     const current = now();
     if (current - this.#lastFramePumpProfileLoggedAtMs < XR_FRAME_PUMP_PROFILE_INTERVAL_MS) {
@@ -734,8 +747,11 @@ export class WebXRSession extends EventTarget {
       depthFrameArFrameNumber: nativeFrame?.depthFrameArFrameNumber ?? 0,
       depthFrameDelta: Math.max(0, latestFrameNumber - this.#lastProfileDepthFrameNumber),
       depthMisses: nativeFrame?.depthMisses ?? 0,
+      errorMessage: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
+      errorName: error instanceof Error ? error.name : error === undefined ? undefined : 'Error',
       lastDeliveredFrameNumber: this.#lastDeliveredFrameNumber,
       latestFrameNumber,
+      nativeFrameErrorPolls: this.#nativeFrameErrorPolls,
       noFramePolls: this.#noFramePolls,
       reason,
       staleFramePolls: this.#staleFramePolls,
@@ -743,6 +759,7 @@ export class WebXRSession extends EventTarget {
     this.#lastProfileARFrameNumber = arFrameNumber;
     this.#lastProfileDepthFrameNumber = latestFrameNumber;
     this.#deliveredFramePolls = 0;
+    this.#nativeFrameErrorPolls = 0;
     this.#noFramePolls = 0;
     this.#staleFramePolls = 0;
   }

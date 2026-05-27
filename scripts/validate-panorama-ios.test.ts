@@ -676,6 +676,36 @@ test('panorama validator diagnoses scan loop scheduling stops', () => {
   );
 });
 
+test('panorama validator diagnoses native WebXR frame fetch errors', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 1,
+      retainedSamples: 781,
+      surfelCount: 781,
+    },
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      deliveredFramePolls: 0,
+      errorMessage: 'undefined is not a function',
+      errorName: 'TypeError',
+      lastDeliveredFrameNumber: 1,
+      latestFrameNumber: 0,
+      nativeFrameErrorPolls: 3,
+      noFramePolls: 0,
+      reason: 'native-frame-error',
+      staleFramePolls: 0,
+    },
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'XR frame pump: native-frame-error, depth frame 0 delivered 1, AR frame 0 (+0), depth misses 0 consecutive 0, error TypeError: undefined is not a function, delivered polls 0, native errors 3, stale polls 0'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: WebXR native frame fetch threw after 1 keyframe(s): TypeError: undefined is not a function'
+  );
+});
+
 test('panorama validator distinguishes delivered WebXR frames from stale polling', () => {
   const seen = {
     PANORAMIC_SCAN_STATS: {
@@ -704,7 +734,7 @@ test('panorama validator distinguishes delivered WebXR frames from stale polling
   const summary = panoramaBottleneckSummary(seen);
 
   expect(summary).toContain(
-    'XR frame pump: delivered-frame, depth frame 44 delivered 44, AR frame 48 (+24), depth misses 0 consecutive 0, delivered polls 22, stale polls 1'
+    'XR frame pump: delivered-frame, depth frame 44 delivered 44, AR frame 48 (+24), depth misses 0 consecutive 0, delivered polls 22, native errors 0, stale polls 1'
   );
   expect(summary).toContain(
     'First-frame diagnosis: WebXR frames are still being delivered (22 polls), but post-first frames are not accepted by the panorama keyframe gates; rejected too-similar 12, too-fast 9'
@@ -737,7 +767,7 @@ test('panorama validator distinguishes ARKit frame delivery from stale scene-dep
   const summary = panoramaBottleneckSummary(seen);
 
   expect(summary).toContain(
-    'XR frame pump: stale-frame, depth frame 1 delivered 1, AR frame 76 (+72), depth AR frame 4 lag 72, depth misses 70 consecutive 70, delivered polls 1, stale polls 89'
+    'XR frame pump: stale-frame, depth frame 1 delivered 1, AR frame 76 (+72), depth AR frame 4 lag 72, depth misses 70 consecutive 70, delivered polls 1, native errors 0, stale polls 89'
   );
   expect(summary).toContain(
     'First-frame diagnosis: ARKit camera frames are still arriving (+72), but WebXR scene-depth snapshots are stuck on depth frame 1; last depth came from AR frame 4, lag 72, depth misses 70 consecutive 70; this points to native scene-depth starvation rather than JS keyframe rejection'

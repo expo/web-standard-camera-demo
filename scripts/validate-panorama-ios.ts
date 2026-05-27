@@ -1553,7 +1553,9 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `depth frame ${numberField(framePump, 'latestFrameNumber')} delivered ${numberField(framePump, 'lastDeliveredFrameNumber')}, ` +
       `AR frame ${arFrameNumber} (+${numberField(framePump, 'arFrameDelta')})${depthARFrameDetail}, ` +
       `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}, ` +
+      optionalErrorDetail(framePump) +
       `delivered polls ${numberField(framePump, 'deliveredFramePolls')}, ` +
+      `native errors ${numberField(framePump, 'nativeFrameErrorPolls')}, ` +
       `stale polls ${numberField(framePump, 'staleFramePolls')}`
     );
   }
@@ -1611,6 +1613,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     const noFramePolls = numberField(framePump, 'noFramePolls');
     const staleFramePolls = numberField(framePump, 'staleFramePolls');
     const reason = stringField(framePump, 'reason') || 'unknown';
+    if (reason === 'native-frame-error') {
+      const errorName = stringField(framePump, 'errorName') || 'Error';
+      const errorMessage = stringField(framePump, 'errorMessage') || 'see frame pump profile';
+      return `First-frame diagnosis: WebXR native frame fetch threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}`;
+    }
     if (deliveredFramePolls <= 1 && (noFramePolls > 0 || staleFramePolls > 0)) {
       const arFrameDelta = numberField(framePump, 'arFrameDelta');
       const depthFrameDelta = numberField(framePump, 'depthFrameDelta');
@@ -1798,6 +1805,12 @@ function formatPercent(value: number): string {
 
 function optionalCountSuffix(count: number, label: string): string {
   return count > 0 ? `, ${count} ${label}` : '';
+}
+
+function optionalErrorDetail(metric: Record<string, unknown>): string {
+  const errorName = stringField(metric, 'errorName');
+  const errorMessage = stringField(metric, 'errorMessage');
+  return errorName || errorMessage ? `error ${errorName || 'Error'}: ${errorMessage || 'unknown'}, ` : '';
 }
 
 function formatMeters(value: number): string {
