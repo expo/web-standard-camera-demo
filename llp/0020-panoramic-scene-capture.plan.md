@@ -106,6 +106,8 @@ Implemented:
   The PLY header vertex count is derived from the actually serialized surfel
   rows, so the saved artifact stays self-consistent if a future model buffer is
   preallocated or truncated.
+  The PLY comments include keyframe count and model bounds so exported scans
+  remain self-describing outside the app.
   The PLY vertices preserve surfel radius, fused weight, and observation count
   in addition to position, normal, and color, so the saved file carries the
   display model's splat metadata rather than just bare points.

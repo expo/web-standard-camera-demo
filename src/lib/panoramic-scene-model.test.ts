@@ -265,6 +265,9 @@ test('serializeModelAsPly emits vertex colors and normals for Files export', () 
   const ply = serializeModelAsPly(model!);
 
   expect(ply).toContain('format ascii 1.0\n');
+  expect(ply).toContain('comment keyframes 1\n');
+  expect(ply).toContain('comment bounds_min 0.00000 0.00000 -1.00000\n');
+  expect(ply).toContain('comment bounds_max 0.00000 0.00000 -1.00000\n');
   expect(ply).toContain('element vertex 1\n');
   expect(ply).toContain('property float radius\n');
   expect(ply).toContain('property float nx\n');
