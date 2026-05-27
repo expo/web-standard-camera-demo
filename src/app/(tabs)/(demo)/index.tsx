@@ -27,7 +27,6 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         description="A live camera shader playground that runs entirely through WebGPU."
         detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL effects"
         href="/shader-lens"
-        status="ready"
         title="Shader lens"
       />
 
@@ -36,7 +35,6 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         description="A tiny no-WASM classifier that runs WGSL compute over the live camera texture."
         detail="getUserMedia -> GPUTexture -> WGSL compute -> class scores"
         href="/neural-lens"
-        status="ready"
         title="Neural lens"
       />
 
@@ -45,7 +43,6 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         description="ARKit camera frames and LiDAR scene depth flow through a tiny navigator.xr profile, then WebGPU visualizes focus planes and foreground masks."
         detail="navigator.xr -> XRFrame depth/camera bytes -> GPUTextures -> WGSL"
         href="/lidar-depth-webxr"
-        status="experimental"
         title="WebXR LiDAR depth"
       />
 
@@ -63,7 +60,6 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         description="A spinning WebGPU cube textured with frames from the shared camera stream."
         detail="getUserMedia -> ImageCapture.grabFrame() -> GPUTexture -> WGSL"
         href="/cube"
-        status="ready"
         title="Cube of cameras"
       />
     </ScrollView>

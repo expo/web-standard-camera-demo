@@ -11,7 +11,7 @@ export interface DemoChoiceCardProps {
   description: string;
   detail: string;
   href: Href;
-  status: string;
+  status?: string;
   title: string;
 }
 
@@ -53,9 +53,11 @@ export function DemoChoiceCard({
             <View style={styles.content}>
               <View style={styles.headerRow}>
                 <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
-                <View style={[styles.statusPill, { borderColor: accentColor }]}>
-                  <Text style={[styles.statusText, { color: theme.textSecondary }]}>{status}</Text>
-                </View>
+                {status ? (
+                  <View style={[styles.statusPill, { borderColor: accentColor }]}>
+                    <Text style={[styles.statusText, { color: theme.textSecondary }]}>{status}</Text>
+                  </View>
+                ) : null}
               </View>
               <Text style={[styles.description, { color: theme.text }]}>{description}</Text>
               <Text style={[styles.detail, { color: theme.textSecondary }]}>{detail}</Text>
