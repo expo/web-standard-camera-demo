@@ -53,11 +53,14 @@ import {
   panoramicCoverageKey,
   panoramicCoveragePercent,
   panoramicCoverageSectors,
+  panoramicDepthPreferenceFromSearchParam,
+  panoramicDepthTypeRequestForPreference,
   performanceNow,
   preflightMeshSurfelsForFusion,
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
   shouldPublishLiveModelSnapshot,
+  shouldRequestPanoramicMeshDetection,
   shouldScheduleNextXRScanFrame,
   shouldSkipCoveredPanoramicSector,
   summarizeCaptureGeometry,
@@ -71,6 +74,7 @@ import {
   type LiveModelSnapshotPublishDecision,
   type MeshSurfelPreflightResult,
   type KeyframeSnapshot,
+  type PanoramicDepthPreference,
   type PanoramicCaptureStatus,
   type SurfelFusionAccumulator,
   type Vec3,
@@ -251,7 +255,23 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { adapter, device } = useDevice();
   const { lidarError, lidarStatus } = useCamera();
-  const { autorun } = useLocalSearchParams<{ autorun?: string }>();
+  const { autorun, depth, mesh } = useLocalSearchParams<{
+    autorun?: string;
+    depth?: string;
+    mesh?: string;
+  }>();
+  const depthPreference = React.useMemo(
+    () => panoramicDepthPreferenceFromSearchParam(depth),
+    [depth]
+  );
+  const depthTypeRequest = React.useMemo(
+    () => panoramicDepthTypeRequestForPreference(depthPreference),
+    [depthPreference]
+  );
+  const meshDetectionRequested = React.useMemo(
+    () => shouldRequestPanoramicMeshDetection(mesh),
+    [mesh]
+  );
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const sessionRef = React.useRef<WebXRSession | null>(null);
   const xrRafRef = React.useRef<number | null>(null);
@@ -526,12 +546,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       avgLivePublishMs: roundMetric(stats.livePublishMsTotal / Math.max(stats.acceptedKeyframes, 1)),
       avgPoseMs: roundMetric(stats.poseMsTotal / Math.max(stats.frameCount, 1)),
       coveragePercent: roundMetric(panoramicCoveragePercent(coverageSectorsRef.current), 1),
+      depthPreference,
       depthInfoRequests: stats.depthInfoRequests,
       depthMisses: stats.depthMisses,
       depthPrecheckSkips: stats.depthPrecheckSkips,
       elapsedMs: roundMetric(elapsedMs),
       frameCount: stats.frameCount,
       maxAppendMs: roundMetric(stats.maxAppendMs),
+      meshRequested: meshDetectionRequested,
       newVoxelCount: stats.totalNewVoxelCount,
       newVoxelPercent: roundMetric(
         100 * stats.totalNewVoxelCount / Math.max(stats.totalNewVoxelCount + stats.totalUpdatedVoxelCount, 1),
@@ -543,6 +565,24 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       retainedSamples: surfelCountRef.current,
       scanFps: roundMetric(1000 * stats.frameCount / Math.max(elapsedMs, 1), 1),
       updatedVoxelCount: stats.totalUpdatedVoxelCount,
+    }));
+  }
+
+  function logScanConfig(
+    session: WebXRSession,
+    requestedDepthPreference: PanoramicDepthPreference,
+    requestedDepthTypes: readonly string[],
+    requestedMesh: boolean
+  ): void {
+    // @ref LLP 0020#testing-and-validation - Physical profile-only runs can
+    // force raw depth or disable mesh detection to isolate whether a one-frame
+    // scan is caused by ARKit scene-depth smoothing, mesh reconstruction, or the
+    // JS keyframe gates.
+    console.log('PANORAMIC_SCAN_CONFIG', JSON.stringify({
+      depthPreference: requestedDepthPreference,
+      depthTypeRequest: requestedDepthTypes,
+      meshRequested: requestedMesh,
+      sessionDepthType: session.depthType ?? null,
     }));
   }
 
@@ -604,14 +644,15 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       const nextSession = await runWithWebXRUserActivation(() =>
         xr.requestSession('immersive-ar', {
           requiredFeatures: ['depth-sensing', 'camera-access'],
-          optionalFeatures: ['mesh-detection'],
+          optionalFeatures: meshDetectionRequested ? ['mesh-detection'] : [],
           depthSensing: {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
             // @ref LLP 0020#webxr-depth-geometry-unprojection - The panorama
-            // is a deliberate slow 180-degree sweep; prefer WebXR smoothed
-            // depth for stable scene coordinates and fall back to raw depth.
-            depthTypeRequest: ['smooth', 'raw'],
+            // is a deliberate slow 180-degree sweep; normal runs prefer WebXR
+            // smoothed depth, while profile-only deep links can force raw first
+            // to isolate ARKit scene-depth starvation from smoothing.
+            depthTypeRequest: [...depthTypeRequest],
             matchDepthView: true,
           },
           cameraAccess: {
@@ -623,6 +664,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       );
       resetCapture();
       sessionRef.current = nextSession;
+      logScanConfig(nextSession, depthPreference, depthTypeRequest, meshDetectionRequested);
       setSession(nextSession);
       setCaptureStatus('scanning');
       setFrameInfo(`depth: ${nextSession.depthType ?? 'none'} - waiting for depth frames`);

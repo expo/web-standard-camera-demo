@@ -31,6 +31,8 @@ import {
   panoramicCoverageKey,
   panoramicCoveragePercent,
   panoramicCoverageSectors,
+  panoramicDepthPreferenceFromSearchParam,
+  panoramicDepthTypeRequestForPreference,
   sampleDepthMeters,
   sampleCameraColor,
   SAMPLE_GRID_X,
@@ -39,6 +41,7 @@ import {
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
   shouldPublishLiveModelSnapshot,
+  shouldRequestPanoramicMeshDetection,
   shouldScheduleNextXRScanFrame,
   shouldSkipCoveredPanoramicSector,
   summarizeCaptureGeometry,
@@ -1508,6 +1511,22 @@ test('observedDepthSurfelCount uses preflight surface density when append skips 
   expect(observedDepthSurfelCount(96, 48)).toBe(96);
   expect(observedDepthSurfelCount(Number.NaN, 24.9)).toBe(24);
   expect(observedDepthSurfelCount(12.8, null)).toBe(12);
+});
+
+test('panoramic profiling query helpers isolate depth and mesh variables', () => {
+  expect(panoramicDepthPreferenceFromSearchParam(undefined)).toBe('default');
+  expect(panoramicDepthPreferenceFromSearchParam('raw')).toBe('raw');
+  expect(panoramicDepthPreferenceFromSearchParam(['smooth'])).toBe('smooth');
+  expect(panoramicDepthPreferenceFromSearchParam('smoothed')).toBe('smooth');
+  expect(panoramicDepthPreferenceFromSearchParam('unknown')).toBe('default');
+  expect(panoramicDepthTypeRequestForPreference('default')).toEqual(['smooth', 'raw']);
+  expect(panoramicDepthTypeRequestForPreference('smooth')).toEqual(['smooth', 'raw']);
+  expect(panoramicDepthTypeRequestForPreference('raw')).toEqual(['raw', 'smooth']);
+  expect(shouldRequestPanoramicMeshDetection(undefined)).toBe(true);
+  expect(shouldRequestPanoramicMeshDetection('0')).toBe(false);
+  expect(shouldRequestPanoramicMeshDetection('false')).toBe(false);
+  expect(shouldRequestPanoramicMeshDetection(['off'])).toBe(false);
+  expect(shouldRequestPanoramicMeshDetection('1')).toBe(true);
 });
 
 test('live model snapshot publishing favors fresh previews until build cost grows', () => {

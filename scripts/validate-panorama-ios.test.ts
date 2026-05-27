@@ -133,6 +133,21 @@ test('panorama validator records only valid required metrics from log lines', ()
   expect(seen.PANORAMIC_EXPORT_METRICS).toBeUndefined();
 });
 
+test('panorama validator reports scan configuration used for profile-only isolation runs', () => {
+  const seen = parseMetricLogText(`
+    PANORAMIC_SCAN_CONFIG {"depthPreference":"raw","depthTypeRequest":["raw","smooth"],"meshRequested":false,"sessionDepthType":"raw"}
+  `);
+
+  expect(seen.PANORAMIC_SCAN_CONFIG).toMatchObject({
+    depthPreference: 'raw',
+    meshRequested: false,
+    sessionDepthType: 'raw',
+  });
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'Scan config: depth preference raw, request [raw,smooth], session depth raw, mesh off'
+  );
+});
+
 test('panorama validator parses copied log text for offline profiling', () => {
   const seen = parseMetricLogText(`
  LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.68,"cameraColorPercent":100,"keyframes":23,"retainedSamples":12866,"surfelCount":830}

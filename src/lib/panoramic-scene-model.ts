@@ -38,6 +38,10 @@ const VOXEL_KEY_AXIS_SIZE = VOXEL_KEY_AXIS_OFFSET * 2;
 
 export type Vec3 = [number, number, number];
 
+export type PanoramicDepthType = 'raw' | 'smooth';
+
+export type PanoramicDepthPreference = 'default' | PanoramicDepthType;
+
 export interface CaptureModel {
   boundsMax: Vec3;
   boundsMin: Vec3;
@@ -203,6 +207,33 @@ export function observedDepthSurfelCount(appendedSurfels: number, preflightSurfe
   const appended = Number.isFinite(appendedSurfels) ? Math.max(0, Math.floor(appendedSurfels)) : 0;
   const observed = Number.isFinite(preflightSurfels) ? Math.max(0, Math.floor(preflightSurfels ?? 0)) : 0;
   return Math.max(appended, observed);
+}
+
+export function panoramicDepthPreferenceFromSearchParam(
+  value: string | readonly string[] | null | undefined
+): PanoramicDepthPreference {
+  const normalized = firstSearchParam(value).toLowerCase();
+  if (normalized === 'raw') return 'raw';
+  if (normalized === 'smooth' || normalized === 'smoothed') return 'smooth';
+  return 'default';
+}
+
+export function panoramicDepthTypeRequestForPreference(
+  preference: PanoramicDepthPreference
+): readonly PanoramicDepthType[] {
+  return preference === 'raw' ? ['raw', 'smooth'] : ['smooth', 'raw'];
+}
+
+export function shouldRequestPanoramicMeshDetection(
+  value: string | readonly string[] | null | undefined
+): boolean {
+  const normalized = firstSearchParam(value).toLowerCase();
+  return normalized !== '0' && normalized !== 'false' && normalized !== 'no' && normalized !== 'off';
+}
+
+function firstSearchParam(value: string | readonly string[] | null | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return typeof value === 'string' ? value : '';
 }
 
 export function liveModelSnapshotIntervalMs(rawSampleCount: number, previousBuildMs: number): number {

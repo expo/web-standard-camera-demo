@@ -47,6 +47,7 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_NATIVE_PAYLOAD_PROFILE',
   'PANORAMIC_PREVIEW_METRICS',
   'PANORAMIC_RENDER_FRAME_PROFILE',
+  'PANORAMIC_SCAN_CONFIG',
   'PANORAMIC_SCAN_STATS',
   'PANORAMIC_XR_FRAME_PUMP_PROFILE',
   'PANORAMIC_XR_POSE_PROFILE',
@@ -67,6 +68,7 @@ export type OptionalMetricName =
   | 'PANORAMIC_NATIVE_PAYLOAD_PROFILE'
   | 'PANORAMIC_PREVIEW_METRICS'
   | 'PANORAMIC_RENDER_FRAME_PROFILE'
+  | 'PANORAMIC_SCAN_CONFIG'
   | 'PANORAMIC_SCAN_STATS'
   | 'PANORAMIC_XR_FRAME_PUMP_PROFILE'
   | 'PANORAMIC_XR_POSE_PROFILE';
@@ -371,7 +373,7 @@ The validator also prints optional profiling telemetry when it appears:
   PANORAMIC_KEYFRAME_REJECTION_PROFILE,
   PANORAMIC_MESH_PROFILE, PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE,
   PANORAMIC_NATIVE_PAYLOAD_PROFILE, PANORAMIC_PREVIEW_METRICS,
-  PANORAMIC_RENDER_FRAME_PROFILE, PANORAMIC_SCAN_STATS,
+  PANORAMIC_RENDER_FRAME_PROFILE, PANORAMIC_SCAN_CONFIG, PANORAMIC_SCAN_STATS,
   PANORAMIC_XR_FRAME_PUMP_PROFILE, and PANORAMIC_CAPTURE_GEOMETRY, plus
   PANORAMIC_XR_POSE_PROFILE when WebXR withholds viewer poses because native
   tracking is not normal.`);
@@ -1021,6 +1023,12 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
     return numberField(metric, 'frameCount') >= numberField(metric, 'acceptedKeyframes') &&
       numberField(metric, 'elapsedMs') >= 0;
   }
+  if (name === 'PANORAMIC_SCAN_CONFIG') {
+    return Array.isArray(metric.depthTypeRequest) &&
+      metric.depthTypeRequest.every((entry) => entry === 'raw' || entry === 'smooth') &&
+      typeof metric.meshRequested === 'boolean' &&
+      stringField(metric, 'depthPreference').length > 0;
+  }
   if (name === 'PANORAMIC_KEYFRAME_REJECTION_PROFILE') {
     return stringField(metric, 'reason').length > 0 &&
       numberField(metric, 'frameCount') >= 0 &&
@@ -1271,6 +1279,18 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
   const selectedTimings = timings.slice(0, Math.max(1, Math.floor(limit)));
   if (selectedTimings.length > 0) {
     lines.push(`Top timings: ${selectedTimings.map(formatTimingEntry).join('; ')}`);
+  }
+
+  const scanConfig = seen.PANORAMIC_SCAN_CONFIG;
+  if (scanConfig) {
+    const requestedDepthTypes = Array.isArray(scanConfig.depthTypeRequest)
+      ? scanConfig.depthTypeRequest.filter((entry) => typeof entry === 'string').join(',')
+      : 'unknown';
+    lines.push(
+      `Scan config: depth preference ${stringField(scanConfig, 'depthPreference') || 'unknown'}, ` +
+      `request [${requestedDepthTypes}], session depth ${stringField(scanConfig, 'sessionDepthType') || 'unknown'}, ` +
+      `mesh ${scanConfig.meshRequested === true ? 'requested' : 'off'}`
+    );
   }
 
   const keyframe = seen.PANORAMIC_KEYFRAME_PROFILE;

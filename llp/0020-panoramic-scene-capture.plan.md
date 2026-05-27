@@ -167,10 +167,11 @@ Implemented:
   starvation while ARKit camera frames continue. The WebXR frame-pump profiler
   SHOULD emit its first sample immediately instead of waiting for its periodic
   interval, because first-frame-only failures often happen before a second
-  profile window opens. The route accepts `?autorun=1` for physical-device
-  profiling runs so
+  profile window opens. The route accepts `?autorun=1`, `?depth=raw`, and
+  `?mesh=0` for physical-device profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
-  the normal Start Scan control for manual use. Live
+  the normal Start Scan control for manual use, and so profile-only logs can
+  isolate smooth-depth and mesh-reconstruction effects on frame continuity. Live
   snapshot publishing uses adaptive backoff after 10k retained samples and
   reports the selected refresh interval in telemetry; manual Preview and final
   Capture still force full model builds. Manual Preview yields a frame and
@@ -892,7 +893,9 @@ places each depth-map value in camera space with camera intrinsics, and ARKit
 documents smoothed scene depth as reducing frame-to-frame distance deltas. This
 demo expects the user to perform a deliberate slow 180-degree sweep, so the
 first choice should favor stable world-space surface coordinates and fall back
-to high-confidence raw scene depth only when smoothed depth is unavailable. The
+to high-confidence raw scene depth only when smoothed depth is unavailable. A
+profile-only deep link MAY request `["raw", "smooth"]` to test whether smoothed
+scene depth is the reason WebXR only delivers one useful surfel batch. The
 keyframe policy still rejects fast camera motion to limit lagged samples.
 `PANORAMIC_KEYFRAME_PROFILE` reports the selected `depthType` so
 physical-device logs can confirm which standard WebXR depth mode was active.
