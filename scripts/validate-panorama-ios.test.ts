@@ -606,6 +606,25 @@ test('panorama validator builds a durable profiling report payload', () => {
   expect(report.bottleneckSummary.join('\n')).toContain('live model build 64ms');
 });
 
+test('panorama validator surfaces scan loop callback errors', () => {
+  const seen = completeMetricSet({
+    PANORAMIC_KEYFRAME_REJECTION_PROFILE: {
+      errorMessage: 'undefined is not a function',
+      errorName: 'TypeError',
+      frameCount: 2,
+      keyframes: 1,
+      reason: 'scan-loop-error',
+      retainedSamples: 781,
+      rotationDeg: 0,
+      translationM: 0,
+    },
+  });
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'Keyframe rejection: scan-loop-error, 1 keyframes, frame 2, retained 781 samples, translation 0m, rotation 0deg, error TypeError: undefined is not a function'
+  );
+});
+
 function completeMetricSet(
   overrides: Partial<Record<keyof SeenMetrics, Record<string, unknown>>> = {}
 ): SeenMetrics {

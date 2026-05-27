@@ -1223,7 +1223,10 @@ separate ARKit depth starvation from JavaScript keyframe gating.
 skip reason with pose motion, retained surfel count, depth/miss counters, and
 depth/mesh preflight density when available, so a run that captures no new
 surfels can be distinguished as pose gating, depth starvation, or sparse
-surface contribution. Repeated keyframe,
+surface contribution. If the WebXR scan frame callback throws, the route SHOULD
+record a `scan-loop-error` rejection profile and keep scheduling frames while
+the same session is still scanning; a single transient callback error must not
+leave the visible preview stuck on the first accepted surfel batch. Repeated keyframe,
 preview, live-model, render-frame, upload, and native-payload telemetry is
 merged conservatively: the latest model counts are kept for
 capture/render/export consistency, while the worst observed timing, worst

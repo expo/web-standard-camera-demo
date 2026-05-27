@@ -1498,12 +1498,16 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       : observedDepthSurfels > 0
         ? `, observed depth ${observedDepthSurfels}`
         : '';
+    const errorMessage = stringField(rejectionProfile, 'errorMessage');
+    const errorDetail = errorMessage
+      ? `, error ${stringField(rejectionProfile, 'errorName') || 'Error'}: ${errorMessage}`
+      : '';
     lines.push(
       `Keyframe rejection: ${stringField(rejectionProfile, 'reason') || 'unknown'}, ` +
       `${numberField(rejectionProfile, 'keyframes')} keyframes, frame ${numberField(rejectionProfile, 'frameCount')}, ` +
       `retained ${numberField(rejectionProfile, 'retainedSamples')} samples, ` +
       `translation ${formatMeters(numberField(rejectionProfile, 'translationM'))}, ` +
-      `rotation ${formatNumber(numberField(rejectionProfile, 'rotationDeg'), 1)}deg${surfelDetail}`
+      `rotation ${formatNumber(numberField(rejectionProfile, 'rotationDeg'), 1)}deg${errorDetail}${surfelDetail}`
     );
   }
 

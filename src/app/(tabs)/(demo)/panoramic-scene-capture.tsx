@@ -58,6 +58,7 @@ import {
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
   shouldPublishLiveModelSnapshot,
+  shouldScheduleNextXRScanFrame,
   shouldSkipCoveredPanoramicSector,
   summarizeCaptureGeometry,
   SURFEL_STRIDE_BYTES,
@@ -1437,71 +1438,94 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const cameraBinding = new WebXRCPUCameraBinding(nextSession);
     const onFrame = (_time: DOMHighResTimeStamp, frame: WebXRFrame): void => {
       const frameWallTime = performanceNow();
-      const stats = scanStatsRef.current;
-      stats.frameCount += 1;
-      const poseStart = performanceNow();
-      const pose = frame.getViewerPose(referenceSpace);
-      stats.poseMsTotal += performanceNow() - poseStart;
-      const view = pose?.views[0];
-      if (!view) {
-        stats.poseMisses += 1;
-        maybeLogPeriodicScanStats();
-        xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
-        return;
-      }
-      maybeLogMeshProfile(frame);
-      // @ref LLP 0020#keyframe-policy - `predictedDisplayTime` describes when
-      // the native frame was captured/displayed. The panorama throttle uses JS
-      // callback wall time so delayed WebXR delivery does not collapse several
-      // scan candidates into the first keyframe's interval bucket.
-      const precheck = precheckKeyframePose(view.transform.matrix, frameWallTime);
-      if (!precheck) {
-        stats.depthPrecheckSkips += 1;
-        maybeLogPeriodicScanStats();
-        xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
-        return;
-      }
-      const depthInfoStart = performanceNow();
-      const depth = frame.getDepthInformation(view);
-      stats.depthInfoMsTotal += performanceNow() - depthInfoStart;
-      stats.depthInfoRequests += 1;
-      if (depth) {
-        let cachedCameraImage: WebXRCPUCameraImage | null | undefined;
-        const getCameraImage = (): WebXRCPUCameraImage | null => {
-          if (cachedCameraImage !== undefined) {
+      try {
+        const stats = scanStatsRef.current;
+        stats.frameCount += 1;
+        const poseStart = performanceNow();
+        const pose = frame.getViewerPose(referenceSpace);
+        stats.poseMsTotal += performanceNow() - poseStart;
+        const view = pose?.views[0];
+        if (!view) {
+          stats.poseMisses += 1;
+          maybeLogPeriodicScanStats();
+          return;
+        }
+        maybeLogMeshProfile(frame);
+        // @ref LLP 0020#keyframe-policy - `predictedDisplayTime` describes when
+        // the native frame was captured/displayed. The panorama throttle uses JS
+        // callback wall time so delayed WebXR delivery does not collapse several
+        // scan candidates into the first keyframe's interval bucket.
+        const precheck = precheckKeyframePose(view.transform.matrix, frameWallTime);
+        if (!precheck) {
+          stats.depthPrecheckSkips += 1;
+          maybeLogPeriodicScanStats();
+          return;
+        }
+        const depthInfoStart = performanceNow();
+        const depth = frame.getDepthInformation(view);
+        stats.depthInfoMsTotal += performanceNow() - depthInfoStart;
+        stats.depthInfoRequests += 1;
+        if (depth) {
+          let cachedCameraImage: WebXRCPUCameraImage | null | undefined;
+          const getCameraImage = (): WebXRCPUCameraImage | null => {
+            if (cachedCameraImage !== undefined) {
+              return cachedCameraImage;
+            }
+            const xrCamera = view.camera;
+            cachedCameraImage = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
             return cachedCameraImage;
-          }
-          const xrCamera = view.camera;
-          cachedCameraImage = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
-          return cachedCameraImage;
-        };
-        // @ref LLP 0017#xr-webgl-get-camera-image — This route uses the
-        // repo-local CPU binding analog to sample camera colors into surfels;
-        // no native camera side API is called outside the WebXR-shaped frame.
-        maybeCaptureKeyframe(
-          depth,
-          getCameraImage,
-          // @ref LLP 0013#xr-depth-information — XRDepthInformation includes
-          // XRViewGeometry; use the depth object's associated projection and
-          // transform for reconstruction instead of exposing native intrinsics.
-          depth.projectionMatrix,
-          depth.transform.matrix,
-          frameWallTime,
-          precheck,
-          frame,
-          referenceSpace
-        );
-      } else {
-        stats.depthMisses += 1;
-        maybeLogKeyframeRejectionProfile('depth-miss', {
-          cameraForward: roundVec3(precheck.forward),
-          cameraPosition: roundVec3(precheck.position),
-          rotationDeg: roundMetric(precheck.decision.rotationDeg, 1),
-          translationM: roundMetric(precheck.decision.translationM, 3),
+          };
+          // @ref LLP 0017#xr-webgl-get-camera-image — This route uses the
+          // repo-local CPU binding analog to sample camera colors into surfels;
+          // no native camera side API is called outside the WebXR-shaped frame.
+          maybeCaptureKeyframe(
+            depth,
+            getCameraImage,
+            // @ref LLP 0013#xr-depth-information — XRDepthInformation includes
+            // XRViewGeometry; use the depth object's associated projection and
+            // transform for reconstruction instead of exposing native intrinsics.
+            depth.projectionMatrix,
+            depth.transform.matrix,
+            frameWallTime,
+            precheck,
+            frame,
+            referenceSpace
+          );
+        } else {
+          stats.depthMisses += 1;
+          maybeLogKeyframeRejectionProfile('depth-miss', {
+            cameraForward: roundVec3(precheck.forward),
+            cameraPosition: roundVec3(precheck.position),
+            rotationDeg: roundMetric(precheck.decision.rotationDeg, 1),
+            translationM: roundMetric(precheck.decision.translationM, 3),
+          });
+        }
+        maybeLogPeriodicScanStats();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        recordScanRejection('scan-loop-error');
+        // @ref LLP 0020#testing-and-validation - A thrown frame callback used
+        // to stop recursive XR RAF scheduling, leaving a scan with only the
+        // first accepted surfel batch. Keep the loop alive and make the failure
+        // visible in copied physical-device logs.
+        maybeLogKeyframeRejectionProfile('scan-loop-error', {
+          errorMessage: message,
+          errorName: e instanceof Error ? e.name : 'Error',
+          frameTimeMs: roundMetric(frame.predictedDisplayTime),
         });
+        setError(`Scan loop error: ${message}`);
+      } finally {
+        if (shouldScheduleNextXRScanFrame({
+          captureInFlight: captureInFlightRef.current,
+          sessionEnded: nextSession.ended,
+          sessionMatches: sessionRef.current === nextSession,
+          status: statusRef.current,
+        })) {
+          xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
+        } else {
+          xrRafRef.current = null;
+        }
       }
-      maybeLogPeriodicScanStats();
-      xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
     };
     xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
   }

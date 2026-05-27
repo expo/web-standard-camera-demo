@@ -114,6 +114,13 @@ export interface LiveModelSnapshotPublishDecision {
   reason: 'initial' | 'no-keyframes' | 'stale' | 'throttled' | 'unchanged';
 }
 
+export interface XRScanFrameSchedulingInput {
+  captureInFlight: boolean;
+  sessionEnded: boolean;
+  sessionMatches: boolean;
+  status: PanoramicCaptureStatus;
+}
+
 export interface KeyframeSnapshot {
   forward: Vec3;
   position: Vec3;
@@ -237,6 +244,18 @@ export function shouldPublishLiveModelSnapshot({
     return { intervalMs, publish: false, reason: 'throttled' };
   }
   return { intervalMs, publish: true, reason: 'stale' };
+}
+
+export function shouldScheduleNextXRScanFrame({
+  captureInFlight,
+  sessionEnded,
+  sessionMatches,
+  status,
+}: XRScanFrameSchedulingInput): boolean {
+  return sessionMatches &&
+    !sessionEnded &&
+    !captureInFlight &&
+    (status === 'scanning' || status === 'building-model');
 }
 
 export function nextSurfelBufferCapacityBytes(requiredBytes: number): number {

@@ -39,6 +39,7 @@ import {
   serializeModelAsPly,
   shouldAcceptPanoramicKeyframe,
   shouldPublishLiveModelSnapshot,
+  shouldScheduleNextXRScanFrame,
   shouldSkipCoveredPanoramicSector,
   summarizeCaptureGeometry,
   surfelSampleWeight,
@@ -1560,6 +1561,39 @@ test('live model snapshot publishing favors fresh previews until build cost grow
     previousBuildMs: 0,
     rawSampleCount: 13500,
   })).toMatchObject({ intervalMs: 320, publish: true, reason: 'stale' });
+});
+
+test('XR scan frame scheduling survives preview work but not capture cancellation', () => {
+  expect(shouldScheduleNextXRScanFrame({
+    captureInFlight: false,
+    sessionEnded: false,
+    sessionMatches: true,
+    status: 'scanning',
+  })).toBe(true);
+  expect(shouldScheduleNextXRScanFrame({
+    captureInFlight: false,
+    sessionEnded: false,
+    sessionMatches: true,
+    status: 'building-model',
+  })).toBe(true);
+  expect(shouldScheduleNextXRScanFrame({
+    captureInFlight: true,
+    sessionEnded: false,
+    sessionMatches: true,
+    status: 'building-model',
+  })).toBe(false);
+  expect(shouldScheduleNextXRScanFrame({
+    captureInFlight: false,
+    sessionEnded: true,
+    sessionMatches: true,
+    status: 'scanning',
+  })).toBe(false);
+  expect(shouldScheduleNextXRScanFrame({
+    captureInFlight: false,
+    sessionEnded: false,
+    sessionMatches: false,
+    status: 'scanning',
+  })).toBe(false);
 });
 
 test('surfel buffer capacity grows in coarse chunks for WebGPU reuse', () => {
