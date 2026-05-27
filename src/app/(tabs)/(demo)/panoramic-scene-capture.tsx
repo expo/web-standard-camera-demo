@@ -357,10 +357,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           setStatus((current) => (current === 'captured' ? current : 'idle'));
         }
       });
-      void startXRLoop(nextSession).catch((e) => {
-        setStatus('error');
-        setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
-      });
+      startXRLoopSafely(nextSession);
     } catch (e) {
       sessionRef.current = null;
       setSession(null);
@@ -398,10 +395,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       const nextModel = buildPreviewModel();
       if (!nextModel || nextModel.surfelCount === 0) {
         if (captureSession && sessionRef.current === captureSession) {
-          void startXRLoop(captureSession).catch((e) => {
-            setStatus('error');
-            setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
-          });
+          startXRLoopSafely(captureSession);
         }
         setStatus(captureSession && sessionRef.current === captureSession ? 'scanning' : 'idle');
         setError('No valid depth samples have been captured yet.');
@@ -424,10 +418,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       }
     } catch (e) {
       if (captureSession && sessionRef.current === captureSession) {
-        void startXRLoop(captureSession).catch((loopError) => {
-          setStatus('error');
-          setError(loopError instanceof Error ? `${loopError.name}: ${loopError.message}` : String(loopError));
-        });
+        startXRLoopSafely(captureSession);
         setStatus('scanning');
       } else {
         setStatus('error');
@@ -961,6 +952,16 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
     };
     xrRafRef.current = nextSession.requestAnimationFrame(onFrame);
+  }
+
+  function startXRLoopSafely(nextSession: WebXRSession): void {
+    void startXRLoop(nextSession).catch((e) => {
+      if (sessionRef.current !== nextSession || nextSession.ended) {
+        return;
+      }
+      setStatus('error');
+      setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+    });
   }
 
   function publishModel(nextModel: CaptureModel | null): void {

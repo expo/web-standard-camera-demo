@@ -82,7 +82,8 @@ Implemented:
   publishing the frozen saveable model, which prevents duplicate Capture taps
   and makes the freeze/build boundary visible in the UI. The XR frame loop is
   cancelled before yielding to that state so no additional keyframes are
-  accepted after the Capture tap.
+  accepted after the Capture tap. Late errors from stale XR loop setup are
+  ignored once the session has been intentionally ended or replaced.
 - Scan preview: an explicit Preview action builds a temporary WebGPU model
   snapshot from the current incremental surfel fusion state without ending the
   WebXR session or enabling export. Preview is available only during scan mode;
