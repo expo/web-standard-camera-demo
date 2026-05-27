@@ -170,6 +170,7 @@ type CaptureStatus =
   | 'unsupported'
   | 'requesting'
   | 'scanning'
+  | 'building-model'
   | 'captured'
   | 'ending'
   | 'error';
@@ -191,6 +192,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const xrRafRef = React.useRef<number | null>(null);
   const fusionRef = React.useRef<SurfelFusionAccumulator>(createSurfelFusionAccumulator());
   const coverageSectorsRef = React.useRef<Set<string>>(new Set());
+  const captureInFlightRef = React.useRef(false);
   const keyframeRef = React.useRef<KeyframeSnapshot | null>(null);
   const keyframeCountRef = React.useRef(0);
   const modelRef = React.useRef<CaptureModel | null>(null);
@@ -384,18 +386,56 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   async function captureModel(): Promise<void> {
-    const nextModel = buildPreviewModel();
-    if (!nextModel || nextModel.surfelCount === 0) {
-      setError('No valid depth samples have been captured yet.');
-      return;
+    if (captureInFlightRef.current) return;
+    captureInFlightRef.current = true;
+    const captureSession = sessionRef.current;
+    cancelXRLoop();
+    setError(null);
+    setStatus('building-model');
+    setModelInfo('building captured model');
+    try {
+      await nextAnimationFrame();
+      const nextModel = buildPreviewModel();
+      if (!nextModel || nextModel.surfelCount === 0) {
+        if (captureSession && sessionRef.current === captureSession) {
+          void startXRLoop(captureSession).catch((e) => {
+            setStatus('error');
+            setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+          });
+        }
+        setStatus(captureSession && sessionRef.current === captureSession ? 'scanning' : 'idle');
+        setError('No valid depth samples have been captured yet.');
+        return;
+      }
+      publishModel(nextModel);
+      setModelInfo(formatModelInfo(nextModel));
+      setQualityInfo(formatQualityInfo(nextModel));
+      logCaptureMetrics(nextModel);
+      setSaveInfo('ready to save .ply');
+      setStatus('captured');
+      try {
+        await stopActiveSession();
+      } catch (stopError) {
+        setError(
+          `Capture succeeded, but ending the XR session failed. ${
+            stopError instanceof Error ? `${stopError.name}: ${stopError.message}` : String(stopError)
+          }`
+        );
+      }
+    } catch (e) {
+      if (captureSession && sessionRef.current === captureSession) {
+        void startXRLoop(captureSession).catch((loopError) => {
+          setStatus('error');
+          setError(loopError instanceof Error ? `${loopError.name}: ${loopError.message}` : String(loopError));
+        });
+        setStatus('scanning');
+      } else {
+        setStatus('error');
+      }
+      setError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+    } finally {
+      captureInFlightRef.current = false;
     }
-    publishModel(nextModel);
-    setModelInfo(formatModelInfo(nextModel));
-    setQualityInfo(formatQualityInfo(nextModel));
-    logCaptureMetrics(nextModel);
-    setSaveInfo('ready to save .ply');
-    setStatus('captured');
-    await stopActiveSession();
   }
 
   function previewModel(): void {
@@ -463,7 +503,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const running = session !== null;
   const capturedModelAvailable = status === 'captured' && model !== null;
   const canStart = status === 'idle' || status === 'captured';
-  const transitioning = status === 'requesting' || status === 'ending';
+  const transitioning = status === 'requesting' || status === 'building-model' || status === 'ending';
   const canPreview = status === 'scanning' && liveSurfelCount > 0 && !transitioning;
   const canCapture = status === 'scanning' && liveSurfelCount > 0;
   const canSave = capturedModelAvailable && !saving;
@@ -473,6 +513,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     if (status === 'error' || lidarStatus === 'error') return { label: 'XR error', style: styles.badgeWarn };
     if (unsupported) return { label: 'unsupported', style: styles.badgeWarn };
     if (status === 'scanning') return { label: 'scanning', style: styles.badgeLive };
+    if (status === 'building-model') return { label: 'building', style: styles.badgeWarn };
     if (status === 'captured') return { label: 'captured', style: styles.badgeLive };
     if (status === 'requesting') return { label: 'starting', style: styles.badgeWarn };
     return { label: 'ready', style: styles.badgeWarn };
@@ -1129,6 +1170,12 @@ function logKeyframeProfile({
 function modelFileName(): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `standard-camera-scene-${stamp}.ply`;
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
 }
 
 function touchDistance(touches: readonly { pageX: number; pageY: number }[]): number | null {

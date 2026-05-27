@@ -78,6 +78,11 @@ Implemented:
   only after the Documents file exists and reports a nonzero size.
 - `model-view`: renders the frozen surfel cloud with instanced WebGPU splats,
   orbit/pinch interaction, depth testing, and model statistics.
+- `building-model`: Capture moves through an explicit build state before
+  publishing the frozen saveable model, which prevents duplicate Capture taps
+  and makes the freeze/build boundary visible in the UI. The XR frame loop is
+  cancelled before yielding to that state so no additional keyframes are
+  accepted after the Capture tap.
 - Scan preview: an explicit Preview action builds a temporary WebGPU model
   snapshot from the current incremental surfel fusion state without ending the
   WebXR session or enabling export. Preview is available only during scan mode;
