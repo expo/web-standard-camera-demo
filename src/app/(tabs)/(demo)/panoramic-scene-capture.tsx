@@ -34,6 +34,7 @@ import {
   buildModelFromFusion,
   clamp,
   createSurfelFusionAccumulator,
+  derivePanoramicCaptureControls,
   extractForward,
   extractPosition,
   formatFilesLocation,
@@ -51,6 +52,7 @@ import {
   SURFEL_STRIDE_BYTES,
   type CaptureModel,
   type KeyframeSnapshot,
+  type PanoramicCaptureStatus,
   type SurfelFusionAccumulator,
   type ViewerState,
 } from '@/lib/panoramic-scene-model';
@@ -164,17 +166,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 }
 `;
 
-type CaptureStatus =
-  | 'idle'
-  | 'checking'
-  | 'unsupported'
-  | 'requesting'
-  | 'scanning'
-  | 'building-model'
-  | 'captured'
-  | 'ending'
-  | 'error';
-
 const DEFAULT_VIEWER_STATE: ViewerState = {
   distanceScale: 1,
   panX: 0,
@@ -198,7 +189,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const modelRef = React.useRef<CaptureModel | null>(null);
   const modelRevisionRef = React.useRef(0);
   const modelViewModeRef = React.useRef<ModelViewMode>(0);
-  const statusRef = React.useRef<CaptureStatus>('checking');
+  const statusRef = React.useRef<PanoramicCaptureStatus>('checking');
   const surfelCountRef = React.useRef(0);
   const supportCheckedRef = React.useRef(false);
   const viewerRef = React.useRef<ViewerState>(DEFAULT_VIEWER_STATE);
@@ -206,7 +197,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const pinchDistanceStartRef = React.useRef<number | null>(null);
   const panMidpointStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [session, setSession] = React.useState<WebXRSession | null>(null);
-  const [status, setStatus] = React.useState<CaptureStatus>('checking');
+  const [status, setStatus] = React.useState<PanoramicCaptureStatus>('checking');
   const [support, setSupport] = React.useState('checking WebXR camera/depth support');
   const [error, setError] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<CaptureModel | null>(null);
@@ -493,13 +484,20 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   const running = session !== null;
-  const capturedModelAvailable = status === 'captured' && model !== null;
-  const canStart = status === 'idle' || status === 'captured';
-  const transitioning = status === 'requesting' || status === 'building-model' || status === 'ending';
-  const canPreview = status === 'scanning' && liveSurfelCount > 0 && !transitioning;
-  const canCapture = status === 'scanning' && liveSurfelCount > 0;
-  const canSave = capturedModelAvailable && !saving;
-  const unsupported = status === 'unsupported';
+  const {
+    canCapture,
+    canPreview,
+    canSave,
+    canStart,
+    capturedModelAvailable,
+    transitioning,
+    unsupported,
+  } = derivePanoramicCaptureControls({
+    hasModel: model !== null,
+    liveSurfelCount,
+    saving,
+    status,
+  });
   const displayError = error ?? lidarError;
   const badgeState = (() => {
     if (status === 'error' || lidarStatus === 'error') return { label: 'XR error', style: styles.badgeWarn };

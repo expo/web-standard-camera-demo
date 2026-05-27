@@ -110,7 +110,7 @@ Implemented:
   `src/lib/panoramic-scene-model.ts` and are covered by Bun tests for depth
   unprojection, column-major transforms, BGRA color sampling, voxel fusion,
   WebXR-shaped RGB-D surfel extraction, PLY export, Files path formatting, and
-  matrix inversion.
+  capture-control gating.
 
 Not yet implemented:
 

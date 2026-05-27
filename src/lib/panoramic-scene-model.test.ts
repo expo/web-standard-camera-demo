@@ -6,6 +6,7 @@ import {
   buildModel,
   buildModelFromFusion,
   createSurfelFusionAccumulator,
+  derivePanoramicCaptureControls,
   formatFilesLocation,
   invertMatrix4,
   MAX_KEYFRAMES,
@@ -205,6 +206,54 @@ test('panoramic coverage does not double-count repeated directions', () => {
 
   expect(sectors.size).toBe(1);
   expect(panoramicCoveragePercent(sectors, options)).toBe(25);
+});
+
+test('derivePanoramicCaptureControls keeps preview scan-only and save capture-only', () => {
+  expect(derivePanoramicCaptureControls({
+    hasModel: false,
+    liveSurfelCount: 128,
+    saving: false,
+    status: 'scanning',
+  })).toMatchObject({
+    canCapture: true,
+    canPreview: true,
+    canSave: false,
+    canStart: false,
+    capturedModelAvailable: false,
+    transitioning: false,
+  });
+
+  expect(derivePanoramicCaptureControls({
+    hasModel: true,
+    liveSurfelCount: 128,
+    saving: false,
+    status: 'captured',
+  })).toMatchObject({
+    canCapture: false,
+    canPreview: false,
+    canSave: true,
+    canStart: true,
+    capturedModelAvailable: true,
+  });
+
+  expect(derivePanoramicCaptureControls({
+    hasModel: true,
+    liveSurfelCount: 128,
+    saving: true,
+    status: 'captured',
+  }).canSave).toBe(false);
+
+  expect(derivePanoramicCaptureControls({
+    hasModel: true,
+    liveSurfelCount: 128,
+    saving: false,
+    status: 'building-model',
+  })).toMatchObject({
+    canCapture: false,
+    canPreview: false,
+    canSave: false,
+    transitioning: true,
+  });
 });
 
 test('serializeModelAsPly emits vertex colors and normals for Files export', () => {

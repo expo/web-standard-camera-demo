@@ -39,6 +39,34 @@ export interface ViewerState {
   yaw: number;
 }
 
+export type PanoramicCaptureStatus =
+  | 'idle'
+  | 'checking'
+  | 'unsupported'
+  | 'requesting'
+  | 'scanning'
+  | 'building-model'
+  | 'captured'
+  | 'ending'
+  | 'error';
+
+export interface PanoramicCaptureControlInput {
+  hasModel: boolean;
+  liveSurfelCount: number;
+  saving: boolean;
+  status: PanoramicCaptureStatus;
+}
+
+export interface PanoramicCaptureControlState {
+  canCapture: boolean;
+  canPreview: boolean;
+  canSave: boolean;
+  canStart: boolean;
+  capturedModelAvailable: boolean;
+  transitioning: boolean;
+  unsupported: boolean;
+}
+
 export interface KeyframeSnapshot {
   forward: Vec3;
   position: Vec3;
@@ -79,6 +107,25 @@ export interface PanoramicCoverageOptions {
   pitchBins?: number;
   pitchRangeDeg?: number;
   yawBins?: number;
+}
+
+export function derivePanoramicCaptureControls({
+  hasModel,
+  liveSurfelCount,
+  saving,
+  status,
+}: PanoramicCaptureControlInput): PanoramicCaptureControlState {
+  const capturedModelAvailable = status === 'captured' && hasModel;
+  const transitioning = status === 'requesting' || status === 'building-model' || status === 'ending';
+  return {
+    canCapture: status === 'scanning' && liveSurfelCount > 0,
+    canPreview: status === 'scanning' && liveSurfelCount > 0 && !transitioning,
+    canSave: capturedModelAvailable && !saving,
+    canStart: status === 'idle' || status === 'captured',
+    capturedModelAvailable,
+    transitioning,
+    unsupported: status === 'unsupported',
+  };
 }
 
 export interface PanoramicRigidTransform {
