@@ -621,6 +621,10 @@ Manual/device validation:
 - panning a flat wall produces a flat reconstructed wall
 - a wall measured at a known distance has plausible scale, not just plausible
   appearance
+- surfel placement is validated with ARKit projection/display transforms for the
+  portrait WebXR viewport, while camera colors are sampled through
+  `normCameraImageFromNormView` instead of assuming the camera image is
+  view-aligned
 - moving around a chair or desk produces visible parallax in model-view
 - revisiting the starting view does not create an obvious duplicate wall from
   pose drift
@@ -645,9 +649,11 @@ For physical-device proof of the panorama flow, run:
 bun run validate:panorama:ios -- --device <device-name-or-id> --metro-url <lan-metro-url>
 ```
 
-Then use the phone to Start Scan, pan slowly until surfels appear, Capture, and
-Save. The validator passes only after it sees nonzero keyframe, capture,
-WebGPU-render, and Files-export telemetry from the physical app logs.
+The validator launches the dev-client build, opens the panorama demo route, and
+then waits for the phone interaction. Use the phone to Start Scan, pan slowly
+until surfels appear, Capture, and Save. The validator passes only after it sees
+nonzero keyframe, capture, WebGPU-render, and Files-export telemetry from the
+physical app logs.
 
 Also run the `ref-check` skill so any `@ref LLP 0020#...` annotations added in
 code point to real anchors.

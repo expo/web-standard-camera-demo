@@ -218,6 +218,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const [saveInfo, setSaveInfo] = React.useState('save after capture');
   const [saving, setSaving] = React.useState(false);
   const [fps, setFps] = React.useState('0.0');
+  const [stageGestureActive, setStageGestureActive] = React.useState(false);
 
   const isDesktop = windowWidth >= 1040;
   const stageWidth = isDesktop
@@ -256,6 +257,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     pinchDistanceStartRef.current = null;
     panMidpointStartRef.current = null;
     singleTouchStartRef.current = null;
+    setStageGestureActive(false);
   }, []);
 
   /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing support-check initialization timing. */
@@ -581,6 +583,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           isStageGestureEnabled() &&
           (event.nativeEvent.touches.length > 1 || Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
         onPanResponderGrant: (event) => {
+          setStageGestureActive(true);
           viewerGestureStartRef.current = viewerRef.current;
           const touches = event.nativeEvent.touches;
           if (touches.length > 1) {
@@ -860,8 +863,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   return (
     <>
-      <Stack.Screen options={{ gestureEnabled: false, unstable_headerRightItems: xrHeaderRightItems }} />
+      <Stack.Screen options={{
+        fullScreenGestureEnabled: false,
+        gestureEnabled: false,
+        unstable_headerRightItems: xrHeaderRightItems,
+      }} />
       <ScrollView
+        directionalLockEnabled
+        scrollEnabled={!stageGestureActive}
         style={styles.scroll}
         contentContainerStyle={styles.content}
         contentInsetAdjustmentBehavior="automatic">

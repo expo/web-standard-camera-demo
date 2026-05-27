@@ -11,6 +11,7 @@ const APP_BUNDLE_ID = 'dev.ide.standardcameraapp';
 const URL_SCHEME = 'standardcameraapp';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_METRO_URL = process.env.PANORAMA_METRO_URL ?? 'http://192.168.1.181:8082';
+const DEFAULT_ROUTE_URL = `${URL_SCHEME}:///panoramic-scene-capture`;
 const REQUIRED_METRICS = [
   'PANORAMIC_KEYFRAME_PROFILE',
   'PANORAMIC_CAPTURE_METRICS',
@@ -30,6 +31,7 @@ interface Options {
   device?: string;
   metroUrl: string;
   noLaunch: boolean;
+  routeUrl: string | null;
   timeoutMs: number;
 }
 
@@ -45,7 +47,7 @@ async function main(): Promise<number> {
   const device = await pickConnectedDevice(options.device);
   console.log(`Using device: ${device.name} (${device.identifier})`);
   console.log(`Waiting up to ${(options.timeoutMs / 1000).toFixed(0)}s for panorama telemetry.`);
-  console.log('On the phone: open Panoramic Scene Capture, Start Scan, pan slowly, Capture, then Save.');
+  console.log('On the phone: Start Scan, pan slowly until surfels appear, Capture, then Save.');
 
   const logProc = spawn({
     cmd: ['idevicesyslog', '-n', '-p', 'standardcameraapp', '--no-colors'],
@@ -70,6 +72,22 @@ async function main(): Promise<number> {
         APP_BUNDLE_ID,
       ]);
       console.log(`Launched ${APP_BUNDLE_ID} with Metro ${options.metroUrl}`);
+      if (options.routeUrl) {
+        await sleep(1500);
+        await sh([
+          'xcrun',
+          'devicectl',
+          'device',
+          'process',
+          'launch',
+          '--device',
+          device.identifier,
+          '--payload-url',
+          options.routeUrl,
+          APP_BUNDLE_ID,
+        ]);
+        console.log(`Opened panorama route ${options.routeUrl}`);
+      }
     }
 
     const seen = await collectMetrics(logProc, options.timeoutMs);
@@ -88,6 +106,7 @@ function parseArgs(args: string[]): Options {
   const options: Options = {
     metroUrl: DEFAULT_METRO_URL,
     noLaunch: false,
+    routeUrl: DEFAULT_ROUTE_URL,
     timeoutMs: DEFAULT_TIMEOUT_MS,
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -98,6 +117,10 @@ function parseArgs(args: string[]): Options {
       options.metroUrl = requireValue(args, ++i, arg);
     } else if (arg === '--no-launch') {
       options.noLaunch = true;
+    } else if (arg === '--no-route') {
+      options.routeUrl = null;
+    } else if (arg === '--route-url') {
+      options.routeUrl = requireValue(args, ++i, arg);
     } else if (arg === '--timeout') {
       options.timeoutMs = Number(requireValue(args, ++i, arg)) * 1000;
     } else if (arg === '--help' || arg === '-h') {
@@ -127,6 +150,8 @@ function printHelp(): void {
 Options:
   --device <name|id>       CoreDevice identifier or iPhone name.
   --metro-url <url>        Expo dev-server URL. Default: ${DEFAULT_METRO_URL}
+  --route-url <url>        App route to open after Metro launch. Default: ${DEFAULT_ROUTE_URL}
+  --no-route               Do not deep-link to the panorama route after launch.
   --timeout <seconds>      Validation timeout. Default: ${DEFAULT_TIMEOUT_MS / 1000}
   --no-launch              Do not launch the app; only stream logs.
 
@@ -293,4 +318,8 @@ async function shQuiet(cmd: string[]): Promise<void> {
   if (code !== 0) {
     throw new Error(`Command failed (${code}): ${cmd.join(' ')}`);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

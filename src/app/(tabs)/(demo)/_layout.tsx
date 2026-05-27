@@ -115,6 +115,8 @@ export default function DemoStackLayout(): React.JSX.Element {
         options={{
           title: 'Scene Capture',
           ...DARK_DEMO_HEADER_OPTIONS,
+          fullScreenGestureEnabled: false,
+          gestureEnabled: false,
         }}
       />
     </Stack>

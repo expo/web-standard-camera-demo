@@ -5,6 +5,12 @@ import Foundation
 import UIKit
 
 private let lidarDepthErrorDomain = "StandardCameraLiDARDepth"
+// @ref LLP 0013#arkit-mapping — ARKit's projection/display transforms are
+// parameterized by the presented view size. The iPhone WebXR demos run in
+// portrait, while the CPU camera image remains a landscape-aspect downsampled
+// captured image addressed through normCameraImageFromNormView.
+private let webXRPortraitViewportWidth = 960
+private let webXRPortraitViewportHeight = 1280
 private let webXRCameraPreviewWidth = 1280
 private let webXRCameraPreviewHeight = 960
 private let lidarStartupTimeoutSeconds: TimeInterval = 5
@@ -329,7 +335,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     // @ref LLP 0013#xr-viewer-pose — Feed XRView transform/projection from
     // ARKit camera geometry instead of fixed placeholder matrices. This is
     // currently scoped to the portrait WebXR demo viewport documented in LLP.
-    let viewportSize = CGSize(width: webXRCameraPreviewWidth, height: webXRCameraPreviewHeight)
+    let viewportSize = CGSize(width: webXRPortraitViewportWidth, height: webXRPortraitViewportHeight)
     let projectionMatrix = frame.camera.projectionMatrix(
       for: .portrait,
       viewportSize: viewportSize,

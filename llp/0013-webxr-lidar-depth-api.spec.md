@@ -581,9 +581,13 @@ The implementation MUST copy frame buffers before returning them to JS, or
 otherwise guarantee their lifetime until the animation-frame callback returns.
 
 Current implementation limit: the native transform/projection metadata is
-computed for the portrait WebXR demo viewport. That is enough to make timing and
-view/camera/depth coordinate objects data-backed instead of placeholders, but it
-is not a general orientation-aware WebXR compositor model.
+computed for a fixed portrait WebXR demo viewport (`960 x 1280`). The CPU camera
+image may remain a landscape-aspect downsampled copy of `ARFrame.capturedImage`
+(`1280 x 960` in the first implementation); callers must use
+`normCameraImageFromNormView` to sample it from normalized view coordinates.
+This is enough to make timing and view/camera/depth coordinate objects
+data-backed instead of placeholders, but it is not a general orientation-aware
+WebXR compositor model.
 
 ## Permissions and Privacy
 
