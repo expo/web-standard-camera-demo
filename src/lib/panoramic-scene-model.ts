@@ -23,6 +23,7 @@ export const LIVE_MODEL_10K_INTERVAL_MS = 320;
 export const LIVE_MODEL_25K_INTERVAL_MS = 650;
 export const LIVE_MODEL_45K_INTERVAL_MS = 1100;
 export const LIVE_MODEL_MAX_BUILD_PRESSURE_INTERVAL_MS = 1800;
+export const LIVE_MODEL_EARLY_KEYFRAME_COUNT = 5;
 export const SURFEL_BUFFER_CAPACITY_GRANULARITY_BYTES = 256 * 1024;
 export const MODEL_SURFEL_BASE_POINT_SCALE_PX = 3.4;
 export const MODEL_SURFEL_DENSE_POINT_SCALE_MIN_PX = 1.7;
@@ -115,7 +116,7 @@ export interface LiveModelSnapshotPublishInput {
 export interface LiveModelSnapshotPublishDecision {
   intervalMs: number;
   publish: boolean;
-  reason: 'initial' | 'no-keyframes' | 'stale' | 'throttled' | 'unchanged';
+  reason: 'initial' | 'new-keyframe' | 'no-keyframes' | 'stale' | 'throttled' | 'unchanged';
 }
 
 export interface XRScanFrameSchedulingInput {
@@ -273,6 +274,9 @@ export function shouldPublishLiveModelSnapshot({
   }
   if (!hasPublishedModel) {
     return { intervalMs, publish: true, reason: 'initial' };
+  }
+  if (keyframes <= LIVE_MODEL_EARLY_KEYFRAME_COUNT && keyframes > lastPublishedKeyframes) {
+    return { intervalMs, publish: true, reason: 'new-keyframe' };
   }
   if (keyframes <= lastPublishedKeyframes && rawSampleCount <= lastPublishedRawSampleCount) {
     return { intervalMs, publish: false, reason: 'unchanged' };

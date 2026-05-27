@@ -848,8 +848,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const now = performanceNow();
     const hasPublishedModel = modelRef.current !== null;
     // @ref LLP 0020#performance-constraints - Live scan feedback backs off as
-    // retained samples and build cost grow; Preview/Capture still force a full
-    // model build at the user boundary.
+    // retained samples and build cost grow, but early accepted keyframes still
+    // publish immediately so the display cannot remain on the first keyframe
+    // while the user starts a 180-degree sweep. Preview/Capture still force a
+    // full model build at the user boundary.
     const publishDecision = shouldPublishLiveModelSnapshot({
       hasPublishedModel,
       keyframes: keyframeCountRef.current,

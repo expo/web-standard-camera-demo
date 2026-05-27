@@ -1571,9 +1571,20 @@ test('live model snapshot publishing favors fresh previews until build cost grow
 
   expect(shouldPublishLiveModelSnapshot({
     hasPublishedModel: true,
+    keyframes: 2,
+    lastPublishedAtMs: 1000,
+    lastPublishedKeyframes: 1,
+    lastPublishedRawSampleCount: 1200,
+    nowMs: 1100,
+    previousBuildMs: 900,
+    rawSampleCount: 2400,
+  })).toMatchObject({ intervalMs: 1800, publish: true, reason: 'new-keyframe' });
+
+  expect(shouldPublishLiveModelSnapshot({
+    hasPublishedModel: true,
     keyframes: 5,
     lastPublishedAtMs: 1000,
-    lastPublishedKeyframes: 4,
+    lastPublishedKeyframes: 5,
     lastPublishedRawSampleCount: 12000,
     nowMs: 1250,
     previousBuildMs: 0,
@@ -1582,9 +1593,9 @@ test('live model snapshot publishing favors fresh previews until build cost grow
 
   expect(shouldPublishLiveModelSnapshot({
     hasPublishedModel: true,
-    keyframes: 5,
+    keyframes: 6,
     lastPublishedAtMs: 1000,
-    lastPublishedKeyframes: 4,
+    lastPublishedKeyframes: 5,
     lastPublishedRawSampleCount: 12000,
     nowMs: 1320,
     previousBuildMs: 0,

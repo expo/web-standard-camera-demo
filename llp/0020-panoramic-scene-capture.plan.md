@@ -157,11 +157,14 @@ Implemented:
   `PANORAMIC_LIVE_MODEL_PROFILE` snapshots plus periodic `PANORAMIC_SCAN_STATS`
   summaries for realtime WebGPU feedback. The full model is not rebuilt on
   every XR frame, so live capture work avoids the earlier quadratic
-  point-history path. Periodic scan stats MUST also be emitted on the scan loop
-  before any keyframe is accepted and again when the user stops scanning, so a
-  profile-only physical-device run can diagnose pose misses, depth misses,
-  precheck skips, and rejection reasons even when Preview/Capture is never
-  reached. Scan-loop and keyframe telemetry MUST report accepted raw sample
+  point-history path. The first few accepted keyframes SHOULD still publish
+  immediately even when an earlier build was slow, because the scan surface is
+  small and the display must not appear stuck on the first keyframe while the
+  user begins a 180-degree sweep. Periodic scan stats MUST also be emitted on
+  the scan loop before any keyframe is accepted and again when the user stops
+  scanning, so a profile-only physical-device run can diagnose pose misses,
+  depth misses, precheck skips, and rejection reasons even when Preview/Capture
+  is never reached. Scan-loop and keyframe telemetry MUST report accepted raw sample
   counts separately from the fused/displayed surfel count, because later
   keyframes can update existing voxels without increasing the rendered surfel
   count; device logs need to distinguish "no post-first frames accepted" from
