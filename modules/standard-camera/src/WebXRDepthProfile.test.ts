@@ -220,14 +220,25 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
   const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+  const originalConsoleLog = console.log;
+  const originalPerformance = globalThis.performance;
   const callbacks: FrameRequestCallback[] = [];
+  const profileLogs: unknown[] = [];
   let nextHandle = 1;
-  let nativeFrame = makeNativeFrame(1);
+  let nowMs = 2000;
+  let nativeFrame: NativeLiDARDepthFrame = { ...makeNativeFrame(1), arFrameNumber: 10 };
   let delivered = 0;
 
   try {
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => nativeFrame;
+    console.log = (name: unknown, payload?: unknown): void => {
+      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
+    };
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      value: { ...originalPerformance, now: () => nowMs },
+    });
     globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
       callbacks.push(callback);
       return nextHandle++;
@@ -249,17 +260,35 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
     session.requestAnimationFrame(onFrame);
     flushNextRaf(callbacks);
     expect(delivered).toBe(1);
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      deliveredFramePolls: 1,
+      latestFrameNumber: 1,
+      reason: 'delivered-frame',
+    });
 
     session.requestAnimationFrame(onFrame);
+    nowMs = 2500;
     flushNextRaf(callbacks);
     expect(delivered).toBe(1);
 
-    nativeFrame = makeNativeFrame(2);
+    nativeFrame = { ...makeNativeFrame(2), arFrameNumber: 12 };
+    nowMs = 3600;
     flushNextRaf(callbacks);
     expect(delivered).toBe(2);
+    expect(JSON.parse(String(profileLogs[1]))).toMatchObject({
+      deliveredFramePolls: 1,
+      latestFrameNumber: 2,
+      reason: 'delivered-frame',
+      staleFramePolls: 1,
+    });
   } finally {
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
+    console.log = originalConsoleLog;
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      value: originalPerformance,
+    });
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
     globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
   }

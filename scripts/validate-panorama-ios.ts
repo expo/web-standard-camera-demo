@@ -1518,6 +1518,7 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `depth frame ${numberField(framePump, 'latestFrameNumber')} delivered ${numberField(framePump, 'lastDeliveredFrameNumber')}, ` +
       `AR frame ${numberField(framePump, 'arFrameNumber')} (+${numberField(framePump, 'arFrameDelta')}), ` +
       `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}, ` +
+      `delivered polls ${numberField(framePump, 'deliveredFramePolls')}, ` +
       `stale polls ${numberField(framePump, 'staleFramePolls')}`
     );
   }

@@ -527,6 +527,7 @@ export class WebXRSession extends EventTarget {
   #lastFramePumpProfileLoggedAtMs = 0;
   #lastProfileARFrameNumber = 0;
   #lastProfileDepthFrameNumber = 0;
+  #deliveredFramePolls = 0;
   #noFramePolls = 0;
   #staleFramePolls = 0;
   #nativeTimestampOriginMs: number | null = null;
@@ -698,6 +699,8 @@ export class WebXRSession extends EventTarget {
       }
 
       this.#lastDeliveredFrameNumber = nativeFrame.frameNumber;
+      this.#deliveredFramePolls += 1;
+      this.#maybeLogFramePumpProfile('delivered-frame', nativeFrame);
       this.#callbacks.delete(handle);
       const time = this.frameTime(nativeFrame, now());
       const frame = new WebXRFrame(this, nativeFrame, time);
@@ -712,7 +715,10 @@ export class WebXRSession extends EventTarget {
     return handle;
   }
 
-  #maybeLogFramePumpProfile(reason: 'no-frame' | 'stale-frame', nativeFrame: NativeLiDARDepthFrame | null): void {
+  #maybeLogFramePumpProfile(
+    reason: 'delivered-frame' | 'no-frame' | 'stale-frame',
+    nativeFrame: NativeLiDARDepthFrame | null
+  ): void {
     const current = now();
     if (current - this.#lastFramePumpProfileLoggedAtMs < XR_FRAME_PUMP_PROFILE_INTERVAL_MS) {
       return;
@@ -724,6 +730,7 @@ export class WebXRSession extends EventTarget {
       arFrameDelta: Math.max(0, arFrameNumber - this.#lastProfileARFrameNumber),
       arFrameNumber,
       consecutiveDepthMisses: nativeFrame?.consecutiveDepthMisses ?? 0,
+      deliveredFramePolls: this.#deliveredFramePolls,
       depthFrameArFrameNumber: nativeFrame?.depthFrameArFrameNumber ?? 0,
       depthFrameDelta: Math.max(0, latestFrameNumber - this.#lastProfileDepthFrameNumber),
       depthMisses: nativeFrame?.depthMisses ?? 0,
@@ -735,6 +742,7 @@ export class WebXRSession extends EventTarget {
     }));
     this.#lastProfileARFrameNumber = arFrameNumber;
     this.#lastProfileDepthFrameNumber = latestFrameNumber;
+    this.#deliveredFramePolls = 0;
     this.#noFramePolls = 0;
     this.#staleFramePolls = 0;
   }

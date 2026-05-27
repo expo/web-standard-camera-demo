@@ -625,6 +625,27 @@ test('panorama validator surfaces scan loop callback errors', () => {
   );
 });
 
+test('panorama validator distinguishes delivered WebXR frames from stale polling', () => {
+  const seen = completeMetricSet({
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      arFrameDelta: 24,
+      arFrameNumber: 48,
+      consecutiveDepthMisses: 0,
+      deliveredFramePolls: 22,
+      depthFrameDelta: 22,
+      depthMisses: 0,
+      lastDeliveredFrameNumber: 44,
+      latestFrameNumber: 44,
+      reason: 'delivered-frame',
+      staleFramePolls: 1,
+    },
+  });
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'XR frame pump: delivered-frame, depth frame 44 delivered 44, AR frame 48 (+24), depth misses 0 consecutive 0, delivered polls 22, stale polls 1'
+  );
+});
+
 function completeMetricSet(
   overrides: Partial<Record<keyof SeenMetrics, Record<string, unknown>>> = {}
 ): SeenMetrics {

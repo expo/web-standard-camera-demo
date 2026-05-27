@@ -1217,8 +1217,9 @@ prints optional profiling telemetry (`PANORAMIC_LIVE_MODEL_PROFILE`,
 end-to-end metrics complete, and validates the optional preview/live
 build/upload budgets when present. `PANORAMIC_XR_FRAME_PUMP_PROFILE` reports
 whether the WebXR animation-frame loop is waiting on no native frame or a stale
-depth frame, plus native AR frame/depth-miss counters, so physical logs can
-separate ARKit depth starvation from JavaScript keyframe gating.
+depth frame, plus periodic successful delivery counts and native AR
+frame/depth-miss counters, so physical logs can separate ARKit depth starvation
+from JavaScript keyframe gating.
 `PANORAMIC_KEYFRAME_REJECTION_PROFILE` reports the latest throttled keyframe
 skip reason with pose motion, retained surfel count, depth/miss counters, and
 depth/mesh preflight density when available, so a run that captures no new
