@@ -177,7 +177,10 @@ Implemented:
   one-frame failure. Validator summaries SHOULD compare WebXR depth-frame
   counters with ARKit frame counters so a one-keyframe scan can be classified as
   JS keyframe rejection, full native frame-pump starvation, or native scene-depth
-  starvation while ARKit camera frames continue. The WebXR
+  starvation while ARKit camera frames continue. If a capture log shows a
+  saveable model sealed with only one accepted keyframe and no later scan-loop
+  evidence, the validator SHOULD call out an early Capture action separately
+  from native or keyframe-gate failures. The WebXR
   frame-pump profiler SHOULD emit its first sample immediately instead of
   waiting for its periodic interval, because first-frame-only failures often
   happen before a second profile window opens. If ARKit frames arrive before the
@@ -402,7 +405,11 @@ Implemented:
   and makes the freeze/build boundary visible in the UI. The XR frame loop is
   cancelled before yielding to that state so no additional keyframes are
   accepted after the Capture tap. Late errors from stale XR loop setup are
-  ignored once the session has been intentionally ended or replaced.
+  ignored once the session has been intentionally ended or replaced. Capture
+  should not be enabled for a one-keyframe live preview; the first accepted
+  keyframe is useful for visual feedback, but the saveable model boundary needs
+  at least two accepted keyframes so an accidental early tap cannot freeze a
+  one-frame scan.
 - Scan preview: scan mode publishes realtime model snapshots automatically.
   The explicit Preview Model action remains as a manual rebuild/recenter from
   the current incremental surfel fusion state without ending the WebXR session
@@ -560,7 +567,9 @@ frame.
 ### `building-model`
 
 Pressing Capture stops keyframe collection and seals a snapshot. The app
-converts the retained RGB-D keyframes into GPU-ready model buffers.
+converts the retained RGB-D keyframes into GPU-ready model buffers. Capture
+requires at least two accepted keyframes; a single accepted keyframe remains a
+live Preview-only state so the user cannot accidentally save a one-frame scan.
 
 The AR session MAY keep running for a live background preview, but the first
 implementation SHOULD end it after capture to release the camera and make the

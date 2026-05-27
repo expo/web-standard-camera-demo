@@ -1736,6 +1736,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     return `First-frame diagnosis: scan loop ran ${numberField(scan, 'frameCount')} frames but accepted ${acceptedKeyframes}; ${rejected ? `rejected ${rejected}` : 'check pose/depth rejection profiles'}${gateDiagnosis}`;
   }
 
+  const capture = seen.PANORAMIC_CAPTURE_METRICS;
+  if (capture && numberField(capture, 'keyframes') <= 1 && numberField(capture, 'surfelCount') > 0) {
+    return `First-frame diagnosis: Capture sealed a model after only ${numberField(capture, 'keyframes')} accepted keyframe(s); capture was triggered before the scan accumulated enough keyframes`;
+  }
+
   return '';
 }
 

@@ -44,6 +44,7 @@ import {
   makeModelViewProjectionInto,
   MAX_KEYFRAMES,
   MAX_SURFELS,
+  MIN_CAPTURE_KEYFRAMES,
   MIN_KEYFRAME_NEW_VOXELS,
   MIN_KEYFRAME_SURFELS,
   MESH_SURFEL_SAMPLE_BUDGET,
@@ -325,6 +326,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   const [modelInfo, setModelInfo] = React.useState('no capture yet');
   const [qualityInfo, setQualityInfo] = React.useState('quality: no capture yet');
   const [liveSurfelCount, setLiveSurfelCount] = React.useState(0);
+  const [acceptedKeyframes, setAcceptedKeyframes] = React.useState(0);
   const [coveragePercent, setCoveragePercent] = React.useState(0);
   const [saveInfo, setSaveInfo] = React.useState('save after capture');
   const [saving, setSaving] = React.useState(false);
@@ -463,6 +465,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     setModelInfo('no capture yet');
     setQualityInfo('quality: no capture yet');
     setLiveSurfelCount(0);
+    setAcceptedKeyframes(0);
     setCoveragePercent(0);
     setSaveInfo('save after capture');
     setError(null);
@@ -748,6 +751,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   async function captureModel(): Promise<void> {
     if (captureInFlightRef.current || previewBuildInFlightRef.current) return;
+    if (statusRef.current !== 'scanning') return;
+    if (keyframeCountRef.current < MIN_CAPTURE_KEYFRAMES) {
+      setError(`Keep scanning: capture needs at least ${MIN_CAPTURE_KEYFRAMES} accepted keyframes.`);
+      setModelInfo(
+        `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - capture needs ${MIN_CAPTURE_KEYFRAMES}`
+      );
+      return;
+    }
     captureInFlightRef.current = true;
     const captureSession = sessionRef.current;
     cancelXRLoop();
@@ -951,6 +962,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     transitioning,
     unsupported,
   } = derivePanoramicCaptureControls({
+    acceptedKeyframes,
     hasModel: model !== null,
     liveSurfelCount,
     saving,
@@ -2014,6 +2026,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const fusedSurfelCount = fusionRef.current.voxels.size;
     const rawSampleCount = fusionRef.current.rawSampleCount;
     setLiveSurfelCount(fusedSurfelCount);
+    setAcceptedKeyframes(keyframeCountRef.current);
     setCoveragePercent(panoramicCoveragePercent(coverageSectorsRef.current));
     setQualityInfo(
       `scan profile: append ${(appendMs + meshAppendMs).toFixed(1)}ms - camera ${totalCameraColoredSurfels}/${totalSurfelCount}`

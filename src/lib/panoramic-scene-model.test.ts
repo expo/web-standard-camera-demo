@@ -24,6 +24,7 @@ import {
   MAX_KEYFRAMES,
   MAX_SURFELS,
   MATURE_DEPTH_VOXEL_SKIP_MIN_OBSERVATIONS,
+  MIN_CAPTURE_KEYFRAMES,
   MIN_KEYFRAME_SURFELS,
   modelSurfelPointScalePx,
   nextSurfelBufferCapacityBytes,
@@ -1470,6 +1471,7 @@ test('covered-sector precheck skips rotation-only duplicate 180 scan sectors bef
 
 test('derivePanoramicCaptureControls keeps preview scan-only and save capture-only', () => {
   expect(derivePanoramicCaptureControls({
+    acceptedKeyframes: MIN_CAPTURE_KEYFRAMES,
     hasModel: false,
     liveSurfelCount: 128,
     saving: false,
@@ -1484,6 +1486,19 @@ test('derivePanoramicCaptureControls keeps preview scan-only and save capture-on
   });
 
   expect(derivePanoramicCaptureControls({
+    acceptedKeyframes: 1,
+    hasModel: false,
+    liveSurfelCount: 128,
+    saving: false,
+    status: 'scanning',
+  })).toMatchObject({
+    canCapture: false,
+    canPreview: true,
+    canSave: false,
+  });
+
+  expect(derivePanoramicCaptureControls({
+    acceptedKeyframes: MIN_CAPTURE_KEYFRAMES,
     hasModel: true,
     liveSurfelCount: 128,
     saving: false,
@@ -1497,6 +1512,7 @@ test('derivePanoramicCaptureControls keeps preview scan-only and save capture-on
   });
 
   expect(derivePanoramicCaptureControls({
+    acceptedKeyframes: MIN_CAPTURE_KEYFRAMES,
     hasModel: true,
     liveSurfelCount: 128,
     saving: true,
@@ -1504,6 +1520,7 @@ test('derivePanoramicCaptureControls keeps preview scan-only and save capture-on
   }).canSave).toBe(false);
 
   expect(derivePanoramicCaptureControls({
+    acceptedKeyframes: MIN_CAPTURE_KEYFRAMES,
     hasModel: true,
     liveSurfelCount: 128,
     saving: false,

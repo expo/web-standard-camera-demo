@@ -12,6 +12,7 @@ export const KEYFRAME_MAX_TRANSLATION_M_PER_SEC = 0.65;
 export const KEYFRAME_MAX_ROTATION_DEG_PER_SEC = 120;
 export const MIN_KEYFRAME_SURFELS = 96;
 export const MIN_KEYFRAME_NEW_VOXELS = 16;
+export const MIN_CAPTURE_KEYFRAMES = 2;
 export const PANORAMIC_COVERAGE_YAW_BINS = 6;
 export const PANORAMIC_COVERAGE_PITCH_BINS = 3;
 export const PANORAMIC_COVERAGE_PITCH_RANGE_DEG = 60;
@@ -86,6 +87,7 @@ export type PanoramicCaptureStatus =
   | 'error';
 
 export interface PanoramicCaptureControlInput {
+  acceptedKeyframes: number;
   hasModel: boolean;
   liveSurfelCount: number;
   saving: boolean;
@@ -192,6 +194,7 @@ export interface PanoramicCoverageOptions {
 }
 
 export function derivePanoramicCaptureControls({
+  acceptedKeyframes,
   hasModel,
   liveSurfelCount,
   saving,
@@ -199,8 +202,11 @@ export function derivePanoramicCaptureControls({
 }: PanoramicCaptureControlInput): PanoramicCaptureControlState {
   const capturedModelAvailable = status === 'captured' && hasModel;
   const transitioning = status === 'requesting' || status === 'building-model' || status === 'ending';
+  const enoughKeyframesToCapture = acceptedKeyframes >= MIN_CAPTURE_KEYFRAMES;
   return {
-    canCapture: status === 'scanning' && liveSurfelCount > 0,
+    // @ref LLP 0020#building-model - Capture seals a scan, not just the first
+    // live preview keyframe, so a one-frame model remains preview-only.
+    canCapture: status === 'scanning' && liveSurfelCount > 0 && enoughKeyframesToCapture,
     canPreview: status === 'scanning' && liveSurfelCount > 0 && !transitioning,
     canSave: capturedModelAvailable && !saving,
     canStart: status === 'idle' || status === 'captured',

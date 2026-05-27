@@ -767,6 +767,26 @@ test('panorama validator diagnoses scan loop scheduling stops', () => {
   );
 });
 
+test('panorama validator diagnoses one-keyframe capture attempts', () => {
+  const seen = {
+    PANORAMIC_CAPTURE_METRICS: {
+      keyframes: 1,
+      rawSampleCount: 781,
+      surfelCount: 749,
+    },
+    PANORAMIC_SCAN_STATS: {
+      acceptedKeyframes: 1,
+      elapsedMs: 140,
+      frameCount: 1,
+      rejectedByReason: {},
+    },
+  } satisfies SeenMetrics;
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'First-frame diagnosis: Capture sealed a model after only 1 accepted keyframe(s); capture was triggered before the scan accumulated enough keyframes'
+  );
+});
+
 test('panorama validator diagnoses accepted raw samples that do not grow displayed surfels', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
