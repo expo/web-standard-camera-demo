@@ -1269,8 +1269,17 @@ test('panoramic keyframe policy is tuned for a deliberate 180 degree scan', () =
   expect(KEYFRAME_MIN_TRANSLATION_M).toBeGreaterThanOrEqual(0.12);
   expect(KEYFRAME_MIN_ROTATION_DEG).toBeGreaterThanOrEqual(12);
   expect(KEYFRAME_MAX_TRANSLATION_M_PER_SEC).toBeLessThanOrEqual(0.65);
-  expect(KEYFRAME_MAX_ROTATION_DEG_PER_SEC).toBeLessThanOrEqual(80);
+  expect(KEYFRAME_MAX_ROTATION_DEG_PER_SEC).toBeGreaterThanOrEqual(120);
+  expect(KEYFRAME_MAX_ROTATION_DEG_PER_SEC).toBeLessThanOrEqual(140);
   expect(MAX_KEYFRAMES).toBe(6 * 3);
+});
+
+test('panoramic keyframe policy accepts a two second 180 degree rotation sweep', () => {
+  const acceptedYaws = acceptedRotationSweepYaws(2000);
+
+  expect(acceptedYaws.length).toBeGreaterThanOrEqual(4);
+  expect(acceptedYaws[0]).toBe(0);
+  expect(acceptedYaws[acceptedYaws.length - 1]).toBeGreaterThanOrEqual(120);
 });
 
 test('shouldAcceptPanoramicKeyframe rejects fast motion before retaining noisy geometry', () => {
@@ -1871,6 +1880,54 @@ function snapshot({ forward = [0, 0, -1], position = [0, 0, 0], time }: {
   time: number;
 }): KeyframeSnapshot {
   return { forward, position, time };
+}
+
+function acceptedRotationSweepYaws(durationMs: number): number[] {
+  const stepMs = 100;
+  const acceptedYaws: number[] = [];
+  const acceptedForwards: Vec3[] = [];
+  let coverageSectors = new Set<string>();
+  let keyframes = 0;
+  let last: KeyframeSnapshot | null = null;
+  let scanForwardSum: Vec3 = [0, 0, 0];
+  for (let time = 0; time <= durationMs; time += stepMs) {
+    const yawDeg = 180 * time / durationMs;
+    const forward = yawForward(yawDeg);
+    const decision = shouldAcceptPanoramicKeyframe({
+      existingSurfels: keyframes * MIN_KEYFRAME_SURFELS,
+      forward,
+      keyframes,
+      last,
+      position: [0, 0, 0],
+      time,
+    });
+    if (!decision.accepted) continue;
+    if (shouldSkipCoveredPanoramicSector({
+      coverageSectors,
+      forward,
+      keyframes,
+      scanForwardSum,
+      translationM: decision.translationM,
+    })) {
+      continue;
+    }
+    acceptedYaws.push(Math.round(yawDeg));
+    acceptedForwards.push(forward);
+    keyframes += 1;
+    last = snapshot({ forward, position: [0, 0, 0], time });
+    scanForwardSum = [
+      scanForwardSum[0] + forward[0],
+      scanForwardSum[1] + forward[1],
+      scanForwardSum[2] + forward[2],
+    ];
+    coverageSectors = panoramicCoverageSectors(acceptedForwards);
+  }
+  return acceptedYaws;
+}
+
+function yawForward(yawDeg: number): Vec3 {
+  const yawRad = yawDeg * Math.PI / 180;
+  return [Math.sin(yawRad), 0, -Math.cos(yawRad)];
 }
 
 function surfelSample({

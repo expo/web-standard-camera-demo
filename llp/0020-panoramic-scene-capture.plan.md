@@ -658,9 +658,10 @@ Initial thresholds:
   ARKit normal camera tracking, so pose tracking is stable enough for
   world-space fusion
 - reject very fast motion, using WebXR pose/time only, before requesting CPU
-  depth/camera bytes; the 180-degree scan target uses about 80 degrees/second
-  or 0.65 meters/second between accepted keyframes so smoothed scene depth is
-  less likely to lag behind the retained pose
+  depth/camera bytes; the 180-degree scan target allows about 120
+  degrees/second or 0.65 meters/second between accepted keyframes so a normal
+  two-second half-turn does not collapse to the first keyframe, while still
+  dropping very fast pose/depth mismatches
 - reject rotation-only revisits of an already-covered 180-degree scan sector
   before requesting CPU depth/camera bytes, while still allowing same-sector
   keyframes that have enough translation to add parallax and new voxels
