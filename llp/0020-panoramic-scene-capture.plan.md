@@ -625,6 +625,9 @@ Implementation tests:
 - model stats stay within configured caps
 - PLY export includes vertex positions, normals, and uchar colors
   (`bun test src/lib/panoramic-scene-model.test.ts`)
+- the panorama route keeps AR access behind WebXR-shaped
+  `immersive-ar`/`depth-sensing`/`camera-access` calls and does not call direct
+  native LiDAR helpers (`bun test src/app/(tabs)/(demo)/panoramic-scene-capture.test.ts`)
 
 Manual/device validation:
 
