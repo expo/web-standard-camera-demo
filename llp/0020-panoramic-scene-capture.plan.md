@@ -1283,7 +1283,13 @@ surfels can be distinguished as pose gating, depth starvation, or sparse
 surface contribution. If the WebXR scan frame callback throws, the route SHOULD
 record a `scan-loop-error` rejection profile and keep scheduling frames while
 the same session is still scanning; a single transient callback error must not
-leave the visible preview stuck on the first accepted surfel batch. Repeated keyframe,
+leave the visible preview stuck on the first accepted surfel batch.
+If optional mesh detection is enabled, the validator SHOULD treat a
+`scan-loop-error` with `TypeError: undefined is not a function` or a
+`PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE` with `meshPayloadUnavailable` as
+evidence that the optional WebXR mesh bridge may have thrown before post-first
+depth keyframe capture; mesh access is a supplement and must not be allowed to
+turn a depth-backed scan into a one-frame surfel model. Repeated keyframe,
 preview, live-model, render-frame, upload, and native-payload telemetry is
 merged conservatively: the latest model counts are kept for
 capture/render/export consistency, while the worst observed timing, worst

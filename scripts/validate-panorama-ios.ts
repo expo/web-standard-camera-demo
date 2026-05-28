@@ -884,6 +884,10 @@ function mergeObservedMetric(
       triangleCount: Math.max(numberField(existing, 'triangleCount'), numberField(incoming, 'triangleCount')),
       vertexBytes: Math.max(numberField(existing, 'vertexBytes'), numberField(incoming, 'vertexBytes')),
       vertexCount: Math.max(numberField(existing, 'vertexCount'), numberField(incoming, 'vertexCount')),
+      fallbackReason: stringField(incoming, 'fallbackReason') || stringField(existing, 'fallbackReason'),
+      meshPayloadUnavailable: existing.meshPayloadUnavailable === true || incoming.meshPayloadUnavailable === true,
+      errorMessage: stringField(incoming, 'errorMessage') || stringField(existing, 'errorMessage'),
+      errorName: stringField(incoming, 'errorName') || stringField(existing, 'errorName'),
     };
   }
   if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') {
@@ -1554,20 +1558,27 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
 
   const nativeMeshPayload = seen.PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE;
   if (nativeMeshPayload) {
-    const triangleCount = numberField(nativeMeshPayload, 'triangleCount');
-    const sourceTriangleCount = numberField(nativeMeshPayload, 'sourceTriangleCount');
-    const decimationDetail = sourceTriangleCount > triangleCount
-      ? ` from ${sourceTriangleCount} source triangles, ${numberField(nativeMeshPayload, 'decimatedMeshCount')} decimated`
-      : '';
-    lines.push(
-      `Native mesh payload: ${numberField(nativeMeshPayload, 'meshCount')} meshes, ` +
-      `${numberField(nativeMeshPayload, 'vertexCount')} vertices, ` +
-      `${triangleCount} triangles${decimationDetail}, ` +
-      `${numberField(nativeMeshPayload, 'normalCount')} normals, ` +
-      `${numberField(nativeMeshPayload, 'meshBytes')} bytes, ` +
-      `${numberField(nativeMeshPayload, 'cachedMeshCount')} cached / ` +
-      `${numberField(nativeMeshPayload, 'copiedMeshCount')} copied`
-    );
+    if (nativeMeshPayload.meshPayloadUnavailable === true) {
+      const errorDetail = optionalErrorDetail(nativeMeshPayload).replace(/,\s*$/, '');
+      lines.push(
+        `Native mesh payload unavailable: ${stringField(nativeMeshPayload, 'fallbackReason') || 'unknown'}${errorDetail ? `, ${errorDetail}` : ''}`
+      );
+    } else {
+      const triangleCount = numberField(nativeMeshPayload, 'triangleCount');
+      const sourceTriangleCount = numberField(nativeMeshPayload, 'sourceTriangleCount');
+      const decimationDetail = sourceTriangleCount > triangleCount
+        ? ` from ${sourceTriangleCount} source triangles, ${numberField(nativeMeshPayload, 'decimatedMeshCount')} decimated`
+        : '';
+      lines.push(
+        `Native mesh payload: ${numberField(nativeMeshPayload, 'meshCount')} meshes, ` +
+        `${numberField(nativeMeshPayload, 'vertexCount')} vertices, ` +
+        `${triangleCount} triangles${decimationDetail}, ` +
+        `${numberField(nativeMeshPayload, 'normalCount')} normals, ` +
+        `${numberField(nativeMeshPayload, 'meshBytes')} bytes, ` +
+        `${numberField(nativeMeshPayload, 'cachedMeshCount')} cached / ` +
+        `${numberField(nativeMeshPayload, 'copiedMeshCount')} copied`
+      );
+    }
   }
 
   const geometry = seen.PANORAMIC_CAPTURE_GEOMETRY;
@@ -1730,7 +1741,15 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   if (stringField(rejectionProfile ?? {}, 'reason') === 'scan-loop-error') {
     const errorName = stringField(rejectionProfile ?? {}, 'errorName') || 'Error';
     const errorMessage = stringField(rejectionProfile ?? {}, 'errorMessage') || 'see keyframe rejection profile';
-    return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}`;
+    const meshRequested = seen.PANORAMIC_SCAN_CONFIG?.meshRequested === true;
+    const nativeMeshPayload = seen.PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE;
+    const meshPayloadUnavailable = nativeMeshPayload?.meshPayloadUnavailable === true;
+    const meshFailureDetail = meshPayloadUnavailable
+      ? `; optional WebXR mesh payload was unavailable (${stringField(nativeMeshPayload, 'fallbackReason') || 'unknown'}), so mesh profiling/supplement access could have stopped post-first surfel capture on older builds`
+      : meshRequested && /undefined is not a function/i.test(errorMessage)
+        ? '; mesh detection was requested and the error shape matches a missing optional WebXR mesh bridge, which can throw before the post-first depth keyframe path'
+        : '';
+    return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}${meshFailureDetail}`;
   }
 
   if (loopStop) {

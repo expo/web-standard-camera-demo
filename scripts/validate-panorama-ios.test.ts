@@ -736,6 +736,45 @@ test('panorama validator surfaces scan loop callback errors', () => {
   );
 });
 
+test('panorama validator identifies optional WebXR mesh bridge failures behind one-frame scans', () => {
+  const seen = parseMetricLogText(`
+    LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"smooth","depthTypeRequest":["smooth","raw"],"meshRequested":true,"scanId":4,"sessionDepthType":"smooth"}
+    LOG PANORAMIC_KEYFRAME_PROFILE {"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":4,"surfelCount":781}
+    LOG PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE {"fallbackReason":"missing-native-mesh-payload-getter","frameNumber":2,"meshBytes":0,"meshCount":0,"meshPayloadUnavailable":true,"requestMs":0.2,"scanId":4}
+    LOG PANORAMIC_KEYFRAME_REJECTION_PROFILE {"errorMessage":"undefined is not a function","errorName":"TypeError","frameCount":2,"keyframes":1,"reason":"scan-loop-error","retainedSamples":781,"scanId":4}
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Native mesh payload unavailable: missing-native-mesh-payload-getter'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: scan loop callback threw after 1 keyframe(s): TypeError: undefined is not a function; optional WebXR mesh payload was unavailable (missing-native-mesh-payload-getter), so mesh profiling/supplement access could have stopped post-first surfel capture on older builds'
+  );
+
+  const oldBuildSummary = panoramaBottleneckSummary({
+    PANORAMIC_SCAN_CONFIG: {
+      depthPreference: 'smooth',
+      depthTypeRequest: ['smooth', 'raw'],
+      meshRequested: true,
+      sessionDepthType: 'smooth',
+    },
+    PANORAMIC_KEYFRAME_REJECTION_PROFILE: {
+      errorMessage: 'undefined is not a function',
+      errorName: 'TypeError',
+      frameCount: 2,
+      keyframes: 1,
+      reason: 'scan-loop-error',
+      retainedSamples: 781,
+    },
+  } satisfies SeenMetrics);
+
+  expect(oldBuildSummary).toContain(
+    'First-frame diagnosis: scan loop callback threw after 1 keyframe(s): TypeError: undefined is not a function; mesh detection was requested and the error shape matches a missing optional WebXR mesh bridge, which can throw before the post-first depth keyframe path'
+  );
+});
+
 test('panorama validator diagnoses scan loop scheduling stops', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
