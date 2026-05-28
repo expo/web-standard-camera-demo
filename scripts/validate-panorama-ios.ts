@@ -2203,13 +2203,10 @@ function publishedButNotRenderedDiagnosis(
 
 function staleDisplayedRawSampleStage(seen: SeenMetrics, rawSamples: number): ModelChainStage | null {
   if (rawSamples <= 0) return null;
-  const candidates = [
-    modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
-    modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
-    modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE),
-    modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
-    modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
-  ].filter((stage): stage is ModelChainStage => stage !== null);
+  const candidates = displayedModelChainStages(seen);
+  if (candidates.some((stage) => stage.rawSampleCount >= rawSamples)) {
+    return null;
+  }
   return candidates.find((stage) => stage.rawSampleCount > 0 && stage.rawSampleCount < rawSamples) ?? null;
 }
 
@@ -2218,18 +2215,30 @@ function staleDisplayedModelStage(
   acceptedKeyframes: number,
   rawSamples: number
 ): ModelChainStage | null {
-  const candidates = [
-    modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
-    modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
-    modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE),
-    modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
-    modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
-  ].filter((stage): stage is ModelChainStage => stage !== null);
+  const candidates = displayedModelChainStages(seen);
+  if (candidates.some((stage) =>
+    stage.keyframes >= acceptedKeyframes &&
+    (rawSamples <= 0 || stage.rawSampleCount >= rawSamples)
+  )) {
+    return null;
+  }
   return candidates.find((stage) =>
     stage.keyframes > 0 &&
     stage.keyframes < acceptedKeyframes &&
     (stage.rawSampleCount <= 0 || rawSamples <= 0 || stage.rawSampleCount < rawSamples)
   ) ?? null;
+}
+
+function displayedModelChainStages(seen: SeenMetrics): ModelChainStage[] {
+  const candidates = [
+    modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
+    modelChainStage('render', seen.PANORAMIC_RENDER_METRICS),
+    modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
+    modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE),
+    modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
+    modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
+  ].filter((stage): stage is ModelChainStage => stage !== null);
+  return candidates;
 }
 
 interface ModelChainStage {

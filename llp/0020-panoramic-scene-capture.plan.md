@@ -1353,7 +1353,10 @@ that simply did not cover enough sectors is separable from one with slow model
 work or bad projection math. The summary SHOULD also include a capture/render/
 upload/export model-chain line with keyframe, raw-sample, and fused-surface
 counts so copied logs can show whether a full accepted scan reached the GPU and
-saved file or collapsed at one boundary. When geometry telemetry is present, the
+saved file or collapsed at one boundary. A stale live-preview snapshot SHOULD
+NOT be reported as the displayed-model bottleneck when a later render/upload/
+publish stage has already reached the accepted keyframe and raw-sample counts.
+When geometry telemetry is present, the
 summary SHOULD also include the normal-projected span/RMS thickness and normal
 coherence so a flat-wall scan can be checked for world-coordinate smear from
 logs alone. When only the first keyframe is accepted, the summary SHOULD also

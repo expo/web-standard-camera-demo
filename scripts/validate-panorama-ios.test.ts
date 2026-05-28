@@ -1098,6 +1098,44 @@ test('panorama validator diagnoses stale displayed model publication', () => {
   );
 });
 
+test('panorama validator does not blame stale live preview after captured render caught up', () => {
+  const summary = panoramaBottleneckSummary({
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 3,
+      rawSampleCount: 1916,
+      retainedSamples: 1916,
+      surfelCount: 518,
+    },
+    PANORAMIC_LIVE_MODEL_PROFILE: {
+      buildMs: 1.22,
+      keyframes: 1,
+      rawSampleCount: 781,
+      surfelCount: 749,
+    },
+    PANORAMIC_CAPTURE_METRICS: {
+      buildMs: 3.08,
+      cameraColorPercent: 100,
+      keyframes: 3,
+      rawSampleCount: 1916,
+      surfelCount: 1839,
+    },
+    PANORAMIC_RENDER_METRICS: {
+      buildMs: 3.08,
+      keyframes: 3,
+      rawSampleCount: 1916,
+      renderFrameMs: 4,
+      surfelCount: 1839,
+    },
+  });
+
+  expect(summary).not.toContain(
+    'Displayed-surfels diagnosis: 3 keyframes accepted and 1916 raw samples observed, but the live model is stale at 1 keyframe(s) and 781 raw samples; this points to live publish/render upload staleness rather than frame delivery'
+  );
+  expect(summary).toContain(
+    'Model chain: capture 3kf/1916raw/1839surfels; render 3kf/1916raw/1839surfels; all present stages match'
+  );
+});
+
 test('panorama validator diagnoses post-first fusion growth without keyframe publication', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
