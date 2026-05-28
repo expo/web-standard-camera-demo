@@ -31,6 +31,7 @@ const MIN_OCCLUSION_DEPTH_M = 0.45;
 const MAX_OCCLUSION_DEPTH_M = 3.5;
 const OCCLUSION_DEPTHS_M = [0.8, 1.25, 2.0];
 const COMPARE_DEPTH_SPLIT = 0.5;
+const DEPTH_FRAME_UNAVAILABLE_MESSAGE = 'Depth data for this XRFrame is no longer available';
 const DEFAULT_VIEW_MODE = 2;
 const VIEW_MODES = [
   { label: 'Compare', value: 2 },
@@ -784,21 +785,36 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
               return;
             }
 
+            // @ref LLP 0012#depth-payload-before-camera - Pull the small depth
+            // payload before the 1080p camera payload so native snapshot
+            // retention does not expire the XRFrame's depth bytes.
             // @ref LLP 0013#xr-depth-information
             // @ref LLP 0016#depth-interpretation
             const depth = frame.getDepthInformation(view);
+            if (!depth) {
+              reportFrameMiss('depth-miss');
+              return;
+            }
+
+            let depthStats: DepthUploadStats;
+            try {
+              depthStats = uploadDepth(depth);
+            } catch (e) {
+              if (isTransientDepthPayloadError(e)) {
+                reportFrameMiss('depth-miss');
+                return;
+              }
+              throw e;
+            }
+
             // @ref LLP 0013#xr-camera-image
             // @ref LLP 0017#xr-webgl-get-camera-image — Use the repo-local CPU
             // binding analog because this demo uploads camera bytes to WebGPU.
             const xrCamera = view.camera;
             const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
-
-            if (!depth) {
-              reportFrameMiss('depth-miss');
-            } else if (!camera) {
+            if (!camera) {
               reportFrameMiss('camera-miss');
             } else {
-              const depthStats = uploadDepth(depth);
               uploadCamera(camera);
               profile.count('xrFrames');
               frameNumber += 1;
@@ -1218,6 +1234,12 @@ function sampleDepthStats(
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+function isTransientDepthPayloadError(error: unknown): boolean {
+  return error instanceof Error &&
+    error.name === 'InvalidStateError' &&
+    error.message.includes(DEPTH_FRAME_UNAVAILABLE_MESSAGE);
 }
 
 function clampDepth(depth: number): number {

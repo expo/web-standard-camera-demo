@@ -363,6 +363,16 @@ mode so the physical-device trace targets this demo's Depth view rather than the
 panorama capture route. `WEBGPU_DEMO_PROFILE` records include the active
 `viewMode`/`viewModeLabel` so copied logs can prove which renderer was profiled.
 
+### Depth payload before camera
+
+The render callback must read the CPU depth payload before requesting the
+CPU-visible 1080p camera image. Native frame metadata and payload bytes are
+delivered through separate lazy bridge calls, and ARKit keeps producing frames
+while JS converts and uploads the camera preview. Reading depth first keeps the
+small depth payload inside the native snapshot retention window. If a depth
+payload still expires before JS can read it, the route should count that frame
+as a transient depth miss instead of surfacing a WebXR frame error to the user.
+
 Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
 frames at 60Hz, while the original WebGPU route rendered only about 6fps because
 JS spent roughly 140ms per upload swizzling BGRA preview bytes into RGBA. The
