@@ -43,6 +43,7 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_CAPTURE_GEOMETRY',
   'PANORAMIC_KEYFRAME_REJECTION_PROFILE',
   'PANORAMIC_LIVE_MODEL_PROFILE',
+  'PANORAMIC_MODEL_PUBLISH_PROFILE',
   'PANORAMIC_MODEL_UPLOAD_PROFILE',
   'PANORAMIC_MESH_PROFILE',
   'PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE',
@@ -69,6 +70,7 @@ export type OptionalMetricName =
   | 'PANORAMIC_CAPTURE_GEOMETRY'
   | 'PANORAMIC_KEYFRAME_REJECTION_PROFILE'
   | 'PANORAMIC_LIVE_MODEL_PROFILE'
+  | 'PANORAMIC_MODEL_PUBLISH_PROFILE'
   | 'PANORAMIC_MODEL_UPLOAD_PROFILE'
   | 'PANORAMIC_MESH_PROFILE'
   | 'PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE'
@@ -380,9 +382,9 @@ quality plus performance metrics must satisfy the configured budgets.
 The validator also prints optional profiling telemetry when it appears:
   CAMERA_CONTEXT_PROFILE derived from CAMERA_CTX lines,
   PANORAMIC_CAPTURE_BLOCKED_PROFILE, PANORAMIC_LIVE_MODEL_PROFILE,
-  PANORAMIC_MODEL_UPLOAD_PROFILE, PANORAMIC_KEYFRAME_REJECTION_PROFILE,
-  PANORAMIC_MESH_PROFILE, PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE,
-  PANORAMIC_NATIVE_PAYLOAD_PROFILE, PANORAMIC_PREVIEW_METRICS,
+  PANORAMIC_MODEL_PUBLISH_PROFILE, PANORAMIC_MODEL_UPLOAD_PROFILE,
+  PANORAMIC_KEYFRAME_REJECTION_PROFILE, PANORAMIC_MESH_PROFILE,
+  PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE, PANORAMIC_NATIVE_PAYLOAD_PROFILE, PANORAMIC_PREVIEW_METRICS,
   PANORAMIC_RENDER_FRAME_PROFILE, PANORAMIC_SCAN_CONFIG,
   PANORAMIC_SCAN_RESET_PROFILE, PANORAMIC_SCAN_STATS,
   PANORAMIC_XR_FRAME_PUMP_PROFILE, PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE, and
@@ -1265,6 +1267,14 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
       numberField(metric, 'rawSampleCount') >= numberField(metric, 'surfelCount') &&
       numberField(metric, 'buildMs') >= 0;
   }
+  if (name === 'PANORAMIC_MODEL_PUBLISH_PROFILE') {
+    return numberField(metric, 'keyframes') > 0 &&
+      numberField(metric, 'surfelCount') > 0 &&
+      numberField(metric, 'rawSampleCount') >= numberField(metric, 'surfelCount') &&
+      numberField(metric, 'modelRevision') > 0 &&
+      stringField(metric, 'source').length > 0 &&
+      typeof metric.renderRequesterReady === 'boolean';
+  }
   if (name === 'PANORAMIC_RENDER_FRAME_PROFILE') {
     return numberField(metric, 'keyframes') > 0 &&
       numberField(metric, 'surfelCount') > 0 &&
@@ -1670,6 +1680,18 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
   if (modelChainSummary) {
     lines.push(modelChainSummary);
   }
+  const modelPublish = seen.PANORAMIC_MODEL_PUBLISH_PROFILE;
+  if (modelPublish) {
+    lines.push(
+      `Model publish: ${stringField(modelPublish, 'source') || 'unknown'} ` +
+      `${formatModelCount(numberField(modelPublish, 'keyframes'), 'kf')}/` +
+      `${formatModelCount(numberField(modelPublish, 'rawSampleCount'), 'raw')}/` +
+      `${formatModelCount(numberField(modelPublish, 'surfelCount'), 'surfels')}, ` +
+      `revision ${numberField(modelPublish, 'modelRevision')}, ` +
+      `render requester ${modelPublish.renderRequesterReady === true ? 'ready' : 'missing'}, ` +
+      `recenter ${modelPublish.recenter === true ? 'yes' : 'no'}`
+    );
+  }
 
   const nativePayload = seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE;
   if (nativePayload) {
@@ -1911,6 +1933,10 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     if (displayedModel) {
       return `Displayed-surfels diagnosis: ${acceptedKeyframes} keyframes accepted and ${rawSamples} raw samples observed, but the ${displayedModel.label} model is stale at ${displayedModel.keyframes} keyframe(s) and ${displayedModel.rawSampleCount} raw samples; this points to live publish/render upload staleness rather than frame delivery`;
     }
+    const publishDisplay = publishedButNotRenderedDiagnosis(seen, acceptedKeyframes, rawSamples);
+    if (publishDisplay) {
+      return publishDisplay;
+    }
     const displayedSurfels = Math.max(
       numberField(keyframeProfile ?? {}, 'fusedSurfelCount'),
       numberField(seen.PANORAMIC_LIVE_MODEL_PROFILE ?? {}, 'surfelCount'),
@@ -2148,11 +2174,36 @@ function fusedSurfelCount(metric: Record<string, unknown> | undefined): number {
   );
 }
 
+function publishedButNotRenderedDiagnosis(
+  seen: SeenMetrics,
+  acceptedKeyframes: number,
+  rawSamples: number
+): string {
+  const publish = modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE);
+  if (!publish || publish.keyframes < acceptedKeyframes || publish.rawSampleCount < rawSamples) {
+    return '';
+  }
+  const upload = modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE);
+  const renderFrame = modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE);
+  if (seen.PANORAMIC_MODEL_PUBLISH_PROFILE?.renderRequesterReady === false) {
+    return `Displayed-surfels diagnosis: ${acceptedKeyframes} keyframes reached model publication ` +
+      `(${publish.rawSampleCount} raw samples), but no WebGPU render requester was installed when ` +
+      `${stringField(seen.PANORAMIC_MODEL_PUBLISH_PROFILE, 'source') || 'unknown'} published revision ` +
+      `${numberField(seen.PANORAMIC_MODEL_PUBLISH_PROFILE, 'modelRevision')}; this points to canvas/render setup rather than frame delivery`;
+  }
+  if (!upload && !renderFrame) {
+    return `Displayed-surfels diagnosis: ${acceptedKeyframes} keyframes reached model publication ` +
+      `(${publish.rawSampleCount} raw samples), but no WebGPU upload or render-frame profile was observed; this points to the publish-to-render boundary if the display stayed on the first surfel batch`;
+  }
+  return '';
+}
+
 function staleDisplayedRawSampleStage(seen: SeenMetrics, rawSamples: number): ModelChainStage | null {
   if (rawSamples <= 0) return null;
   const candidates = [
     modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
     modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
+    modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE),
     modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
     modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
   ].filter((stage): stage is ModelChainStage => stage !== null);
@@ -2167,6 +2218,7 @@ function staleDisplayedModelStage(
   const candidates = [
     modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
     modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
+    modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE),
     modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
     modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
   ].filter((stage): stage is ModelChainStage => stage !== null);
@@ -2188,6 +2240,7 @@ function panoramaModelChainSummary(seen: SeenMetrics): string {
   const stages = [
     modelChainStage('capture', seen.PANORAMIC_CAPTURE_METRICS),
     modelChainStage('render', seen.PANORAMIC_RENDER_METRICS),
+    modelChainStage('publish', seen.PANORAMIC_MODEL_PUBLISH_PROFILE),
     modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
     modelChainStage('export', seen.PANORAMIC_EXPORT_METRICS),
   ].filter((stage): stage is ModelChainStage => stage !== null);

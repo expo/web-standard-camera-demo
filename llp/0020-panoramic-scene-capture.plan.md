@@ -155,16 +155,20 @@ Implemented:
   keyframe append budget is missed. Scan mode maintains an incremental
   voxel-fusion map and publishes throttled
   `PANORAMIC_LIVE_MODEL_PROFILE` snapshots plus periodic `PANORAMIC_SCAN_STATS`
-  summaries for realtime WebGPU feedback. The full model is not rebuilt on
-  every XR frame, so live capture work avoids the earlier quadratic
-  point-history path. The first few accepted keyframes SHOULD still publish
-  immediately even when an earlier build was slow, because the scan surface is
-  small and the display must not appear stuck on the first keyframe while the
-  user begins a 180-degree sweep. Periodic scan stats MUST also be emitted on
-  the scan loop before any keyframe is accepted and again when the user stops
-  scanning, so a profile-only physical-device run can diagnose pose misses,
-  depth misses, precheck skips, and rejection reasons even when Preview/Capture
-  is never reached. Scan-loop and keyframe telemetry MUST report accepted raw sample
+  summaries for realtime WebGPU feedback. Each non-empty live, preview, or
+  capture model publish SHOULD also log `PANORAMIC_MODEL_PUBLISH_PROFILE` with
+  source, model revision, raw-sample/fused-surface counts, and whether the WebGPU
+  render requester was installed when publication happened. This lets copied logs
+  separate a stale display caused before model publication from one caused in GPU
+  upload/render. The full model is not rebuilt on every XR frame, so live capture
+  work avoids the earlier quadratic point-history path. The first few accepted
+  keyframes SHOULD still publish immediately even when an earlier build was slow,
+  because the scan surface is small and the display must not appear stuck on the
+  first keyframe while the user begins a 180-degree sweep. Periodic scan stats
+  MUST also be emitted on the scan loop before any keyframe is accepted and again
+  when the user stops scanning, so a profile-only physical-device run can diagnose
+  pose misses, depth misses, precheck skips, and rejection reasons even when
+  Preview/Capture is never reached. Scan-loop and keyframe telemetry MUST report accepted raw sample
   counts separately from the fused/displayed surfel count, because later
   keyframes can update existing voxels without increasing the rendered surfel
   count; device logs need to distinguish "no post-first frames accepted" from
@@ -1325,7 +1329,7 @@ also treat `PANORAMIC_NATIVE_PAYLOAD_PROFILE` with `payloadUnavailable` as
 evidence that lazy native frame bytes were unavailable after an XR frame was
 delivered, and should distinguish depth-payload unavailability from camera
 payload unavailability because only the former prevents depth surfels for that
-frame. Repeated keyframe, preview, live-model, render-frame, upload, and
+frame. Repeated keyframe, preview, live-model, model-publish, render-frame, upload, and
 native-payload telemetry is merged conservatively: the latest model counts are
 kept for
 capture/render/export consistency, while the worst observed timing, worst

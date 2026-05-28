@@ -116,6 +116,7 @@ const MODEL_VIEW_MODES = [
   { label: 'Normals', value: 2 },
 ] as const;
 type CaptureBlockedReason = 'busy' | 'not-scanning' | 'too-few-keyframes';
+type ModelPublishSource = 'capture' | 'live' | 'preview' | 'reset';
 type ScanResetReason = 'manual-reset' | 'start-session';
 // @ref LLP 0020#v2-arkit-mesh-snapshot - Mesh supplement refresh uses
 // standard XRMesh object identity plus `lastChangedTime`; native anchor IDs
@@ -463,7 +464,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     modelViewModeRef.current = 0;
     viewerGestureActiveRef.current = false;
     viewerManuallyAdjustedRef.current = false;
-    publishModel(null);
+    publishModel(null, { source: 'reset' });
     setModelViewMode(0);
     setViewerState(DEFAULT_VIEWER_STATE);
     setFrameInfo('waiting for depth frames');
@@ -847,7 +848,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         setError('No valid depth samples have been captured yet.');
         return;
       }
-      publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current });
+      publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current, source: 'capture' });
       setModelInfo(formatModelInfo(nextModel));
       setQualityInfo(formatQualityInfo(nextModel));
       logCaptureMetrics(nextModel, previewBuild, scanIdRef.current);
@@ -895,7 +896,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         setError('No valid depth samples have been captured yet.');
         return;
       }
-      publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current });
+      publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current, source: 'preview' });
       setModelInfo(`preview: ${formatModelInfo(nextModel)}`);
       setQualityInfo(formatQualityInfo(nextModel));
       setFrameInfo(`preview model: ${nextModel.surfelCount} fused surfels from ${keyframeCountRef.current} keyframes`);
@@ -968,7 +969,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     // @ref LLP 0020#model-view - During a 180-degree scan, keep live snapshots
     // centered around the evolving accepted view until the user manually
     // inspects the model, then preserve that chosen inspection view.
-    publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current });
+    publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current, source: 'live' });
     setModelInfo(
       `live: ${formatModelInfo(nextModel)} - refresh ${previewBuild.buildMs.toFixed(1)}ms/${publishDecision.intervalMs}ms`
     );
@@ -1764,13 +1765,26 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     });
   }
 
-  function publishModel(nextModel: CaptureModel | null, options: { recenter?: boolean } = {}): void {
+  function publishModel(
+    nextModel: CaptureModel | null,
+    options: { recenter?: boolean; source?: ModelPublishSource } = {}
+  ): void {
+    const modelRevision = modelRevisionRef.current + 1;
+    const renderRequesterReady = requestRenderRef.current !== null;
     modelRef.current = nextModel;
-    modelRevisionRef.current += 1;
+    modelRevisionRef.current = modelRevision;
     renderDirtyRef.current = true;
     requestRenderRef.current?.();
     setModel(nextModel);
     if (nextModel) {
+      logModelPublishProfile(
+        nextModel,
+        modelRevision,
+        options.source ?? 'live',
+        renderRequesterReady,
+        options.recenter === true,
+        scanIdRef.current
+      );
       if (statusRef.current !== 'scanning') {
         setLiveSurfelCount(nextModel.surfelCount);
       }
@@ -2407,6 +2421,29 @@ function logLiveModelProfile(
     rawSampleCount: model.rawSampleCount,
     reusedModel: build.reusedModel,
     scanId,
+    surfelCount: model.surfelCount,
+  }));
+}
+
+function logModelPublishProfile(
+  model: CaptureModel,
+  modelRevision: number,
+  source: ModelPublishSource,
+  renderRequesterReady: boolean,
+  recenter: boolean,
+  scanId: number
+): void {
+  // @ref LLP 0020#testing-and-validation - Publish telemetry proves that a fresh
+  // live/preview/capture model reached React state before WebGPU upload/render
+  // telemetry, isolating stale display from keyframe capture.
+  console.log('PANORAMIC_MODEL_PUBLISH_PROFILE', JSON.stringify({
+    keyframes: model.keyframes,
+    modelRevision,
+    rawSampleCount: model.rawSampleCount,
+    recenter,
+    renderRequesterReady,
+    scanId,
+    source,
     surfelCount: model.surfelCount,
   }));
 }

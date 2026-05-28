@@ -733,6 +733,35 @@ test('panorama validator summarizes model chain mismatches for profile-only logs
   );
 });
 
+test('panorama validator diagnoses published models that do not reach WebGPU render setup', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 3,
+      rawSampleCount: 100,
+      retainedSamples: 100,
+      surfelCount: 34,
+    },
+    PANORAMIC_MODEL_PUBLISH_PROFILE: {
+      keyframes: 3,
+      modelRevision: 2,
+      rawSampleCount: 100,
+      recenter: true,
+      renderRequesterReady: false,
+      source: 'live',
+      surfelCount: 42,
+    },
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Model publish: live 3kf/100raw/42surfels, revision 2, render requester missing, recenter yes'
+  );
+  expect(summary).toContain(
+    'Displayed-surfels diagnosis: 3 keyframes reached model publication (100 raw samples), but no WebGPU render requester was installed when live published revision 2; this points to canvas/render setup rather than frame delivery'
+  );
+});
+
 test('panorama validator builds a durable profiling report payload', () => {
   const seen = completeMetricSet({
     PANORAMIC_LIVE_MODEL_PROFILE: {
