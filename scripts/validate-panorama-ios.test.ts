@@ -231,6 +231,29 @@ test('panorama validator parses copied log text for offline profiling', () => {
   });
 });
 
+test('panorama validator preserves camera context ownership clues from copied logs', () => {
+  const seen = parseMetricLogText(`
+ LOG CAMERA_CTX start req=3 {"facingMode":"environment"}
+ LOG CAMERA_CTX gUM-ok req=3 tracks=1
+ LOG CAMERA_CTX start blocked external-lock {"facingMode":"environment"}
+ LOG CAMERA_CTX start skipped in-flight {"facingMode":"environment"}
+ LOG CAMERA_CTX lidar event ignored {"activeSessionId":2,"reason":"stale-session","sessionId":1,"state":"stopped"}
+  `);
+
+  expect(seen.CAMERA_CONTEXT_PROFILE).toMatchObject({
+    blockedExternalLockStarts: 1,
+    gumOkRequests: 1,
+    ignoredLiDAREvents: 1,
+    latestGumOkRequestId: 3,
+    latestIgnoredLiDARReason: 'stale-session',
+    skippedDuplicateStarts: 1,
+    standardStartRequests: 1,
+  });
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'Camera context: standard starts 1, gUM ok 1, gUM fail 0, external-lock blocked 1, duplicate skipped 1, ignored LiDAR events 1, ignored LiDAR stale-session'
+  );
+});
+
 test('panorama validator keeps the latest scan id from copied multi-run logs', () => {
   const seen = parseMetricLogText(`
  LOG PANORAMIC_CAPTURE_METRICS {"boundsMeters":[2,1,1],"cameraColorPercent":85,"keyframes":12,"rawSampleCount":1200,"scanId":1,"surfelCount":900}
@@ -796,6 +819,24 @@ test('panorama validator identifies native depth payload failures behind one-fra
   );
   expect(summary).toContain(
     'First-frame diagnosis: scan loop callback threw after 1 keyframe(s): InvalidStateError: Depth data for this XRFrame is no longer available; native WebXR depth payload was unavailable (native-payload-error), so JS received an XR frame but could not read depth bytes for post-first surfel capture'
+  );
+});
+
+test('panorama validator identifies standard-camera ownership races behind one-frame scans', () => {
+  const seen = parseMetricLogText(`
+    LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"smooth","depthTypeRequest":["smooth","raw"],"meshRequested":false,"scanId":6,"sessionDepthType":"smooth"}
+    LOG PANORAMIC_KEYFRAME_PROFILE {"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":6,"surfelCount":781}
+    LOG CAMERA_CTX start req=7 {"facingMode":"environment"}
+    LOG CAMERA_CTX gUM-ok req=7 tracks=1
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Camera context: standard starts 1, gUM ok 1, gUM fail 0, external-lock blocked 0, duplicate skipped 0, ignored LiDAR events 0'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (1 ok, 1 starts) without an observed external-lock block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch'
   );
 });
 

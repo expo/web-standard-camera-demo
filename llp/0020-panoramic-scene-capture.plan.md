@@ -1277,7 +1277,13 @@ prints optional profiling telemetry (`PANORAMIC_LIVE_MODEL_PROFILE`,
 `PANORAMIC_PREVIEW_METRICS`, `PANORAMIC_RENDER_FRAME_PROFILE`, `PANORAMIC_SCAN_STATS`,
 `PANORAMIC_XR_FRAME_PUMP_PROFILE`, `PANORAMIC_XR_POSE_PROFILE`, and
 `PANORAMIC_CAPTURE_GEOMETRY`) when those lines appear before the required
-end-to-end metrics complete, and validates the optional preview/live
+end-to-end metrics complete, and derives `CAMERA_CONTEXT_PROFILE` from
+`CAMERA_CTX` camera-provider lines when copied logs include them. That derived
+camera profile should preserve standard-camera starts, successful or failed
+`getUserMedia` opens, starts blocked by the WebXR external lock, duplicate
+starts coalesced while a start is in flight, and ignored stale LiDAR terminal
+events so a one-frame scan can be checked for AVFoundation/ARKit ownership
+handoff races. The validator validates the optional preview/live
 build/upload budgets when present. `PANORAMIC_XR_FRAME_PUMP_PROFILE` reports
 whether the WebXR animation-frame loop is waiting on no native frame or a stale
 depth frame, plus periodic successful delivery counts and native AR

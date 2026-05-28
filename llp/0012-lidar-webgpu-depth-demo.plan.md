@@ -424,7 +424,13 @@ handoff: a `stopped` or `failed` event from an older ARKit session MUST NOT
 clear a newly acquired external lock before the new `starting`/`running` event
 has established its session id. The WebXR explicit `end()` path MUST mark the
 session ended and cancel callbacks immediately, but it MUST keep the external
-camera lock until the native ARKit stop promise resolves.
+camera lock until the native ARKit stop promise resolves. Runtime logs SHOULD
+keep camera ownership clues visible: standard-camera start attempts, successful
+`getUserMedia` opens, starts blocked by the external lock, duplicate starts
+coalesced while one is in flight, and ignored stale LiDAR terminal events. The
+panorama validator may derive a camera-ownership profile from those logs so a
+one-frame WebXR scan can be distinguished from an AVFoundation/ARKit ownership
+race.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,

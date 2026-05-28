@@ -38,6 +38,7 @@ const REQUIRED_METRICS = [
   'PANORAMIC_EXPORT_METRICS',
 ] as const satisfies readonly RequiredMetricName[];
 const OPTIONAL_METRICS = [
+  'CAMERA_CONTEXT_PROFILE',
   'PANORAMIC_CAPTURE_BLOCKED_PROFILE',
   'PANORAMIC_CAPTURE_GEOMETRY',
   'PANORAMIC_KEYFRAME_REJECTION_PROFILE',
@@ -63,6 +64,7 @@ export type RequiredMetricName =
   | 'PANORAMIC_RENDER_METRICS'
   | 'PANORAMIC_EXPORT_METRICS';
 export type OptionalMetricName =
+  | 'CAMERA_CONTEXT_PROFILE'
   | 'PANORAMIC_CAPTURE_BLOCKED_PROFILE'
   | 'PANORAMIC_CAPTURE_GEOMETRY'
   | 'PANORAMIC_KEYFRAME_REJECTION_PROFILE'
@@ -376,6 +378,7 @@ export telemetry must include the Files-visible .ply path, and capture/render
 quality plus performance metrics must satisfy the configured budgets.
 
 The validator also prints optional profiling telemetry when it appears:
+  CAMERA_CONTEXT_PROFILE derived from CAMERA_CTX lines,
   PANORAMIC_CAPTURE_BLOCKED_PROFILE, PANORAMIC_LIVE_MODEL_PROFILE,
   PANORAMIC_MODEL_UPLOAD_PROFILE, PANORAMIC_KEYFRAME_REJECTION_PROFILE,
   PANORAMIC_MESH_PROFILE, PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE,
@@ -471,6 +474,16 @@ async function collectMetrics(
 }
 
 export function recordMetricLine(line: string, seen: SeenMetrics): void {
+  const cameraContextMetric = parseCameraContextMetricLine(line);
+  if (cameraContextMetric) {
+    seen.CAMERA_CONTEXT_PROFILE = mergeObservedMetric(
+      'CAMERA_CONTEXT_PROFILE',
+      seen.CAMERA_CONTEXT_PROFILE,
+      cameraContextMetric
+    );
+    console.log(`CAMERA_CONTEXT_PROFILE ${JSON.stringify(seen.CAMERA_CONTEXT_PROFILE)}`);
+    return;
+  }
   const match = line.match(/(PANORAMIC_[A-Z_]+)\s+(\{.*\})/);
   if (!match) return;
   const name = match[1] as MetricName;
@@ -520,6 +533,55 @@ function safeParseMetric(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function parseCameraContextMetricLine(line: string): Record<string, unknown> | null {
+  if (!line.includes('CAMERA_CTX')) return null;
+  const start = line.match(/CAMERA_CTX start req=(\d+)\s+(\{.*\})/);
+  if (start) {
+    return {
+      latestStartRequestId: Number(start[1]),
+      latestStartConstraints: start[2],
+      standardStartRequests: 1,
+    };
+  }
+  const gumOk = line.match(/CAMERA_CTX gUM-ok req=(\d+) tracks=(\d+)/);
+  if (gumOk) {
+    return {
+      gumOkRequests: 1,
+      latestGumOkRequestId: Number(gumOk[1]),
+      latestGumOkTracks: Number(gumOk[2]),
+    };
+  }
+  const gumFail = line.match(/CAMERA_CTX gUM-fail req=(\d+)\s+([^:]+):\s*(.*)$/);
+  if (gumFail) {
+    return {
+      gumFailRequests: 1,
+      latestGumFailRequestId: Number(gumFail[1]),
+      latestGumFailMessage: gumFail[3] ?? '',
+      latestGumFailName: gumFail[2] ?? 'Error',
+    };
+  }
+  if (/CAMERA_CTX start blocked external-lock/.test(line)) {
+    return { blockedExternalLockStarts: 1 };
+  }
+  if (/CAMERA_CTX start skipped in-flight/.test(line)) {
+    return { skippedDuplicateStarts: 1 };
+  }
+  const ignoredLiDAR = line.match(/CAMERA_CTX lidar event ignored\s+(\{.*\})/);
+  if (ignoredLiDAR) {
+    const detail = safeParseMetric(ignoredLiDAR[1] ?? '{}');
+    return {
+      ignoredLiDAREvents: 1,
+      latestIgnoredLiDARReason: stringField(detail, 'reason'),
+      latestIgnoredLiDARSessionId: numberField(detail, 'sessionId'),
+      latestIgnoredLiDARState: stringField(detail, 'state'),
+    };
+  }
+  if (/CAMERA_CTX module-load/.test(line)) {
+    return { moduleLoads: 1 };
+  }
+  return null;
 }
 
 function isObservedMetric(name: string): name is MetricName {
@@ -772,6 +834,52 @@ function mergeObservedMetric(
       depthGridSampleMode,
       depthType,
       depthTransformMode,
+    };
+  }
+  if (name === 'CAMERA_CONTEXT_PROFILE') {
+    return {
+      ...incoming,
+      blockedExternalLockStarts: numberField(existing, 'blockedExternalLockStarts') +
+        numberField(incoming, 'blockedExternalLockStarts'),
+      gumFailRequests: numberField(existing, 'gumFailRequests') + numberField(incoming, 'gumFailRequests'),
+      gumOkRequests: numberField(existing, 'gumOkRequests') + numberField(incoming, 'gumOkRequests'),
+      ignoredLiDAREvents: numberField(existing, 'ignoredLiDAREvents') +
+        numberField(incoming, 'ignoredLiDAREvents'),
+      moduleLoads: numberField(existing, 'moduleLoads') + numberField(incoming, 'moduleLoads'),
+      skippedDuplicateStarts: numberField(existing, 'skippedDuplicateStarts') +
+        numberField(incoming, 'skippedDuplicateStarts'),
+      standardStartRequests: numberField(existing, 'standardStartRequests') +
+        numberField(incoming, 'standardStartRequests'),
+      latestGumFailMessage:
+        stringField(incoming, 'latestGumFailMessage') || stringField(existing, 'latestGumFailMessage'),
+      latestGumFailName:
+        stringField(incoming, 'latestGumFailName') || stringField(existing, 'latestGumFailName'),
+      latestIgnoredLiDARReason:
+        stringField(incoming, 'latestIgnoredLiDARReason') || stringField(existing, 'latestIgnoredLiDARReason'),
+      latestIgnoredLiDARState:
+        stringField(incoming, 'latestIgnoredLiDARState') || stringField(existing, 'latestIgnoredLiDARState'),
+      latestStartConstraints:
+        stringField(incoming, 'latestStartConstraints') || stringField(existing, 'latestStartConstraints'),
+      latestGumFailRequestId: Math.max(
+        numberField(existing, 'latestGumFailRequestId'),
+        numberField(incoming, 'latestGumFailRequestId')
+      ),
+      latestGumOkRequestId: Math.max(
+        numberField(existing, 'latestGumOkRequestId'),
+        numberField(incoming, 'latestGumOkRequestId')
+      ),
+      latestGumOkTracks: Math.max(
+        numberField(existing, 'latestGumOkTracks'),
+        numberField(incoming, 'latestGumOkTracks')
+      ),
+      latestIgnoredLiDARSessionId: Math.max(
+        numberField(existing, 'latestIgnoredLiDARSessionId'),
+        numberField(incoming, 'latestIgnoredLiDARSessionId')
+      ),
+      latestStartRequestId: Math.max(
+        numberField(existing, 'latestStartRequestId'),
+        numberField(incoming, 'latestStartRequestId')
+      ),
     };
   }
   if (name === 'PANORAMIC_LIVE_MODEL_PROFILE') {
@@ -1053,6 +1161,15 @@ function mergeLowestObservedNumber(
 }
 
 export function isValidMetric(name: MetricName, metric: Record<string, unknown>): boolean {
+  if (name === 'CAMERA_CONTEXT_PROFILE') {
+    return numberField(metric, 'standardStartRequests') > 0 ||
+      numberField(metric, 'gumOkRequests') > 0 ||
+      numberField(metric, 'gumFailRequests') > 0 ||
+      numberField(metric, 'blockedExternalLockStarts') > 0 ||
+      numberField(metric, 'skippedDuplicateStarts') > 0 ||
+      numberField(metric, 'ignoredLiDAREvents') > 0 ||
+      numberField(metric, 'moduleLoads') > 0;
+  }
   if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') {
     return numberField(metric, 'frameNumber') > 0 && numberField(metric, 'requestMs') >= 0;
   }
@@ -1385,6 +1502,24 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `Scan config: depth preference ${stringField(scanConfig, 'depthPreference') || 'unknown'}, ` +
       `request [${requestedDepthTypes}], session depth ${stringField(scanConfig, 'sessionDepthType') || 'unknown'}, ` +
       `mesh ${scanConfig.meshRequested === true ? 'requested' : 'off'}`
+    );
+  }
+
+  const cameraContext = seen.CAMERA_CONTEXT_PROFILE;
+  if (cameraContext) {
+    const gumFailDetail = stringField(cameraContext, 'latestGumFailMessage')
+      ? `, latest failure ${stringField(cameraContext, 'latestGumFailName') || 'Error'}: ${stringField(cameraContext, 'latestGumFailMessage')}`
+      : '';
+    const ignoredLiDARDetail = stringField(cameraContext, 'latestIgnoredLiDARReason')
+      ? `, ignored LiDAR ${stringField(cameraContext, 'latestIgnoredLiDARReason')}`
+      : '';
+    lines.push(
+      `Camera context: standard starts ${numberField(cameraContext, 'standardStartRequests')}, ` +
+      `gUM ok ${numberField(cameraContext, 'gumOkRequests')}, ` +
+      `gUM fail ${numberField(cameraContext, 'gumFailRequests')}, ` +
+      `external-lock blocked ${numberField(cameraContext, 'blockedExternalLockStarts')}, ` +
+      `duplicate skipped ${numberField(cameraContext, 'skippedDuplicateStarts')}, ` +
+      `ignored LiDAR events ${numberField(cameraContext, 'ignoredLiDAREvents')}${gumFailDetail}${ignoredLiDARDetail}`
     );
   }
 
@@ -1831,6 +1966,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     }
   }
 
+  const cameraOwnership = cameraOwnershipDiagnosis(seen);
+  if (cameraOwnership) {
+    return cameraOwnership;
+  }
+
   if (scan && numberField(scan, 'frameCount') > 1) {
     const rejected = scanRejectionSummary(scan);
     const gateDiagnosis = dominantKeyframeGateDiagnosis(scan);
@@ -1850,6 +1990,29 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     return `First-frame diagnosis: current scan has only ${acceptedKeyframes} keyframe(s) after a ${stringField(scanReset, 'reason') || 'unknown'} reset discarded ${numberField(scanReset, 'previousKeyframes')} previous keyframes and ${numberField(scanReset, 'previousRawSampleCount')} raw samples`;
   }
 
+  return '';
+}
+
+function cameraOwnershipDiagnosis(seen: SeenMetrics): string {
+  const cameraContext = seen.CAMERA_CONTEXT_PROFILE;
+  if (!cameraContext) return '';
+  const standardStarts = numberField(cameraContext, 'standardStartRequests');
+  const gumOk = numberField(cameraContext, 'gumOkRequests');
+  const blocked = numberField(cameraContext, 'blockedExternalLockStarts');
+  const ignoredLiDAR = numberField(cameraContext, 'ignoredLiDAREvents');
+  const hasPanoramaScan = Boolean(
+    seen.PANORAMIC_SCAN_CONFIG ||
+      seen.PANORAMIC_KEYFRAME_PROFILE ||
+      seen.PANORAMIC_XR_FRAME_PUMP_PROFILE ||
+      seen.PANORAMIC_SCAN_STATS
+  );
+  if (!hasPanoramaScan) return '';
+  if (gumOk > 0 && blocked <= 0) {
+    return `First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (${gumOk} ok, ${standardStarts} starts) without an observed external-lock block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch`;
+  }
+  if (ignoredLiDAR > 0) {
+    return `First-frame diagnosis: camera ownership gate ignored ${ignoredLiDAR} stale LiDAR event(s), so copied logs should be checked for a session-id handoff race before assuming JS keyframe gating`;
+  }
   return '';
 }
 
