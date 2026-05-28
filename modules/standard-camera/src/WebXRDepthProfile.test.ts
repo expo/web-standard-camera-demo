@@ -660,6 +660,73 @@ test('XRSystem.requestSession waits for camera lock handlers before starting nat
   }
 });
 
+test('XRSystem.requestSession honors raw-first depth type preference', async () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalCapabilities = NativeStandardCamera.getLiDARDepthCapabilities;
+  const originalStart = NativeStandardCamera.startWebXRLiDARDepthAsync;
+  const originalStop = NativeStandardCamera.stopLiDARDepthAsync;
+  let requestedDepthType = '';
+  let session: WebXRSession | null = null;
+
+  try {
+    setWebXRDepthCameraLockHandlers({
+      lockExternal: async () => {},
+      unlockExternal: () => {},
+    });
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).getLiDARDepthCapabilities = () => ({
+      frameNumber: 0,
+      meshDetection: false,
+      running: false,
+      sceneDepth: true,
+      sessionId: 0,
+      smoothedSceneDepth: true,
+      state: 'idle',
+      supported: true,
+    });
+    (NativeStandardCamera as typeof NativeStandardCamera).startWebXRLiDARDepthAsync = async (depthType) => {
+      requestedDepthType = depthType;
+      return {
+        depthType: depthType === 'raw' ? 'raw' : 'smooth',
+        frameNumber: 1,
+        meshDetection: false,
+        running: true,
+        sceneDepth: true,
+        sessionId: 17,
+        smoothedSceneDepth: true,
+        state: 'running',
+        supported: true,
+      };
+    };
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = async () => {};
+
+    const system = new WebXRSystem();
+    session = await runWithWebXRUserActivation(() =>
+      system.requestSession('immersive-ar', {
+        requiredFeatures: ['depth-sensing'],
+        depthSensing: {
+          dataFormatPreference: ['float32'],
+          depthTypeRequest: ['raw', 'smooth'],
+          matchDepthView: true,
+          usagePreference: ['cpu-optimized'],
+        },
+      })
+    );
+
+    expect(requestedDepthType).toBe('raw');
+    expect(session.depthType).toBe('raw');
+  } finally {
+    if (session && !session.ended) {
+      await session.end();
+    }
+    setWebXRDepthCameraLockHandlers(null);
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).getLiDARDepthCapabilities = originalCapabilities;
+    (NativeStandardCamera as typeof NativeStandardCamera).startWebXRLiDARDepthAsync = originalStart;
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = originalStop;
+  }
+});
+
 test('XRSystem.requestSession rejects overlapping starts before taking or releasing the camera lock', async () => {
   const originalAddListener = NativeStandardCamera.addListener;
   const originalCapabilities = NativeStandardCamera.getLiDARDepthCapabilities;
