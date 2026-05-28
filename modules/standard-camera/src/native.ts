@@ -201,6 +201,7 @@ export type NativeLiDARDepthSessionState =
   | 'stopped';
 
 export type NativeLiDARDepthType = 'raw' | 'smooth';
+export type NativeAppLifecycleState = 'active' | 'inactive' | 'background' | 'unknown';
 export type NativeLiDARDepthTrackingState = 'normal' | 'limited' | 'notAvailable' | 'unknown';
 export type NativeLiDARDepthWorldMappingStatus =
   | 'notAvailable'
@@ -243,6 +244,7 @@ export interface NativeLiDARDepthFrame {
   /** ARFrame.timestamp, seconds on ARKit's monotonic clock. */
   readonly timestamp?: number;
   /** Internal ARFrame delivery counters for WebXR frame-pump profiling. */
+  readonly appLifecycleState?: NativeAppLifecycleState;
   readonly arFrameNumber?: number;
   readonly arFrameTimestamp?: number;
   readonly consecutiveDepthMisses?: number;

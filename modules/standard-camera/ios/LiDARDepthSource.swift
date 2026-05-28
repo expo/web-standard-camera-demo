@@ -275,6 +275,19 @@ private func webXRWorldMappingStatus(_ status: ARFrame.WorldMappingStatus) -> St
   }
 }
 
+private func webXRApplicationLifecycleState(_ state: UIApplication.State) -> String {
+  switch state {
+  case .active:
+    return "active"
+  case .inactive:
+    return "inactive"
+  case .background:
+    return "background"
+  @unknown default:
+    return "unknown"
+  }
+}
+
 // @ref LLP 0012#native-extension-shape — Demo-only ARKit depth source. This is
 // intentionally not part of the W3C MediaStream surface; it exposes native
 // LiDAR data so WebGPU can render it.
@@ -318,6 +331,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   private var lastErrorReason: String?
   private var pendingStart: PendingLiDARStart?
   private var startupTimeout: DispatchWorkItem?
+  private var appLifecycleState = "unknown"
 
   var onStateEvent: (([String: Any]) -> Void)?
 
@@ -325,6 +339,35 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     super.init()
     session.delegate = self
     session.delegateQueue = delegateQueue
+    appLifecycleState = webXRApplicationLifecycleState(UIApplication.shared.applicationState)
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppDidBecomeActive),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppWillResignActive),
+      name: UIApplication.willResignActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppDidEnterBackground),
+      name: UIApplication.didEnterBackgroundNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppWillEnterForeground),
+      name: UIApplication.willEnterForegroundNotification,
+      object: nil
+    )
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
   }
 
   func capabilities() -> [String: Any] {
@@ -744,6 +787,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let currentSessionId = sessionId
     let currentState = state
     let currentStateReason = lastErrorReason
+    let currentAppLifecycleState = appLifecycleState
     let rawDepthAvailable = latestARFrameRawDepthAvailable
     let smoothDepthAvailable = latestARFrameSmoothDepthAvailable
     let depthMissRequestedType = latestDepthMissRequestedType
@@ -777,6 +821,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
           "normDepthBufferFromNormView": webXRIdentityMatrix,
           "arFrameNumber": arFrameNumber,
           "arFrameTimestamp": arFrameTimestamp,
+          "appLifecycleState": currentAppLifecycleState,
           "consecutiveDepthMisses": currentConsecutiveDepthMisses,
           "depthFrameArFrameNumber": depthFrameARFrameNumber,
           "depthMisses": depthMissCount,
@@ -816,6 +861,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       "normDepthBufferFromNormView": snapshot.normDepthBufferFromNormView,
       "arFrameNumber": arFrameNumber,
       "arFrameTimestamp": arFrameTimestamp,
+      "appLifecycleState": currentAppLifecycleState,
       "consecutiveDepthMisses": currentConsecutiveDepthMisses,
       "depthFrameArFrameNumber": depthFrameARFrameNumber,
       "depthMisses": depthMissCount,
@@ -1862,6 +1908,28 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       "state": LiDARDepthSessionState.starting.rawValue,
       "frameNumber": frameNumber,
     ])
+  }
+
+  private func updateAppLifecycleState(_ state: String) {
+    lock.lock()
+    appLifecycleState = state
+    lock.unlock()
+  }
+
+  @objc private func handleAppDidBecomeActive() {
+    updateAppLifecycleState("active")
+  }
+
+  @objc private func handleAppWillResignActive() {
+    updateAppLifecycleState("inactive")
+  }
+
+  @objc private func handleAppDidEnterBackground() {
+    updateAppLifecycleState("background")
+  }
+
+  @objc private func handleAppWillEnterForeground() {
+    updateAppLifecycleState("inactive")
   }
 
   private func emitStateEvent(_ event: [String: Any]) {

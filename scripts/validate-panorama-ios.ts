@@ -2144,6 +2144,7 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `AR frame ${arFrameNumber} (+${numberField(framePump, 'arFrameDelta')})${depthARFrameDetail}, ` +
       `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}` +
       `${framePumpDepthSemanticDetail(framePump)}, ` +
+      `app ${stringField(framePump, 'appLifecycleState') || 'unknown'}, ` +
       `native session ${stringField(framePump, 'nativeSessionState') || 'unknown'}` +
       (stringField(framePump, 'nativeSessionReason')
         ? ` (${stringField(framePump, 'nativeSessionReason')})`
@@ -2294,6 +2295,14 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     if (deliveredFramePolls <= 1 && (noFramePolls > 0 || staleFramePolls > 0)) {
       const arFrameDelta = numberField(framePump, 'arFrameDelta');
       const depthFrameDelta = numberField(framePump, 'depthFrameDelta');
+      const appLifecycleState = stringField(framePump, 'appLifecycleState');
+      if (
+        staleFramePolls > 0 &&
+        arFrameDelta <= 0 &&
+        (appLifecycleState === 'inactive' || appLifecycleState === 'background')
+      ) {
+        return `First-frame diagnosis: WebXR native frame delivery stalled while the app lifecycle state was ${appLifecycleState}; this points to phone lock/backgrounding rather than JS keyframe rejection`;
+      }
       const nativeState = stringField(framePump, 'nativeSessionState');
       if (staleFramePolls > 0 && arFrameDelta <= 0 && nativeState && nativeState !== 'running') {
         const nativeReason = stringField(framePump, 'nativeSessionReason');

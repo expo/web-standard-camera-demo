@@ -1319,7 +1319,9 @@ depth disappearing while raw depth still arrives, from total ARKit camera/depth
 ownership starvation. The same frame-pump line SHOULD carry native ARKit
 session state and reason fields so a repeated stale frame can be attributed to
 session interruption/stop versus `ARSession` `didUpdate` ceasing while the
-native session still reports running.
+native session still reports running. It SHOULD also report the native app
+lifecycle state so a stale frame run can identify phone lock/backgrounding as
+the cause without inferring it from missing AR frames.
 `PANORAMIC_KEYFRAME_REJECTION_PROFILE` reports the latest throttled keyframe
 skip reason with pose motion, retained surfel count, depth/miss counters, and
 depth/mesh preflight density when available, so a run that captures no new

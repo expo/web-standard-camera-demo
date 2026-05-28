@@ -238,6 +238,7 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
   let nowMs = 2000;
   let nativeFrame: NativeLiDARDepthFrame = {
     ...makeNativeFrame(1),
+    appLifecycleState: 'active',
     arFrameNumber: 10,
     nativeSessionId: 1,
     nativeSessionState: 'running',
@@ -277,6 +278,7 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
     flushNextRaf(callbacks);
     expect(delivered).toBe(1);
     expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      appLifecycleState: 'active',
       deliveredFramePolls: 1,
       latestFrameNumber: 1,
       nativeSessionId: 1,
@@ -292,6 +294,7 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
 
     nativeFrame = {
       ...makeNativeFrame(2),
+      appLifecycleState: 'active',
       arFrameNumber: 12,
       nativeSessionId: 1,
       nativeSessionState: 'running',

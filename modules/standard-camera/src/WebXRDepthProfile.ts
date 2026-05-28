@@ -815,6 +815,7 @@ export class WebXRSession extends EventTarget {
     const latestFrameNumber = nativeFrame?.frameNumber ?? 0;
     const arFrameNumber = nativeFrame?.arFrameNumber ?? 0;
     console.log('PANORAMIC_XR_FRAME_PUMP_PROFILE', JSON.stringify({
+      appLifecycleState: nativeFrame?.appLifecycleState,
       arFrameDelta: Math.max(0, arFrameNumber - this.#lastProfileARFrameNumber),
       arFrameNumber,
       consecutiveDepthMisses: nativeFrame?.consecutiveDepthMisses ?? 0,
