@@ -257,6 +257,7 @@ export interface NativeLiDARDepthFrame {
   readonly nativeSessionReason?: string;
   readonly nativeSessionState?: NativeLiDARDepthSessionState;
   readonly rawDepthAvailable?: boolean;
+  readonly retainedFrameSnapshots?: number;
   readonly requestedDepthMissesWithAlternateDepth?: number;
   readonly requestedDepthMissingButAlternateAvailable?: boolean;
   readonly requestedDepthType?: NativeLiDARDepthType;

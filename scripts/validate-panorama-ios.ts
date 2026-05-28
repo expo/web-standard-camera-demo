@@ -2138,6 +2138,10 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     const depthARFrameDetail = depthFrameArFrameNumber > 0
       ? `, depth AR frame ${depthFrameArFrameNumber} lag ${depthFrameLag}`
       : '';
+    const retainedFrameSnapshots = numberField(framePump, 'retainedFrameSnapshots');
+    const retainedFrameDetail = retainedFrameSnapshots > 0
+      ? `, retained native snapshots ${retainedFrameSnapshots}`
+      : '';
     lines.push(
       `XR frame pump: ${stringField(framePump, 'reason') || 'unknown'}, ` +
       `depth frame ${numberField(framePump, 'latestFrameNumber')} delivered ${numberField(framePump, 'lastDeliveredFrameNumber')}, ` +
@@ -2153,7 +2157,7 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       optionalErrorDetail(framePump) +
       `delivered polls ${numberField(framePump, 'deliveredFramePolls')}, ` +
       `native errors ${numberField(framePump, 'nativeFrameErrorPolls')}, ` +
-      `stale polls ${numberField(framePump, 'staleFramePolls')}`
+      `stale polls ${numberField(framePump, 'staleFramePolls')}${retainedFrameDetail}`
     );
   }
 
@@ -2310,7 +2314,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
           `${nativeReason ? ` (${nativeReason})` : ''}; this points to session interruption/stop rather than JS keyframe rejection`;
       }
       if (staleFramePolls > 0 && arFrameDelta <= 0 && nativeState === 'running') {
-        return `First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session still reported running; ARSession didUpdate stopped advancing after frame ${numberField(framePump, 'arFrameNumber')}, so the next physical log should check app lock/backgrounding or ARKit camera ownership rather than JS keyframe rejection`;
+        const retainedFrameSnapshots = numberField(framePump, 'retainedFrameSnapshots');
+        const retainedDetail = retainedFrameSnapshots > 0
+          ? `; native retained frame snapshots ${retainedFrameSnapshots}`
+          : '';
+        return `First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session still reported running; ARSession didUpdate stopped advancing after frame ${numberField(framePump, 'arFrameNumber')}${retainedDetail}, so the next physical log should check native frame-buffer retention, app lock/backgrounding, or ARKit camera ownership rather than JS keyframe rejection`;
       }
       if (staleFramePolls > 0 && arFrameDelta > 0 && depthFrameDelta <= 1) {
         const arFrameNumber = numberField(framePump, 'arFrameNumber');

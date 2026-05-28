@@ -840,6 +840,7 @@ export class WebXRSession extends EventTarget {
       noFramePolls: this.#noFramePolls,
       rawDepthAvailable: nativeFrame?.rawDepthAvailable,
       reason,
+      retainedFrameSnapshots: nativeFrame?.retainedFrameSnapshots,
       requestedDepthMissesWithAlternateDepth: nativeFrame?.requestedDepthMissesWithAlternateDepth,
       requestedDepthMissingButAlternateAvailable: nativeFrame?.requestedDepthMissingButAlternateAvailable,
       requestedDepthType: nativeFrame?.requestedDepthType,

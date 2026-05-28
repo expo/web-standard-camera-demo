@@ -238,13 +238,14 @@ Implemented:
   otherwise empty depth passes can skip the preview-image payload. When the native
   bridge returns exact tight buffers, the WebXR `data` getters reuse those
   `ArrayBuffer`s directly instead of adding another JavaScript copy. The WebXR
-  runtime retains a small ring of recent native frame snapshots rather than
-  only the newest frame, because standard WebXR accessors fetch depth/camera
-  payloads lazily after JS pose and keyframe gates. That retention keeps slow
-  physical scans from losing a frame's `XRCPUDepthInformation.data` or
-  `XRCamera` payload just because a previous JS phase took longer than a few
-  ARKit frame intervals, without exposing native frame handles to app code. The
-  WebXR
+  runtime retains only a tiny exact-count ring of recent native frame snapshots
+  rather than only the newest frame, because standard WebXR accessors fetch
+  depth/camera payloads lazily after JS pose and keyframe gates. That retention
+  keeps slow physical scans from losing a frame's
+  `XRCPUDepthInformation.data` or `XRCamera` payload just because a previous JS
+  phase took longer than a frame interval, while staying small enough that
+  retained ARKit `CVPixelBuffer`s do not starve the camera/depth buffer pools
+  and halt later `ARSession.didUpdate` delivery. The WebXR
   implementation logs internal `PANORAMIC_NATIVE_PAYLOAD_PROFILE` telemetry for
   depth and camera payload requests, including bridge-request time and native
   copy/render time, depth validity percentage, the selected confidence

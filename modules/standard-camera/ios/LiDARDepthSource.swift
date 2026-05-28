@@ -14,7 +14,7 @@ private let webXRCameraPreviewHeight = 192
 private let webXRProjectionNear: Float = 0.001
 private let webXRProjectionFar: Float = 100
 private let lidarStartupTimeoutSeconds: TimeInterval = 5
-private let webXRFrameSnapshotRetentionCount: UInt64 = 12
+private let webXRFrameSnapshotRetentionCount: UInt64 = 3
 private let webXRMeshGeometrySignatureSampleCount = 17
 private let webXRMeshPayloadMaxTrianglesPerAnchor = 900
 // @ref LLP 0013#xr-depth-information — ARKit confidence stays inside the
@@ -299,8 +299,6 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   private let delegateQueue = DispatchQueue(label: "standard-camera.lidar-depth.delegate")
   private let lock = NSLock()
 
-  private var latestDepthMap: CVPixelBuffer?
-  private var latestCameraImage: CVPixelBuffer?
   private var latestFrameNumber: UInt64 = 0
   private var latestARFrameNumber: UInt64 = 0
   private var latestDepthFrameARFrameNumber: UInt64 = 0
@@ -477,8 +475,6 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     }
     sessionId &+= 1
     currentSessionId = sessionId
-    latestDepthMap = nil
-    latestCameraImage = nil
     latestFrameNumber = 0
     latestARFrameNumber = 0
     latestDepthFrameARFrameNumber = 0
@@ -550,8 +546,6 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     stoppedSessionId = sessionId
     state = .stopped
     lastErrorReason = nil
-    latestDepthMap = nil
-    latestCameraImage = nil
     latestFrameNumber = 0
     latestARFrameNumber = 0
     latestDepthFrameARFrameNumber = 0
@@ -645,8 +639,6 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       lock.unlock()
       return
     }
-    latestDepthMap = depth.depthMap
-    latestCameraImage = frame.capturedImage
     latestFrameNumber &+= 1
     latestDepthFrameARFrameNumber = arFrameNumber
     consecutiveDepthMisses = 0
@@ -694,10 +686,12 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     )
     // @ref LLP 0020#performance-constraints — WebXR frame metadata is cheap,
     // but depth/camera payloads are fetched lazily after JS pose and keyframe
-    // gates. Keep enough recent native snapshots that a slow scan frame can
-    // still resolve its standard `XRCPUDepthInformation.data` / `XRCamera`
-    // payload without widening the app-facing API.
-    let minimumSnapshotFrame = n > webXRFrameSnapshotRetentionCount ? n - webXRFrameSnapshotRetentionCount : 0
+    // gates. Keep only a tiny exact-count ring so a slow callback can still
+    // resolve its standard payloads without retaining enough ARKit camera/depth
+    // pixel buffers to starve subsequent `ARSession.didUpdate` delivery.
+    let minimumSnapshotFrame = n >= webXRFrameSnapshotRetentionCount
+      ? n - webXRFrameSnapshotRetentionCount + 1
+      : 1
     for key in frameSnapshots.keys where key < minimumSnapshotFrame {
       frameSnapshots.removeValue(forKey: key)
     }
@@ -788,6 +782,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let currentState = state
     let currentStateReason = lastErrorReason
     let currentAppLifecycleState = appLifecycleState
+    let retainedFrameSnapshots = frameSnapshots.count
     let rawDepthAvailable = latestARFrameRawDepthAvailable
     let smoothDepthAvailable = latestARFrameSmoothDepthAvailable
     let depthMissRequestedType = latestDepthMissRequestedType
@@ -835,6 +830,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
           "nativeSessionId": currentSessionId,
           "nativeSessionReason": currentStateReason ?? "",
           "nativeSessionState": currentState.rawValue,
+          "retainedFrameSnapshots": retainedFrameSnapshots,
           "rawDepthAvailable": rawDepthAvailable,
           "requestedDepthMissesWithAlternateDepth": alternateDepthMissCount,
           "requestedDepthMissingButAlternateAvailable": latestDepthMissAlternateAvailable,
@@ -875,6 +871,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       "nativeSessionId": currentSessionId,
       "nativeSessionReason": currentStateReason ?? "",
       "nativeSessionState": currentState.rawValue,
+      "retainedFrameSnapshots": retainedFrameSnapshots,
       "rawDepthAvailable": rawDepthAvailable,
       "requestedDepthMissesWithAlternateDepth": alternateDepthMissCount,
       "requestedDepthMissingButAlternateAvailable": latestDepthMissAlternateAvailable,
@@ -1848,8 +1845,6 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     failedSessionId = sessionId
     state = .failed
     lastErrorReason = reason
-    latestDepthMap = nil
-    latestCameraImage = nil
     frameSnapshots.removeAll()
     meshAnchors.removeAll()
     meshAnchorChangedTimes.removeAll()

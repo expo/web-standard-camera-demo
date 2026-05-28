@@ -52,13 +52,64 @@ const IDENTITY = [
   0, 0, 0, 1,
 ];
 
-test('native WebXR frame cache keeps lazy payload access resilient on slow JS frames', () => {
-  const swiftSource = readFileSync(new URL('../ios/LiDARDepthSource.swift', import.meta.url), 'utf8');
+test('XRSession frame pump profiles native retained snapshot count', () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+  const originalConsoleLog = console.log;
+  const originalPerformance = globalThis.performance;
+  const callbacks: FrameRequestCallback[] = [];
+  const profileLogs: unknown[] = [];
 
-  expect(swiftSource).toContain('private let webXRFrameSnapshotRetentionCount: UInt64 = 12');
-  expect(swiftSource).toContain('n > webXRFrameSnapshotRetentionCount ? n - webXRFrameSnapshotRetentionCount : 0');
-  expect(swiftSource).toContain('XRCPUDepthInformation.data');
-  expect(swiftSource).toContain('without widening the app-facing API');
+  try {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => ({
+      ...makeNativeFrame(4),
+      arFrameNumber: 4,
+      retainedFrameSnapshots: 3,
+    });
+    console.log = (name: unknown, payload?: unknown): void => {
+      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
+    };
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      value: { ...originalPerformance, now: () => 100 },
+    });
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+      callbacks.push(callback);
+      return callbacks.length;
+    }) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
+
+    const session = new WebXRSession({
+      cameraAccessEnabled: false,
+      cameraFormat: 'bgra8unorm',
+      depthEnabled: true,
+      depthType: 'raw',
+      meshDetectionEnabled: false,
+      sessionId: 1,
+    });
+
+    session.requestAnimationFrame(() => {});
+    flushNextRaf(callbacks);
+
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      latestFrameNumber: 4,
+      reason: 'delivered-frame',
+      retainedFrameSnapshots: 3,
+    });
+  } finally {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
+    console.log = originalConsoleLog;
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      value: originalPerformance,
+    });
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+    globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+  }
 });
 
 test('viewer pose accepts limited startup poses without exposing native tracking fields', () => {

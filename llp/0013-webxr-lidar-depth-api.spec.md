@@ -784,6 +784,9 @@ viewport. Camera preview crop/scale belongs in `normCameraImageFromNormView`.
 
 The implementation MUST copy frame buffers before returning them to JS, or
 otherwise guarantee their lifetime until the animation-frame callback returns.
+If it retains native ARKit frame snapshots to satisfy lazy payload access, that
+retention MUST be bounded tightly enough that held camera/depth buffers do not
+starve the native frame producer.
 
 Current implementation limit: the native transform/projection metadata is
 computed for the scene-depth/captured-image plane, not for a full compositor

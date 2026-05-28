@@ -1564,6 +1564,7 @@ test('panorama validator distinguishes native session stops from JS keyframe rej
       latestFrameNumber: 10,
       nativeSessionState: 'running',
       reason: 'stale-frame',
+      retainedFrameSnapshots: 3,
       staleFramePolls: 91,
     },
   } satisfies SeenMetrics;
@@ -1575,7 +1576,7 @@ test('panorama validator distinguishes native session stops from JS keyframe rej
     'First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session was interrupted (ARKit scene depth session was interrupted); this points to session interruption/stop rather than JS keyframe rejection'
   );
   expect(panoramaBottleneckSummary(running)).toContain(
-    'First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session still reported running; ARSession didUpdate stopped advancing after frame 16, so the next physical log should check app lock/backgrounding or ARKit camera ownership rather than JS keyframe rejection'
+    'First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session still reported running; ARSession didUpdate stopped advancing after frame 16; native retained frame snapshots 3, so the next physical log should check native frame-buffer retention, app lock/backgrounding, or ARKit camera ownership rather than JS keyframe rejection'
   );
 });
 
