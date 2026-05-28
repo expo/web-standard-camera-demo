@@ -12,6 +12,7 @@ const URL_SCHEME = 'standardcameraapp';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_METRO_URL = process.env.PANORAMA_METRO_URL ?? 'http://192.168.1.181:8082';
 const DEFAULT_ROUTE_URL = `${URL_SCHEME}:///panoramic-scene-capture?autorun=1`;
+const WEBXR_DEMO_ROUTE_URL = `${URL_SCHEME}:///lidar-depth-webxr?autorun=1`;
 const DEFAULT_MAX_KEYFRAME_DEPTH_GRID_SAMPLES = 40 * 30;
 const EXPECTED_CAMERA_SAMPLE_MODE = 'precomputed-axis';
 const EXPECTED_DEPTH_GRID_SAMPLE_MODE = 'precomputed-identity';
@@ -114,7 +115,7 @@ export interface PanoramaValidationBudgets {
   minScanCoveragePercent: number;
 }
 
-interface Options {
+export interface Options {
   device?: string;
   installAppPath?: string;
   logFilePath?: string;
@@ -215,7 +216,7 @@ async function main(): Promise<number> {
           options.routeUrl,
           APP_BUNDLE_ID,
         ]);
-        console.log(`Opened panorama route ${options.routeUrl}`);
+        console.log(`Opened app route ${options.routeUrl}`);
       }
     }
 
@@ -254,7 +255,7 @@ export function buildDevelopmentClientUrl(metroUrl: string): string {
   }).toString()}`;
 }
 
-function parseArgs(args: string[]): Options {
+export function parseArgs(args: string[]): Options {
   const options: Options = {
     metroUrl: DEFAULT_METRO_URL,
     noLaunch: false,
@@ -303,6 +304,9 @@ function parseArgs(args: string[]): Options {
       options.outJsonPath = requireValue(args, ++i, arg);
     } else if (arg === '--profile-only') {
       options.profileOnly = true;
+    } else if (arg === '--webxr-demo') {
+      options.profileOnly = true;
+      options.routeUrl = WEBXR_DEMO_ROUTE_URL;
     } else if (arg === '--no-route') {
       options.routeUrl = null;
     } else if (arg === '--route-url') {
@@ -355,6 +359,8 @@ Options:
                            of connecting to a device.
   --metro-url <url>        Expo dev-server URL. Default: ${DEFAULT_METRO_URL}
   --route-url <url>        App route to open after Metro launch. Default: ${DEFAULT_ROUTE_URL}
+  --webxr-demo             Open the WebXR LiDAR depth demo with autorun and
+                           collect profile-only WEBGPU_DEMO_PROFILE logs.
   --no-route               Do not deep-link to the panorama route after launch.
   --timeout <seconds>      Validation timeout. Default: ${DEFAULT_TIMEOUT_MS / 1000}
   --no-launch              Do not launch the app; only stream logs.

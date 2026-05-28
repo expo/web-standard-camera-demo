@@ -352,7 +352,9 @@ visible without leaving the demo stuck on the development menu or a single
 rendered frame. The panorama validator's profile-only log parser also consumes
 `WEBGPU_DEMO_PROFILE` and `WEBXR_DEMO_FRAME_ERROR` records so copied physical
 device logs can summarize whether the WebXR demo is missing pose, depth, camera,
-upload, or render work.
+upload, or render work. The same validator provides a `--webxr-demo` preset that
+deep-links to `lidar-depth-webxr?autorun=1` and runs in profile-only mode so the
+physical-device trace targets this demo rather than the panorama capture route.
 
 Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
 frames at 60Hz, while the original WebGPU route rendered only about 6fps because

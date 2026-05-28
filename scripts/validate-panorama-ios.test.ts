@@ -9,6 +9,7 @@ import {
   missingMetrics,
   panoramaBottleneckSummary,
   panoramaProfileReport,
+  parseArgs,
   parseMetricLogText,
   recordMetricLine,
   validateRequiredMetricSet,
@@ -19,6 +20,13 @@ test('panorama validator builds an automation-safe dev-client URL', () => {
   expect(buildDevelopmentClientUrl('http://192.168.1.181:8082')).toBe(
     'standardcameraapp://expo-development-client/?disableOnboarding=1&url=http%3A%2F%2F192.168.1.181%3A8082'
   );
+});
+
+test('panorama validator WebXR demo preset opens the LiDAR route in profile-only mode', () => {
+  expect(parseArgs(['--webxr-demo'])).toMatchObject({
+    profileOnly: true,
+    routeUrl: 'standardcameraapp:///lidar-depth-webxr?autorun=1',
+  });
 });
 
 test('panorama validator accepts a consistent capture/render/export telemetry set', () => {
