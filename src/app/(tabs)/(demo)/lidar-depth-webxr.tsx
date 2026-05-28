@@ -539,6 +539,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
         let maxDepth = MAX_OCCLUSION_DEPTH_M;
         let frameNumber = 0;
         let frames = 0;
+        let lastFrameOutcome = 'waiting';
         let lastFpsReport = Date.now();
         let lastFrameErrorReport = 0;
         let lastStatsReport = Date.now();
@@ -664,16 +665,50 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             depthWidth,
             frameErrorName: errorName,
             frameNumber,
+            lastFrameOutcome,
           }, true);
+        };
+
+        const reportFrameProfile = (extra: Record<string, boolean | number | string | null | undefined> = {}): void => {
+          profile.report({
+            cameraFormat,
+            cameraHeight,
+            cameraWidth,
+            depthHeight,
+            depthWidth,
+            frameNumber,
+            lastFrameOutcome,
+            sessionEnded: session.ended,
+            ...extra,
+          });
+        };
+
+        const reportFrameMiss = (outcome: 'camera-miss' | 'depth-miss' | 'pose-miss'): void => {
+          lastFrameOutcome = outcome;
+          profile.count(outcome === 'camera-miss' ? 'cameraMisses' : outcome === 'depth-miss' ? 'depthMisses' : 'poseMisses');
+          const now = Date.now();
+          if (now - lastStatsReport >= 500) {
+            if (outcome === 'pose-miss') {
+              setFrameInfo(`pose missing after ${frameNumber} XR frames`);
+            } else if (outcome === 'depth-miss') {
+              setFrameInfo(`depth missing after ${frameNumber} XR frames`);
+            } else {
+              setCameraInfo(`camera missing after ${frameNumber} XR frames`);
+            }
+            setStatus(`waiting - ${outcome}`);
+            lastStatsReport = now;
+          }
+          reportFrameProfile();
         };
 
         const renderFrame = (_time: DOMHighResTimeStamp, frame: WebXRFrame): void => {
           if (cancelled) return;
           try {
+            profile.count('xrCallbacks');
             const pose = frame.getViewerPose(referenceSpace);
             const view = pose?.views[0];
             if (!view) {
-              profile.count('poseMisses');
+              reportFrameMiss('pose-miss');
               return;
             }
 
@@ -686,11 +721,16 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             const xrCamera = view.camera;
             const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
 
-            if (depth && camera) {
+            if (!depth) {
+              reportFrameMiss('depth-miss');
+            } else if (!camera) {
+              reportFrameMiss('camera-miss');
+            } else {
               const depthStats = uploadDepth(depth);
               uploadCamera(camera);
               profile.count('xrFrames');
               frameNumber += 1;
+              lastFrameOutcome = 'uploaded';
               minDepth = depthStats.min;
               maxDepth = depthStats.max;
               const statsNow = Date.now();
@@ -766,15 +806,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             if (fpsNow - lastFpsReport >= 1000) {
               const fpsValue = frames / ((fpsNow - lastFpsReport) / 1000);
               setFps(fpsValue.toFixed(1));
-              profile.report({
-                cameraFormat,
-                cameraHeight,
-                cameraWidth,
-                depthHeight,
-                depthWidth,
-                fps: Number(fpsValue.toFixed(1)),
-                frameNumber,
-              });
+              reportFrameProfile({ fps: Number(fpsValue.toFixed(1)) });
               frames = 0;
               lastFpsReport = fpsNow;
             }

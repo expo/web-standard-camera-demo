@@ -343,12 +343,13 @@ GPUCanvasContext.present()
 The route targets 30 fps uploads and renders every animation frame with the
 latest uploaded ARKit frame. In development builds it emits
 `WEBGPU_DEMO_PROFILE` records through the same system-log path as the LLP 0010
-camera demos, including WebXR frame acquisition, depth/color upload
-preparation, `writeTexture()`, and render submit/present timings. The WebXR
-render callback must catch per-frame depth/camera/upload exceptions, log a
-throttled `WEBXR_DEMO_FRAME_ERROR`, and immediately request the next XR frame;
-one stale or missing native payload should make the profile visible without
-leaving the demo stuck on the development menu or a single rendered frame.
+camera demos, including WebXR frame callbacks, pose/depth/camera misses,
+depth/color upload preparation, `writeTexture()`, and render submit/present
+timings. The WebXR render callback must catch per-frame depth/camera/upload
+exceptions, log a throttled `WEBXR_DEMO_FRAME_ERROR`, and immediately request the
+next XR frame; one stale or missing native payload should make the profile
+visible without leaving the demo stuck on the development menu or a single
+rendered frame.
 
 Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
 frames at 60Hz, while the original WebGPU route rendered only about 6fps because
