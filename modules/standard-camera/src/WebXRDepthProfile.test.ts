@@ -1045,8 +1045,8 @@ test('XRFrame.detectedMeshes preserves XRMesh identity across native anchor upda
       frameNumber: 2,
       capturedImageHeight: 1440,
       capturedImageWidth: 1920,
-      colorHeight: 192,
-      colorWidth: 256,
+      colorHeight: 1080,
+      colorWidth: 1920,
       height: 192,
       maxDepth: 0,
       meanDepth: 0,
@@ -1294,14 +1294,14 @@ test('XRCPUCameraImage reuses exact native ArrayBuffers without an extra JS copy
     expect(image).not.toBeNull();
     expect(image?.data).toBe(nativeBuffer);
     expect(image?.data).toBe(image?.data);
-	    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-	      cameraBytes: 8,
-	      cameraCapturedSize: [1920, 1440],
-	      colorSize: [256, 192],
-	      depthToCameraScale: [0.1333, 0.1333],
-	      projectionCameraImageResolution: [1920, 1440],
-	      projectionDepthToCameraScale: [0.1333, 0.1333],
-	    });
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      cameraBytes: 8,
+      cameraCapturedSize: [1920, 1440],
+      colorSize: [1920, 1080],
+      depthToCameraScale: [0.1333, 0.1333],
+      projectionCameraImageResolution: [1920, 1440],
+      projectionDepthToCameraScale: [0.1333, 0.1333],
+    });
   } finally {
     console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
@@ -1328,8 +1328,8 @@ function makeNativeFrame(frameNumber: number): NativeLiDARDepthFrame {
     frameNumber,
     capturedImageHeight: 1440,
     capturedImageWidth: 1920,
-    colorHeight: 192,
-    colorWidth: 256,
+    colorHeight: 1080,
+    colorWidth: 1920,
     height: 192,
     maxDepth: 0,
     meanDepth: 0,
@@ -1346,6 +1346,8 @@ function makeNativeFrame(frameNumber: number): NativeLiDARDepthFrame {
 }
 
 function makeXRFrame({
+  colorHeight = 1080,
+  colorWidth = 1920,
   depthTransform = DEPTH_TRANSFORM,
   height = 192,
   meshDetection = false,
@@ -1355,6 +1357,8 @@ function makeXRFrame({
   width = 256,
   worldMappingStatus = 'mapped',
 }: {
+  colorHeight?: number;
+  colorWidth?: number;
   depthTransform?: readonly number[];
   height?: number;
   meshDetection?: boolean;
@@ -1377,17 +1381,17 @@ function makeXRFrame({
       frameNumber: 1,
       capturedImageHeight: 1440,
       capturedImageWidth: 1920,
-      colorHeight: height,
-      colorWidth: width,
+      colorHeight,
+      colorWidth,
       height,
       maxDepth: 0,
       meanDepth: 0,
       minDepth: 0,
       detectedMeshes: meshSummaries,
-	      normDepthBufferFromNormView: depthTransform,
-	      projectionMatrix: PROJECTION,
-	      projectionCameraImageResolution: [1920, 1440],
-	      trackingState,
+      normDepthBufferFromNormView: depthTransform,
+      projectionMatrix: PROJECTION,
+      projectionCameraImageResolution: [1920, 1440],
+      trackingState,
       viewTransform: VIEW_TRANSFORM,
       width,
       worldMappingStatus,

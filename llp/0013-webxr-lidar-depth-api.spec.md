@@ -409,10 +409,11 @@ renderer uploads into WebGPU textures directly. Native WebXR frame delivery uses
 a WebXR-specific frame accessor so preview-size tuning remains an implementation
 detail of this research profile.
 
-The current native tuning requests 256x192 BGRA camera frames for the WebXR
-route. That value MUST NOT be exposed as a request-session option or other
-caller-selectable camera resolution; callers only observe the actual returned
-image dimensions through `XRCPUCameraImage.width` and
+The current native tuning requests 1920x1080 BGRA camera frames for the WebXR
+route so LiDAR and surface-reconstruction demos can preserve real camera color
+while scanning. That value MUST NOT be exposed as a request-session option or
+other caller-selectable camera resolution; callers only observe the actual
+returned image dimensions through `XRCPUCameraImage.width` and
 `XRCPUCameraImage.height`. Any further increase MUST be validated with
 physical-device `WEBGPU_DEMO_PROFILE` logs.
 
@@ -790,10 +791,11 @@ starve the native frame producer.
 
 Current implementation limit: the native transform/projection metadata is
 computed for the scene-depth/captured-image plane, not for a full compositor
-viewport model. The CPU camera image may remain a landscape-aspect downsampled
-copy of `ARFrame.capturedImage` (`256 x 192` in the current implementation,
-matching common scene-depth buffer dimensions); callers must use
-`normCameraImageFromNormView` to sample it from normalized view coordinates.
+viewport model. The CPU camera image may remain a landscape-aspect cropped copy
+of `ARFrame.capturedImage` (`1920 x 1080` in the current implementation,
+intentionally larger than common scene-depth buffer dimensions); callers must
+use `normCameraImageFromNormView` to sample it from normalized view
+coordinates.
 This is enough to make timing and view/camera/depth coordinate objects
 data-backed instead of placeholders, but it is not a general orientation-aware
 WebXR compositor model.

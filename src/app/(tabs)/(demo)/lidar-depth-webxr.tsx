@@ -207,23 +207,6 @@ fn boundaryOutline(depth: f32, depthUv: vec2f) -> vec2f {
   return vec2f(edge, rim);
 }
 
-fn boundaryView(camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
-  var color = camera;
-  let boundaryMask = boundaryOutline(depth, depthUv);
-  let targetMask = targetLine(depth);
-  let closer = foregroundDepth(depth);
-  let farther = smoothstep(u.targetDepth + 0.04, u.targetDepth + 0.48, depth);
-
-  color = mix(color, color * 0.86 + vec3f(0.08, 0.04, 0.0), closer * 0.12);
-  color = mix(color, color * 0.78 + vec3f(0.0, 0.05, 0.08), farther * 0.14);
-  color = mix(color, color * 0.48, boundaryMask.x * 0.16);
-  color = mix(color, vec3f(1.0, 0.82, 0.10), boundaryMask.y * 0.50);
-  color = mix(color, vec3f(0.02, 0.18, 0.16), targetMask.y * 0.24);
-  color += targetMask.y * vec3f(0.02, 0.28, 0.23);
-  color = mix(color, vec3f(0.84, 1.0, 0.92), targetMask.x * 0.82);
-  return color;
-}
-
 fn depthMapView(depth: f32, depthUv: vec2f, markerStrength: f32) -> vec3f {
   let boundaryMask = boundaryOutline(depth, depthUv);
   let targetMask = targetLine(depth);
@@ -250,6 +233,23 @@ fn depthMapView(depth: f32, depthUv: vec2f, markerStrength: f32) -> vec3f {
   color = mix(color, vec3f(1.0, 0.82, 0.10), boundaryMask.y * 0.42 * markerStrength);
   color = mix(color, vec3f(0.02, 0.20, 0.18), targetMask.y * 0.24);
   color = mix(color, vec3f(0.82, 1.0, 0.92), targetMask.x * 0.84);
+  return color;
+}
+
+fn boundaryView(camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
+  let boundaryMask = boundaryOutline(depth, depthUv);
+  let targetMask = targetLine(depth);
+  let closer = foregroundDepth(depth);
+  let objectMask = smoothstep(0.18, 0.82, closer);
+  let depthColor = depthMapView(depth, depthUv, 0.82);
+  let objectColor = mix(camera, depthColor, 0.15);
+  var color = mix(depthColor, objectColor, objectMask);
+
+  color = mix(color, color * 0.48, boundaryMask.x * 0.16);
+  color = mix(color, vec3f(1.0, 0.82, 0.10), boundaryMask.y * 0.50);
+  color = mix(color, vec3f(0.02, 0.18, 0.16), targetMask.y * 0.24);
+  color += targetMask.y * vec3f(0.02, 0.28, 0.23);
+  color = mix(color, vec3f(0.84, 1.0, 0.92), targetMask.x * 0.82);
   return color;
 }
 

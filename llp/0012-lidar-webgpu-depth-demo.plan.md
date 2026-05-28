@@ -360,14 +360,16 @@ Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
 frames at 60Hz, while the original WebGPU route rendered only about 6fps because
 JS spent roughly 140ms per upload swizzling BGRA preview bytes into RGBA. The
 route therefore uploads the native BGRA preview directly into a WebGPU
-`bgra8unorm` texture; depth upload and both `writeTexture()` calls were
-sub-millisecond in the same trace.
+`bgra8unorm` texture. The current WebXR profile returns a 1920x1080 BGRA camera
+preview for clearer LiDAR/surface color while keeping the resolution choice
+inside the native profile rather than exposing a request option.
 
-Boundary mode favors measurement clarity over cinematic depth-of-field. It keeps
-the camera image crisp, detects where neighboring LiDAR samples cross the
-selected target distance, and draws that target-distance isoline with a bright
-core plus a thin high-contrast halo. Depth mode uses a higher-contrast palette
-with bright neutral quarter-meter contour markers and yellow one-meter contour
+Boundary mode favors measurement clarity over cinematic depth-of-field. It uses
+the opaque depth palette for background geometry, blends a light depth-color
+overlay over foreground objects detected by the boundary/target-depth logic, and
+draws that target-distance isoline with a bright core plus a thin high-contrast
+halo. Depth mode uses a higher-contrast palette with bright neutral
+quarter-meter contour markers and yellow one-meter contour
 markers for measurement. Depth and Compare reuse the same yellow
 depth-discontinuity rim used by Boundary mode, but do not apply any depth-texel
 boundary mask so the outline does not become crosshatched. Compare's depth side

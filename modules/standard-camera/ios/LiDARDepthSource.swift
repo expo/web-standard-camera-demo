@@ -9,8 +9,11 @@ private let lidarDepthErrorDomain = "StandardCameraLiDARDepth"
 // @ref LLP 0013#arkit-mapping — The WebXR research profile exposes standard
 // projection matrices and normalized image transforms; raw ARKit intrinsics
 // remain native implementation details.
-private let webXRCameraPreviewWidth = 256
-private let webXRCameraPreviewHeight = 192
+// @ref LLP 0013#xr-camera-resolution — The returned WebXR CPU camera image is
+// an internal implementation detail, tuned for 1080p LiDAR/surface demo color.
+private let webXRCameraPreviewWidth = 1920
+private let webXRCameraPreviewHeight = 1080
+private let webXRCameraPreviewDirectConverterMaxPixels = 256 * 192
 private let webXRProjectionNear: Float = 0.001
 private let webXRProjectionFar: Float = 100
 private let lidarStartupTimeoutSeconds: TimeInterval = 5
@@ -1486,14 +1489,24 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     width dstWidth: Int,
     height dstHeight: Int
   ) -> (width: Int, height: Int, data: Data, path: String)? {
-    if let frame = makeCameraPreviewFrameFromBiPlanarYCbCr(
+    let pixelCount = dstWidth * dstHeight
+    if pixelCount <= webXRCameraPreviewDirectConverterMaxPixels {
+      if let frame = makeCameraPreviewFrameFromBiPlanarYCbCr(
+        from: pixelBuffer,
+        width: dstWidth,
+        height: dstHeight
+      ) {
+        return frame
+      }
+    }
+    if let frame = makeCameraPreviewFrameWithCoreImage(
       from: pixelBuffer,
       width: dstWidth,
       height: dstHeight
     ) {
       return frame
     }
-    return makeCameraPreviewFrameWithCoreImage(
+    return makeCameraPreviewFrameFromBiPlanarYCbCr(
       from: pixelBuffer,
       width: dstWidth,
       height: dstHeight
@@ -1542,8 +1555,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     }
 
     // @ref LLP 0013#xr-camera-image — Keep the returned WebXR CPU camera image
-    // as tight BGRA bytes, but avoid a CoreImage render/sync for ARKit's common
-    // bi-planar YCbCr buffers by downsampling directly into the preview plane.
+    // as tight BGRA bytes. The scalar converter is reserved for small previews
+    // or CoreImage fallback so 1080p frames do not run this loop every pixel.
     let scale = max(
       Double(dstWidth) / Double(sourceWidth),
       Double(dstHeight) / Double(sourceHeight)
