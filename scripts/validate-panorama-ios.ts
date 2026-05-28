@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_METRO_URL = process.env.PANORAMA_METRO_URL ?? 'http://192.168.1.181:8082';
 const DEFAULT_METRO_LOG_PATH = process.env.PANORAMA_METRO_LOG_PATH ?? '.expo/dev/logs/start.log';
 const DEFAULT_ROUTE_URL = `${URL_SCHEME}:///panoramic-scene-capture?autorun=1`;
-const WEBXR_DEMO_ROUTE_URL = `${URL_SCHEME}:///lidar-depth-webxr?autorun=1`;
+const WEBXR_DEMO_ROUTE_URL = `${URL_SCHEME}:///lidar-depth-webxr?autorun=1&view=depth`;
 const DEFAULT_MAX_KEYFRAME_DEPTH_GRID_SAMPLES = 40 * 30;
 const EXPECTED_CAMERA_SAMPLE_MODE = 'precomputed-axis';
 const EXPECTED_DEPTH_GRID_SAMPLE_MODE = 'precomputed-identity';

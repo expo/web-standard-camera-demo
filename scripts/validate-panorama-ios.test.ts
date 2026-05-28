@@ -47,7 +47,7 @@ test('panorama validator WebXR demo preset opens the LiDAR route in profile-only
   expect(parseArgs(['--webxr-demo'])).toMatchObject({
     profileTarget: 'webxr-demo',
     profileOnly: true,
-    routeUrl: 'standardcameraapp:///lidar-depth-webxr?autorun=1',
+    routeUrl: 'standardcameraapp:///lidar-depth-webxr?autorun=1&view=depth',
   });
 });
 

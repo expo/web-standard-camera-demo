@@ -31,12 +31,42 @@ const MIN_OCCLUSION_DEPTH_M = 0.45;
 const MAX_OCCLUSION_DEPTH_M = 3.5;
 const OCCLUSION_DEPTHS_M = [0.8, 1.25, 2.0];
 const COMPARE_DEPTH_SPLIT = 0.5;
+const DEFAULT_VIEW_MODE = 2;
 const VIEW_MODES = [
   { label: 'Compare', value: 2 },
   { label: 'Boundary', value: 3 },
   { label: 'Depth', value: 1 },
   { label: 'Camera', value: 0 },
 ] as const;
+type ViewModeValue = (typeof VIEW_MODES)[number]['value'];
+
+function firstRouteParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function viewModeFromRouteParam(value: string | string[] | undefined): ViewModeValue | null {
+  const normalized = firstRouteParam(value)?.toLowerCase();
+  switch (normalized) {
+    case 'camera':
+    case '0':
+      return 0;
+    case 'depth':
+    case '1':
+      return 1;
+    case 'compare':
+    case '2':
+      return 2;
+    case 'boundary':
+    case '3':
+      return 3;
+    default:
+      return null;
+  }
+}
+
+function viewModeLabel(value: number): string {
+  return VIEW_MODES.find((mode) => mode.value === value)?.label ?? 'Unknown';
+}
 
 const WEBXR_DEPTH_SHADER = /* wgsl */ `
 struct Uniforms {
@@ -317,7 +347,8 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { adapter, device } = useDevice();
   const { lidarStatus, lidarError } = useCamera();
-  const { autorun } = useLocalSearchParams<{ autorun?: string }>();
+  const { autorun, view } = useLocalSearchParams<{ autorun?: string; view?: string | string[] }>();
+  const routeViewMode = viewModeFromRouteParam(view);
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const sessionRef = React.useRef<WebXRSession | null>(null);
   const didAutorunRef = React.useRef(false);
@@ -334,7 +365,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const [maskInfo, setMaskInfo] = React.useState('mask pending');
   const [targetDepth, setTargetDepth] = React.useState(DEFAULT_OCCLUSION_DEPTH_M);
   const [lastCenterDepthMeters, setLastCenterDepthMeters] = React.useState<number | null>(null);
-  const [viewMode, setViewMode] = React.useState(2);
+  const [viewMode, setViewMode] = React.useState<ViewModeValue>(routeViewMode ?? DEFAULT_VIEW_MODE);
   const lastCenterDepthRef = React.useRef<number | null>(null);
   const reticlePressProgress = React.useMemo(() => new Animated.Value(0), []);
   const targetDepthRef = React.useRef(targetDepth);
@@ -389,6 +420,11 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   React.useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
+
+  React.useEffect(() => {
+    if (routeViewMode === null) return;
+    setViewMode(routeViewMode);
+  }, [routeViewMode]);
 
   React.useEffect(() => {
     return () => {
@@ -659,6 +695,8 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             errorMessage,
             errorName,
             frameNumber,
+            viewMode: viewModeRef.current,
+            viewModeLabel: viewModeLabel(viewModeRef.current),
           }));
           profile.report({
             cameraFormat,
@@ -669,6 +707,8 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             frameErrorName: errorName,
             frameNumber,
             lastFrameOutcome,
+            viewMode: viewModeRef.current,
+            viewModeLabel: viewModeLabel(viewModeRef.current),
           }, true);
         };
 
@@ -682,6 +722,8 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             frameNumber,
             lastFrameOutcome,
             sessionEnded: session.ended,
+            viewMode: viewModeRef.current,
+            viewModeLabel: viewModeLabel(viewModeRef.current),
             ...extra,
           });
         };
@@ -1022,7 +1064,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
                       modifiers={[pickerStyle('segmented')]}
                       label="View"
                       selection={viewMode}
-                      onSelectionChange={(value) => setViewMode(value as number)}>
+                      onSelectionChange={(value) => setViewMode(value as ViewModeValue)}>
                       {VIEW_MODES.map((mode) => (
                         <UIText key={mode.value} modifiers={[tag(mode.value)]}>
                           {mode.label}
