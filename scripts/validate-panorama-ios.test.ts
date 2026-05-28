@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test';
 import {
   DEFAULT_VALIDATION_BUDGETS,
   buildDevelopmentClientUrl,
+  buildDeviceProcessLaunchCommand,
   isComplete,
   isValidMetric,
   metricSetValidationError,
@@ -22,11 +23,64 @@ test('panorama validator builds an automation-safe dev-client URL', () => {
   );
 });
 
+test('panorama validator attaches physical launches to the app console', () => {
+  expect(buildDeviceProcessLaunchCommand('device-1', 'standardcameraapp://route', {
+    console: true,
+    terminateExisting: true,
+  })).toEqual([
+    'xcrun',
+    'devicectl',
+    'device',
+    'process',
+    'launch',
+    '--device',
+    'device-1',
+    '--terminate-existing',
+    '--console',
+    '--payload-url',
+    'standardcameraapp://route',
+    'dev.ide.standardcameraapp',
+  ]);
+});
+
 test('panorama validator WebXR demo preset opens the LiDAR route in profile-only mode', () => {
   expect(parseArgs(['--webxr-demo'])).toMatchObject({
     profileTarget: 'webxr-demo',
     profileOnly: true,
     routeUrl: 'standardcameraapp:///lidar-depth-webxr?autorun=1',
+  });
+});
+
+test('panorama validator parses Expo Metro client log entries', () => {
+  const seen = parseMetricLogText([
+    JSON.stringify({
+      _e: 'metro:client_log',
+      level: 'log',
+      data: [
+        'PANORAMIC_SCAN_CONFIG',
+        JSON.stringify({
+          depthPreference: 'default',
+          depthTypeRequest: ['raw', 'smooth'],
+          meshRequested: true,
+          scanId: 12,
+          sessionDepthType: 'raw',
+        }),
+      ],
+    }),
+    JSON.stringify({
+      _e: 'metro:client_log',
+      level: 'log',
+      data: ['CAMERA_CTX external-lock released'],
+    }),
+  ].join('\n'));
+
+  expect(seen.PANORAMIC_SCAN_CONFIG).toMatchObject({
+    depthPreference: 'default',
+    scanId: 12,
+    sessionDepthType: 'raw',
+  });
+  expect(seen.CAMERA_CONTEXT_PROFILE).toMatchObject({
+    externalLockReleased: 1,
   });
 });
 
@@ -958,6 +1012,23 @@ test('panorama validator identifies native depth payload failures behind one-fra
   );
   expect(summary).toContain(
     'First-frame diagnosis: scan loop callback threw after 1 keyframe(s): InvalidStateError: Depth data for this XRFrame is no longer available; native WebXR depth payload was unavailable (native-payload-error), so JS received an XR frame but could not read depth bytes for post-first surfel capture'
+  );
+});
+
+test('panorama validator identifies raw depth confidence starvation behind empty scans', () => {
+  const seen = parseMetricLogText(`
+    LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"default","depthTypeRequest":["raw","smooth"],"meshRequested":true,"scanId":8,"sessionDepthType":"raw"}
+    LOG PANORAMIC_NATIVE_PAYLOAD_PROFILE {"confidenceFilteredDepthCount":49152,"confidenceFilteredPercent":100,"confidenceFallbackReason":"","confidenceFallbackUsed":false,"confidenceMapUsed":true,"confidenceThreshold":2,"depthBytes":196608,"depthPixelCount":49152,"depthType":"raw","frameNumber":2,"includeCameraImage":false,"includeDepthData":true,"invalidDepthCount":49152,"invalidDepthPercent":100,"lowConfidenceDepthCount":49152,"lowConfidencePercent":100,"mediumConfidenceDepthCount":0,"scanId":8,"validDepthCount":0,"validDepthPercent":0}
+    LOG PANORAMIC_KEYFRAME_REJECTION_PROFILE {"combinedPreflightSurfels":0,"frameCount":1,"fusedSurfelCount":0,"keyframes":0,"observedDepthSurfels":0,"rawSampleCount":0,"reason":"too-few-surfels","retainedSamples":0,"scanId":8}
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Raw depth confidence gate: 0% valid at threshold 2, 100% low-confidence / 100% confidence-filtered; the frame contains depth bytes but no samples survive into surfel preflight'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: raw WebXR depth bytes are being delivered, but confidence filtering removes every pixel (0% valid, 100% confidence-filtered at threshold 2); no surfels can be accepted until confidence improves or the raw-depth fallback relaxes the gate; keyframe preflight rejected too-few-surfels with 0 observed depth surfels and 0 depth+mesh surfels'
   );
 });
 

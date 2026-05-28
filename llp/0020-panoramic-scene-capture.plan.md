@@ -55,13 +55,14 @@ Implemented:
 - WebXR payload tuning: native depth payloads encode ARKit samples below the
   depth-type confidence threshold as invalid `0` depth values, preserving the
   standard `XRCPUDepthInformation.data` shape while avoiding noisy surfels.
-  Raw scene depth uses only high-confidence current-frame samples and is the
+  Raw scene depth starts with high-confidence current-frame samples and is the
   default panorama request to avoid lagged smoothed-depth delivery during a
-  180-degree sweep. Smoothed scene depth accepts medium-or-better samples when
-  explicitly requested for comparison. If a smoothed-depth frame would be empty
-  or too sparse after the medium threshold, native payload creation may
-  retry that frame with low-confidence smoothed samples and report the fallback
-  in internal profiling so the scan can still produce startup surfels. The
+  180-degree sweep. Smoothed scene depth starts with medium-or-better samples
+  when explicitly requested for comparison. If a confidence-filtered raw or
+  smoothed frame would be empty or too sparse after its stricter threshold,
+  native payload creation may retry that frame with low-confidence samples and
+  report the fallback in internal profiling so the scan can still produce
+  startup surfels. The
   CPU-visible camera image is an internal 256x192 BGRA preview for the surfel
   color path, matching common scene-depth dimensions and cutting per-keyframe
   native render and bridge bytes without adding a camera-resolution option to
@@ -189,10 +190,10 @@ Implemented:
   keyframes exist, the route SHOULD emit `PANORAMIC_CAPTURE_BLOCKED_PROFILE`
   with keyframe, sample, status, and in-flight counters so physical logs prove
   the scan stayed open instead of sealing a one-frame model. Native payload
-  summaries SHOULD include smoothed-depth confidence fallback reasons, because
-  medium-confidence filtering can leave a nonempty but too-sparse depth payload
-  that still fails the panorama surfel gate after the first frame. If a later scan
-  resets non-empty panorama state, the route SHOULD emit
+  summaries SHOULD include raw/smoothed-depth confidence fallback reasons,
+  because high/medium-confidence filtering can leave an empty or too-sparse
+  depth payload that still fails the panorama surfel gate after the first frame.
+  If a later scan resets non-empty panorama state, the route SHOULD emit
   `PANORAMIC_SCAN_RESET_PROFILE` with the previous scan counts and reset reason,
   so copied multi-attempt logs can distinguish a current one-frame scan from an
   earlier discarded multi-keyframe scan. The WebXR
@@ -738,10 +739,11 @@ For each accepted keyframe:
 2. Map the view sample into the depth image with
    `normDepthBufferFromNormView`, then reject invalid depth (`0`, non-finite,
    outside the configured range, or below the native confidence threshold when
-   a confidence map is available). In the current WebXR implementation, raw
-   ARKit scene-depth samples below high confidence are filtered natively into
-   `0` depth values instead of exposing a non-standard confidence field to app
-   code.
+   a confidence map is available). In the current WebXR implementation, ARKit
+   scene-depth samples below the selected high/medium confidence threshold are
+   filtered natively into `0` depth values instead of exposing a non-standard
+   confidence field to app code; empty or too-sparse confidence-filtered frames
+   may retry with low-confidence samples and report the fallback reason.
 3. Map the same view sample into the camera image with
    `normCameraImageFromNormView`. This is for color sampling only; geometry
    remains in normalized view coordinates and uses `XRDepthInformation`
@@ -1262,10 +1264,13 @@ bun run validate:panorama:ios -- \
 The `--install-app` flag is optional, but it should be used after a successful
 physical-device build so launch/install retries reuse the cached `.app` instead
 of rebuilding native code. The validator launches the dev-client build through
-the `expo-development-client` URL with `disableOnboarding=1`, opens the
-panorama demo route only after handing the build its Metro URL, and then waits
-for the phone interaction. Use the phone to Start Scan, pan slowly until surfels
-appear, Capture, and Save. The validator
+the `expo-development-client` URL with `disableOnboarding=1`, attaches
+`devicectl --console` to the launch, and tails the Expo/Metro client log bytes
+appended during the run so React Native `console.log` telemetry is collected
+even when device syslog does not include JS logs. It opens the panorama demo
+route only after handing the build its Metro URL, and then waits for the phone
+interaction. Use the phone to Start Scan, pan slowly until surfels appear,
+Capture, and Save. The validator
 passes only after it sees nonzero keyframe, capture, WebGPU-render, and
 Files-export telemetry from the physical app logs, and the required
 capture/render/export metrics agree on the captured model's keyframe, sample,

@@ -563,11 +563,11 @@ object.
   encode them as `0` instead of exposing a non-standard confidence map to
   application code. The current ARKit bridge uses a stricter high-confidence
   threshold for raw scene depth and a medium-or-better threshold for smoothed
-  scene depth, but MAY fall back to accepting low-confidence smoothed depth for
-  a frame when the stricter threshold would make the payload empty or too sparse
-  for downstream WebXR consumers to form geometry. Payload telemetry SHOULD
-  report whether this fallback was used and whether it was caused by an empty or
-  sparse medium-confidence frame.
+  scene depth, but MAY fall back to accepting low-confidence depth for a frame
+  when the stricter threshold would make the payload empty or too sparse for
+  downstream WebXR consumers to form geometry. Payload telemetry SHOULD report
+  whether this fallback was used and whether it was caused by an empty or sparse
+  high/medium-confidence frame.
 - `normDepthBufferFromNormView` MUST map normalized view coordinates into
   normalized depth-buffer coordinates. It MAY be identity only if the native
   implementation has already produced view-aligned depth.

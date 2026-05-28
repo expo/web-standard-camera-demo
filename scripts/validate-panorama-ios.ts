@@ -1,16 +1,17 @@
 #!/usr/bin/env bun
 // @ref LLP 0020#testing-and-validation — Physical-device validation for the
 // panoramic WebXR capture flow. The script launches the dev-client app, streams
-// device logs, and succeeds only after a manual scan/capture/render/save run
+// the app console, and succeeds only after a manual scan/capture/render/save run
 // emits the required panorama telemetry.
 
 import { spawn } from 'bun';
-import { unlink, writeFile } from 'node:fs/promises';
+import { stat, unlink, writeFile } from 'node:fs/promises';
 
 const APP_BUNDLE_ID = 'dev.ide.standardcameraapp';
 const URL_SCHEME = 'standardcameraapp';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_METRO_URL = process.env.PANORAMA_METRO_URL ?? 'http://192.168.1.181:8082';
+const DEFAULT_METRO_LOG_PATH = process.env.PANORAMA_METRO_LOG_PATH ?? '.expo/dev/logs/start.log';
 const DEFAULT_ROUTE_URL = `${URL_SCHEME}:///panoramic-scene-capture?autorun=1`;
 const WEBXR_DEMO_ROUTE_URL = `${URL_SCHEME}:///lidar-depth-webxr?autorun=1`;
 const DEFAULT_MAX_KEYFRAME_DEPTH_GRID_SAMPLES = 40 * 30;
@@ -119,6 +120,7 @@ export interface Options {
   device?: string;
   installAppPath?: string;
   logFilePath?: string;
+  metroLogPath?: string | null;
   metroUrl: string;
   noLaunch: boolean;
   outJsonPath?: string;
@@ -177,6 +179,9 @@ async function main(): Promise<number> {
 
   let logProc: ReturnType<typeof spawn> | null = null;
   try {
+    const metroLogStartOffset = options.metroLogPath
+      ? await readableFileSize(options.metroLogPath)
+      : 0;
     if (options.installAppPath) {
       await sh([
         'xcrun',
@@ -192,40 +197,26 @@ async function main(): Promise<number> {
     }
     if (!options.noLaunch) {
       const payloadUrl = buildDevelopmentClientUrl(options.metroUrl);
-      await sh([
-        'xcrun',
-        'devicectl',
-        'device',
-        'process',
-        'launch',
-        '--device',
-        device.identifier,
-        '--terminate-existing',
-        '--payload-url',
-        payloadUrl,
-        APP_BUNDLE_ID,
-      ]);
+      // @ref LLP 0020#testing-and-validation - React Native console.log telemetry
+      // appears on the app console stream in physical dev-client runs. Attaching
+      // here avoids relying on idevicesyslog, which can miss Metro/JS logs and
+      // produce empty WebXR profile reports.
+      logProc = startDeviceConsoleStream(device.identifier, payloadUrl);
       console.log(`Launched ${APP_BUNDLE_ID} with Metro ${options.metroUrl}`);
       if (options.routeUrl) {
         await sleep(1500);
-        await sh([
-          'xcrun',
-          'devicectl',
-          'device',
-          'process',
-          'launch',
-          '--device',
-          device.identifier,
-          '--payload-url',
-          options.routeUrl,
-          APP_BUNDLE_ID,
-        ]);
+        await sh(buildDeviceProcessLaunchCommand(device.identifier, options.routeUrl));
         console.log(`Opened app route ${options.routeUrl}`);
       }
+    } else {
+      logProc = startLogStream();
     }
 
-    logProc = startLogStream();
-    const seen = await collectMetrics(logProc, options.timeoutMs, { requireComplete: !options.profileOnly });
+    const seen = await collectMetrics(logProc, options.timeoutMs, {
+      metroLogPath: options.metroLogPath,
+      metroLogStartOffset,
+      requireComplete: !options.profileOnly,
+    });
     if (!options.profileOnly) {
       validateRequiredMetricSet(seen, options.validationBudgets);
     }
@@ -252,6 +243,41 @@ function startLogStream(): ReturnType<typeof spawn> {
   });
 }
 
+function startDeviceConsoleStream(deviceIdentifier: string, payloadUrl: string): ReturnType<typeof spawn> {
+  return spawn({
+    cmd: buildDeviceProcessLaunchCommand(deviceIdentifier, payloadUrl, {
+      console: true,
+      terminateExisting: true,
+    }),
+    stdout: 'pipe',
+    stderr: 'inherit',
+  });
+}
+
+export function buildDeviceProcessLaunchCommand(
+  deviceIdentifier: string,
+  payloadUrl: string,
+  options: { console?: boolean; terminateExisting?: boolean } = {}
+): string[] {
+  const cmd = [
+    'xcrun',
+    'devicectl',
+    'device',
+    'process',
+    'launch',
+    '--device',
+    deviceIdentifier,
+  ];
+  if (options.terminateExisting) {
+    cmd.push('--terminate-existing');
+  }
+  if (options.console) {
+    cmd.push('--console');
+  }
+  cmd.push('--payload-url', payloadUrl, APP_BUNDLE_ID);
+  return cmd;
+}
+
 export function buildDevelopmentClientUrl(metroUrl: string): string {
   return `${URL_SCHEME}://expo-development-client/?${new URLSearchParams({
     disableOnboarding: '1',
@@ -261,6 +287,7 @@ export function buildDevelopmentClientUrl(metroUrl: string): string {
 
 export function parseArgs(args: string[]): Options {
   const options: Options = {
+    metroLogPath: DEFAULT_METRO_LOG_PATH,
     metroUrl: DEFAULT_METRO_URL,
     noLaunch: false,
     profileTarget: 'panorama',
@@ -279,6 +306,8 @@ export function parseArgs(args: string[]): Options {
       options.logFilePath = requireValue(args, ++i, arg);
     } else if (arg === '--metro-url') {
       options.metroUrl = requireValue(args, ++i, arg);
+    } else if (arg === '--metro-log') {
+      options.metroLogPath = requireValue(args, ++i, arg);
     } else if (arg === '--max-capture-build-ms') {
       options.validationBudgets.maxCaptureBuildMs = parsePositiveNumber(requireValue(args, ++i, arg), arg);
     } else if (arg === '--max-keyframe-append-ms') {
@@ -305,6 +334,8 @@ export function parseArgs(args: string[]): Options {
       options.validationBudgets.minScanCoveragePercent = parsePositiveNumber(requireValue(args, ++i, arg), arg);
     } else if (arg === '--no-launch') {
       options.noLaunch = true;
+    } else if (arg === '--no-metro-log') {
+      options.metroLogPath = null;
     } else if (arg === '--out-json') {
       options.outJsonPath = requireValue(args, ++i, arg);
     } else if (arg === '--profile-only') {
@@ -354,6 +385,14 @@ function parsePositiveNumber(raw: string, flag: string): number {
   return value;
 }
 
+async function readableFileSize(path: string): Promise<number> {
+  try {
+    return (await stat(path)).size;
+  } catch {
+    return 0;
+  }
+}
+
 function printHelp(): void {
   console.log(`Usage: bun run scripts/validate-panorama-ios.ts [options]
 
@@ -364,6 +403,9 @@ Options:
   --log-file <path>        Parse an existing pasted/device log file instead
                            of connecting to a device.
   --metro-url <url>        Expo dev-server URL. Default: ${DEFAULT_METRO_URL}
+  --metro-log <path>       Tail Expo/Metro client logs appended during this run.
+                           Default: ${DEFAULT_METRO_LOG_PATH}
+  --no-metro-log           Disable Expo/Metro client-log tailing.
   --route-url <url>        App route to open after Metro launch. Default: ${DEFAULT_ROUTE_URL}
   --webxr-demo             Open the WebXR LiDAR depth demo with autorun and
                            collect profile-only WEBGPU_DEMO_PROFILE logs.
@@ -448,12 +490,32 @@ async function pickConnectedDevice(requested: string | undefined): Promise<Devic
 async function collectMetrics(
   proc: ReturnType<typeof spawn>,
   timeoutMs: number,
-  { requireComplete = true }: { requireComplete?: boolean } = {}
+  {
+    metroLogPath,
+    metroLogStartOffset = 0,
+    requireComplete = true,
+  }: { metroLogPath?: string | null; metroLogStartOffset?: number; requireComplete?: boolean } = {}
 ): Promise<SeenMetrics> {
   const seen: SeenMetrics = {};
   const decoder = new TextDecoder();
   let buffered = '';
+  let completed = false;
   let timedOut = false;
+  const metroTail = metroLogPath
+    ? createMetricLogTail(metroLogPath, metroLogStartOffset, seen)
+    : null;
+  const pollMetroTail = async (): Promise<void> => {
+    if (!metroTail) return;
+    await metroTail.poll();
+    if (requireComplete && isComplete(seen)) {
+      completed = true;
+      try {
+        proc.kill();
+      } catch {
+        // ignore
+      }
+    }
+  };
   const timer = setTimeout(() => {
     timedOut = true;
     try {
@@ -462,8 +524,14 @@ async function collectMetrics(
       // ignore
     }
   }, timeoutMs);
+  const metroPollTimer = metroTail
+    ? setInterval(() => {
+      void pollMetroTail();
+    }, 250)
+    : null;
 
   try {
+    await pollMetroTail();
     for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
       buffered += decoder.decode(chunk, { stream: true });
       const lines = buffered.split(/\r?\n/);
@@ -471,14 +539,23 @@ async function collectMetrics(
       for (const line of lines) {
         recordMetricLine(line, seen);
         if (requireComplete && isComplete(seen)) {
+          completed = true;
           return seen;
         }
       }
+      await pollMetroTail();
     }
   } finally {
     clearTimeout(timer);
+    if (metroPollTimer) {
+      clearInterval(metroPollTimer);
+    }
+    await pollMetroTail();
   }
 
+  if (completed || (requireComplete && isComplete(seen))) {
+    return seen;
+  }
   if (timedOut) {
     if (!requireComplete) {
       return seen;
@@ -491,7 +568,57 @@ async function collectMetrics(
   throw new Error(`Log stream ended before telemetry completed. Missing: ${missingMetrics(seen).join(', ')}`);
 }
 
+function createMetricLogTail(
+  path: string,
+  startOffset: number,
+  seen: SeenMetrics
+): { poll: () => Promise<void> } {
+  let offset = Math.max(0, Math.floor(startOffset));
+  let buffered = '';
+  let pollInFlight: Promise<void> | null = null;
+
+  return {
+    poll: () => {
+      if (!pollInFlight) {
+        pollInFlight = (async () => {
+          try {
+            const size = await readableFileSize(path);
+            if (size < offset) {
+              offset = 0;
+              buffered = '';
+            }
+            if (size <= offset) return;
+            const text = await Bun.file(path).slice(offset, size).text();
+            offset = size;
+            buffered = recordMetricText(text, seen, buffered);
+          } finally {
+            pollInFlight = null;
+          }
+        })();
+      }
+      return pollInFlight;
+    },
+  };
+}
+
+function recordMetricText(text: string, seen: SeenMetrics, buffered = ''): string {
+  buffered += text;
+  const lines = buffered.split(/\r?\n/);
+  const remainder = lines.pop() ?? '';
+  for (const line of lines) {
+    recordMetricLine(line, seen);
+  }
+  return remainder;
+}
+
 export function recordMetricLine(line: string, seen: SeenMetrics): void {
+  const metroLines = metroClientLogLines(line);
+  if (metroLines.length > 0) {
+    for (const metroLine of metroLines) {
+      recordMetricLine(metroLine, seen);
+    }
+    return;
+  }
   const cameraContextMetric = parseCameraContextMetricLine(line);
   if (cameraContextMetric) {
     seen.CAMERA_CONTEXT_PROFILE = mergeObservedMetric(
@@ -516,6 +643,19 @@ export function recordMetricLine(line: string, seen: SeenMetrics): void {
   }
   seen[name] = mergeObservedMetric(name, seen[name], metric);
   console.log(`${name} ${JSON.stringify(seen[name])}`);
+}
+
+function metroClientLogLines(line: string): string[] {
+  if (!line.includes('"metro:client_log"')) return [];
+  const entry = safeParseMetric(line);
+  if (entry._e !== 'metro:client_log' || !Array.isArray(entry.data)) return [];
+  const parts = entry.data.filter((part): part is string => typeof part === 'string');
+  if (parts.length === 0) return [];
+  const [first, second] = parts;
+  if (first && second && isObservedMetric(first) && second.trim().startsWith('{')) {
+    return [`${first} ${second}`];
+  }
+  return [parts.join(' ')];
 }
 
 function applyMetricScanBoundary(seen: SeenMetrics, metric: Record<string, unknown>): boolean {
@@ -1847,6 +1987,10 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
         ? ` (${stringField(nativePayload, 'confidenceFallbackReason')})`
         : '')
     );
+    const confidenceGate = rawDepthConfidenceGateSummary(nativePayload);
+    if (confidenceGate) {
+      lines.push(confidenceGate);
+    }
     if (
       numberField(nativePayload, 'depthMinMeters') > 0 ||
       numberField(nativePayload, 'depthMeanMeters') > 0 ||
@@ -2113,6 +2257,14 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     return rejectedAppendMutation;
   }
 
+  const rawDepthConfidenceStarvation = rawDepthConfidenceStarvationDiagnosis(
+    seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE,
+    rejectionProfile
+  );
+  if (rawDepthConfidenceStarvation) {
+    return rawDepthConfidenceStarvation;
+  }
+
   if (loopStop) {
     const reason = stringField(loopStop, 'reason') || 'unknown';
     const status = stringField(loopStop, 'status') || 'unknown';
@@ -2191,6 +2343,51 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   }
 
   return '';
+}
+
+function rawDepthConfidenceStarvationDiagnosis(
+  nativePayload: Record<string, unknown> | undefined,
+  rejectionProfile: Record<string, unknown> | undefined
+): string {
+  if (!isRawDepthConfidenceStarved(nativePayload)) return '';
+  const reason = stringField(rejectionProfile ?? {}, 'reason');
+  const observedDepthSurfels = numberField(rejectionProfile ?? {}, 'observedDepthSurfels');
+  const combinedSurfels = numberField(rejectionProfile ?? {}, 'combinedPreflightSurfels');
+  const rejectionDetail = reason
+    ? `; keyframe preflight rejected ${reason} with ${observedDepthSurfels} observed depth surfels and ${combinedSurfels} depth+mesh surfels`
+    : '';
+  return (
+    `First-frame diagnosis: raw WebXR depth bytes are being delivered, but confidence filtering removes every pixel ` +
+    `(${formatPercent(numberField(nativePayload ?? {}, 'validDepthPercent'))} valid, ` +
+    `${formatPercent(numberField(nativePayload ?? {}, 'confidenceFilteredPercent'))} confidence-filtered at threshold ` +
+    `${numberField(nativePayload ?? {}, 'confidenceThreshold')}); no surfels can be accepted until confidence improves or the raw-depth fallback relaxes the gate` +
+    rejectionDetail
+  );
+}
+
+function rawDepthConfidenceGateSummary(nativePayload: Record<string, unknown>): string {
+  if (!isRawDepthConfidenceStarved(nativePayload)) return '';
+  return (
+    `Raw depth confidence gate: ${formatPercent(numberField(nativePayload, 'validDepthPercent'))} valid at threshold ` +
+    `${numberField(nativePayload, 'confidenceThreshold')}, ` +
+    `${formatPercent(numberField(nativePayload, 'lowConfidencePercent'))} low-confidence / ` +
+    `${formatPercent(numberField(nativePayload, 'confidenceFilteredPercent'))} confidence-filtered; ` +
+    `the frame contains depth bytes but no samples survive into surfel preflight`
+  );
+}
+
+function isRawDepthConfidenceStarved(nativePayload: Record<string, unknown> | undefined): boolean {
+  if (!nativePayload || nativePayload.payloadUnavailable === true) return false;
+  if (nativePayload.includeDepthData !== true || stringField(nativePayload, 'depthType') !== 'raw') return false;
+  if (nativePayload.confidenceMapUsed !== true || nativePayload.confidenceFallbackUsed === true) return false;
+  const depthPixels = numberField(nativePayload, 'depthPixelCount');
+  if (depthPixels <= 0) return false;
+  const validPercent = numberField(nativePayload, 'validDepthPercent');
+  const validCount = numberField(nativePayload, 'validDepthCount');
+  const confidenceFilteredPercent = numberField(nativePayload, 'confidenceFilteredPercent');
+  const lowConfidencePercent = numberField(nativePayload, 'lowConfidencePercent');
+  return (validPercent <= 0.1 || validCount === 0) &&
+    (confidenceFilteredPercent >= 95 || lowConfidencePercent >= 95);
 }
 
 function keyframeRejectedAppendMutationDetail(rejectionProfile: Record<string, unknown>): string {
