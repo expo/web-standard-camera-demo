@@ -1705,9 +1705,6 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     numberField(captureBlocked ?? {}, 'acceptedKeyframes'),
     numberField(captureBlocked ?? {}, 'keyframes')
   );
-  if (scanReset && acceptedKeyframes <= 1 && numberField(scanReset, 'previousKeyframes') > 1) {
-    return `First-frame diagnosis: current scan has only ${acceptedKeyframes} keyframe(s) after a ${stringField(scanReset, 'reason') || 'unknown'} reset discarded ${numberField(scanReset, 'previousKeyframes')} previous keyframes and ${numberField(scanReset, 'previousRawSampleCount')} raw samples`;
-  }
   if (acceptedKeyframes > 1) {
     const latestKeyframeSamples = numberField(keyframeProfile ?? {}, 'surfelCount');
     const rawSamples = Math.max(
@@ -1792,6 +1789,10 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   const capture = seen.PANORAMIC_CAPTURE_METRICS;
   if (capture && numberField(capture, 'keyframes') <= 1 && numberField(capture, 'surfelCount') > 0) {
     return `First-frame diagnosis: Capture sealed a model after only ${numberField(capture, 'keyframes')} accepted keyframe(s); capture was triggered before the scan accumulated enough keyframes`;
+  }
+
+  if (scanReset && acceptedKeyframes <= 1 && numberField(scanReset, 'previousKeyframes') > 1) {
+    return `First-frame diagnosis: current scan has only ${acceptedKeyframes} keyframe(s) after a ${stringField(scanReset, 'reason') || 'unknown'} reset discarded ${numberField(scanReset, 'previousKeyframes')} previous keyframes and ${numberField(scanReset, 'previousRawSampleCount')} raw samples`;
   }
 
   return '';

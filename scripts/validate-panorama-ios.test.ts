@@ -835,6 +835,23 @@ test('panorama validator diagnoses a previous multi-keyframe scan reset before a
   );
 });
 
+test('panorama validator prefers current scan starvation evidence over reset context', () => {
+  const seen = parseMetricLogText(`
+ LOG PANORAMIC_SCAN_RESET_PROFILE {"nextScanId":2,"previousAcceptedKeyframes":24,"previousFrameCount":120,"previousFusedSurfelCount":9744,"previousKeyframes":24,"previousRawSampleCount":13496,"previousRetainedSamples":13496,"previousScanId":1,"reason":"start-session","scanId":2,"sessionActive":false,"status":"idle"}
+ LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.48,"cameraColorPercent":100,"fusedSurfelCount":749,"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":2,"surfelCount":781}
+ LOG PANORAMIC_XR_FRAME_PUMP_PROFILE {"arFrameDelta":72,"arFrameNumber":76,"consecutiveDepthMisses":70,"deliveredFramePolls":1,"depthFrameArFrameNumber":4,"depthFrameDelta":1,"depthMisses":70,"lastDeliveredFrameNumber":1,"latestFrameNumber":1,"nativeFrameErrorPolls":0,"noFramePolls":0,"reason":"stale-frame","staleFramePolls":70,"scanId":2}
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Scan reset: start-session discarded 24 keyframes, 13496 raw samples, 9744 fused surfels; previous scan 1 -> 2, status idle'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: ARKit camera frames are still arriving (+72), but WebXR scene-depth snapshots are stuck on depth frame 1; last depth came from AR frame 4, lag 72, depth misses 70 consecutive 70; this points to native scene-depth starvation rather than JS keyframe rejection'
+  );
+});
+
 test('panorama validator diagnoses accepted raw samples that do not grow displayed surfels', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
