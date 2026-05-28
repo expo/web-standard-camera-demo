@@ -1739,6 +1739,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     return `First-frame diagnosis: XR scan loop stopped after ${numberField(loopStop, 'frameCount')} frame(s) and ${acceptedKeyframes} keyframe(s) because ${humanizeScanLoopStopReason(reason)}; status ${status}, captureInFlight ${loopStop.captureInFlight === true ? 'yes' : 'no'}, sessionEnded ${loopStop.sessionEnded === true ? 'yes' : 'no'}, sessionMatches ${loopStop.sessionMatches === false ? 'no' : 'yes'}`;
   }
 
+  const postFirstFusionGrowth = postFirstFusionGrowthDiagnosis(seen, acceptedKeyframes);
+  if (postFirstFusionGrowth) {
+    return postFirstFusionGrowth;
+  }
+
   if (framePump) {
     const deliveredFramePolls = numberField(framePump, 'deliveredFramePolls');
     const noFramePolls = numberField(framePump, 'noFramePolls');
@@ -1800,6 +1805,74 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   }
 
   return '';
+}
+
+function postFirstFusionGrowthDiagnosis(seen: SeenMetrics, acceptedKeyframes: number): string {
+  if (acceptedKeyframes > 1) return '';
+  const keyframeProfile = seen.PANORAMIC_KEYFRAME_PROFILE;
+  const acceptedRawSamples = rawSampleCount(keyframeProfile);
+  const acceptedFusedSurfels = fusedSurfelCount(keyframeProfile);
+  const currentRawSamples = Math.max(
+    acceptedRawSamples,
+    rawSampleCount(seen.PANORAMIC_SCAN_STATS),
+    rawSampleCount(seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE),
+    rawSampleCount(seen.PANORAMIC_CAPTURE_BLOCKED_PROFILE),
+    rawSampleCount(seen.PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE)
+  );
+  const currentFusedSurfels = Math.max(
+    acceptedFusedSurfels,
+    fusedSurfelCount(seen.PANORAMIC_SCAN_STATS),
+    fusedSurfelCount(seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE),
+    fusedSurfelCount(seen.PANORAMIC_CAPTURE_BLOCKED_PROFILE),
+    fusedSurfelCount(seen.PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE)
+  );
+  const frameCount = Math.max(
+    numberField(seen.PANORAMIC_SCAN_STATS ?? {}, 'frameCount'),
+    numberField(seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE ?? {}, 'frameCount'),
+    numberField(seen.PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE ?? {}, 'frameCount')
+  );
+  const deliveredFramePolls = numberField(seen.PANORAMIC_XR_FRAME_PUMP_PROFILE ?? {}, 'deliveredFramePolls');
+  const postFirstEvidence = frameCount > 1 || deliveredFramePolls > 1;
+  const grewAfterAcceptedKeyframe =
+    (acceptedRawSamples > 0 && currentRawSamples > acceptedRawSamples) ||
+    (acceptedFusedSurfels > 0 && currentFusedSurfels > acceptedFusedSurfels);
+  if (!postFirstEvidence || !grewAfterAcceptedKeyframe) return '';
+
+  const displayedStage = staleDisplayedRawSampleStage(seen, currentRawSamples);
+  const displayedDetail = displayedStage
+    ? `; ${displayedStage.label} model remains at ${formatModelCount(displayedStage.keyframes, 'kf')}/` +
+      `${formatModelCount(displayedStage.rawSampleCount, 'raw')}/` +
+      `${formatModelCount(displayedStage.surfelCount, 'surfels')}`
+    : '';
+  const scan = seen.PANORAMIC_SCAN_STATS;
+  const rejected = scan ? scanRejectionSummary(scan) : stringField(seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE ?? {}, 'reason');
+  const rejectedDetail = rejected ? `; rejected ${rejected}` : '';
+  return `First-frame diagnosis: post-first depth reached fusion (${currentRawSamples} raw samples, ${currentFusedSurfels} fused surfels) but only ${acceptedKeyframes} keyframe(s) were accepted${displayedDetail}${rejectedDetail}; this points to post-depth keyframe acceptance/publication rather than native frame starvation`;
+}
+
+function rawSampleCount(metric: Record<string, unknown> | undefined): number {
+  return Math.max(
+    numberField(metric ?? {}, 'rawSampleCount'),
+    numberField(metric ?? {}, 'retainedSamples')
+  );
+}
+
+function fusedSurfelCount(metric: Record<string, unknown> | undefined): number {
+  return Math.max(
+    numberField(metric ?? {}, 'fusedSurfelCount'),
+    numberField(metric ?? {}, 'surfelCount')
+  );
+}
+
+function staleDisplayedRawSampleStage(seen: SeenMetrics, rawSamples: number): ModelChainStage | null {
+  if (rawSamples <= 0) return null;
+  const candidates = [
+    modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
+    modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
+    modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
+    modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
+  ].filter((stage): stage is ModelChainStage => stage !== null);
+  return candidates.find((stage) => stage.rawSampleCount > 0 && stage.rawSampleCount < rawSamples) ?? null;
 }
 
 function staleDisplayedModelStage(

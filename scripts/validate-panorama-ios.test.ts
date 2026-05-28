@@ -898,6 +898,41 @@ test('panorama validator diagnoses stale displayed model publication', () => {
   );
 });
 
+test('panorama validator diagnoses post-first fusion growth without keyframe publication', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      fusedSurfelCount: 749,
+      keyframes: 1,
+      rawSampleCount: 781,
+      retainedSamples: 781,
+      surfelCount: 781,
+    },
+    PANORAMIC_RENDER_FRAME_PROFILE: {
+      canvasHeight: 1280,
+      canvasWidth: 960,
+      keyframes: 1,
+      rawSampleCount: 781,
+      renderFrameMs: 12,
+      surfelCount: 749,
+    },
+    PANORAMIC_SCAN_STATS: {
+      acceptedKeyframes: 1,
+      frameCount: 24,
+      fusedSurfelCount: 1480,
+      rawSampleCount: 2600,
+      rejectedByReason: {
+        'too-few-new-voxels': 12,
+        'too-few-surfels': 3,
+      },
+      retainedSamples: 2600,
+    },
+  } satisfies SeenMetrics;
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'First-frame diagnosis: post-first depth reached fusion (2600 raw samples, 1480 fused surfels) but only 1 keyframe(s) were accepted; render-frame model remains at 1kf/781raw/749surfels; rejected too-few-new-voxels 12, too-few-surfels 3; this points to post-depth keyframe acceptance/publication rather than native frame starvation'
+  );
+});
+
 test('panorama validator diagnoses native WebXR frame fetch errors', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {
