@@ -741,6 +741,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let currentConsecutiveDepthMisses = consecutiveDepthMisses
     let alternateDepthMissCount = requestedDepthMissesWithAlternateDepth
     let diagnosticDepthType = activeDepthType
+    let currentSessionId = sessionId
+    let currentState = state
+    let currentStateReason = lastErrorReason
     let rawDepthAvailable = latestARFrameRawDepthAvailable
     let smoothDepthAvailable = latestARFrameSmoothDepthAvailable
     let depthMissRequestedType = latestDepthMissRequestedType
@@ -784,6 +787,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
           "minDepth": 0,
           "maxDepth": 0,
           "meanDepth": 0,
+          "nativeSessionId": currentSessionId,
+          "nativeSessionReason": currentStateReason ?? "",
+          "nativeSessionState": currentState.rawValue,
           "rawDepthAvailable": rawDepthAvailable,
           "requestedDepthMissesWithAlternateDepth": alternateDepthMissCount,
           "requestedDepthMissingButAlternateAvailable": latestDepthMissAlternateAvailable,
@@ -820,6 +826,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       "minDepth": 0,
       "maxDepth": 0,
       "meanDepth": 0,
+      "nativeSessionId": currentSessionId,
+      "nativeSessionReason": currentStateReason ?? "",
+      "nativeSessionState": currentState.rawValue,
       "rawDepthAvailable": rawDepthAvailable,
       "requestedDepthMissesWithAlternateDepth": alternateDepthMissCount,
       "requestedDepthMissingButAlternateAvailable": latestDepthMissAlternateAvailable,

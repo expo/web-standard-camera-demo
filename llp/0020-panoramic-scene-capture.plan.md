@@ -1316,7 +1316,10 @@ missing, native frame-pump telemetry SHOULD also report whether raw
 how many requested-depth misses had the alternate semantic available. This lets
 profile-only logs distinguish a selected-depth semantic stall, such as smoothed
 depth disappearing while raw depth still arrives, from total ARKit camera/depth
-ownership starvation.
+ownership starvation. The same frame-pump line SHOULD carry native ARKit
+session state and reason fields so a repeated stale frame can be attributed to
+session interruption/stop versus `ARSession` `didUpdate` ceasing while the
+native session still reports running.
 `PANORAMIC_KEYFRAME_REJECTION_PROFILE` reports the latest throttled keyframe
 skip reason with pose motion, retained surfel count, depth/miss counters, and
 depth/mesh preflight density when available, so a run that captures no new

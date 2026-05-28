@@ -2144,6 +2144,11 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `AR frame ${arFrameNumber} (+${numberField(framePump, 'arFrameDelta')})${depthARFrameDetail}, ` +
       `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}` +
       `${framePumpDepthSemanticDetail(framePump)}, ` +
+      `native session ${stringField(framePump, 'nativeSessionState') || 'unknown'}` +
+      (stringField(framePump, 'nativeSessionReason')
+        ? ` (${stringField(framePump, 'nativeSessionReason')})`
+        : '') +
+      `, ` +
       optionalErrorDetail(framePump) +
       `delivered polls ${numberField(framePump, 'deliveredFramePolls')}, ` +
       `native errors ${numberField(framePump, 'nativeFrameErrorPolls')}, ` +
@@ -2289,6 +2294,15 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     if (deliveredFramePolls <= 1 && (noFramePolls > 0 || staleFramePolls > 0)) {
       const arFrameDelta = numberField(framePump, 'arFrameDelta');
       const depthFrameDelta = numberField(framePump, 'depthFrameDelta');
+      const nativeState = stringField(framePump, 'nativeSessionState');
+      if (staleFramePolls > 0 && arFrameDelta <= 0 && nativeState && nativeState !== 'running') {
+        const nativeReason = stringField(framePump, 'nativeSessionReason');
+        return `First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session was ${nativeState}` +
+          `${nativeReason ? ` (${nativeReason})` : ''}; this points to session interruption/stop rather than JS keyframe rejection`;
+      }
+      if (staleFramePolls > 0 && arFrameDelta <= 0 && nativeState === 'running') {
+        return `First-frame diagnosis: WebXR native frame delivery stalled while the native ARKit session still reported running; ARSession didUpdate stopped advancing after frame ${numberField(framePump, 'arFrameNumber')}, so the next physical log should check app lock/backgrounding or ARKit camera ownership rather than JS keyframe rejection`;
+      }
       if (staleFramePolls > 0 && arFrameDelta > 0 && depthFrameDelta <= 1) {
         const arFrameNumber = numberField(framePump, 'arFrameNumber');
         const depthFrameArFrameNumber = numberField(framePump, 'depthFrameArFrameNumber');
