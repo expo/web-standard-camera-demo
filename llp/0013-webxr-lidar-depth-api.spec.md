@@ -566,6 +566,13 @@ and `getDepthInMeters()` still expose data for the same active `XRFrame`.
 When the native bridge has already produced an exact tight `ArrayBuffer`, the
 JS WebXR profile MAY return that buffer directly instead of making another
 JavaScript copy.
+If the lazy native depth-payload bridge is missing, throws, or reports no
+payload for an active `XRFrame`, the WebXR runtime MUST emit internal
+diagnostic telemetry with the frame number, request type, fallback reason, and
+error detail when available. `XRCPUDepthInformation.data` and
+`getDepthInMeters()` MUST continue to report unavailable depth through
+`InvalidStateError`; the bridge failure MUST NOT add app-facing native fields to
+`XRFrame` or `XRDepthInformation`.
 
 `getDepthInMeters(x, y)` MUST:
 
@@ -626,6 +633,13 @@ JS WebXR profile MAY return that buffer directly instead of making another
 JavaScript copy.
 The implementation MAY also defer camera-image rendering/copying until
 `XRCPUCameraBinding.getCameraImage(camera)` is called for the active frame.
+If the lazy native camera-payload bridge is missing, throws, or reports no
+aligned camera bytes, `XRCPUCameraBinding.getCameraImage(camera)` MUST return
+`null` for that image and SHOULD emit internal diagnostic telemetry with the
+frame number, request type, fallback reason, and error detail when available.
+This camera-payload failure MUST NOT abort depth-backed frame delivery; callers
+that can use fallback colors should still be able to process the active depth
+frame.
 Implementations MAY emit internal diagnostic telemetry for native payload
 copy/render timing and pose availability, but that telemetry MUST NOT add
 app-facing fields to `XRFrame`, `XRDepthInformation`, `XRCamera`, or

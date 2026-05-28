@@ -245,7 +245,14 @@ Implemented:
   captured camera-image size, the `ARCamera.imageResolution` basis used for
   intrinsics scaling, and both depth-to-captured-image and depth-to-projection
   scale factors so physical-device logs can catch depth/camera orientation or
-  scaling mistakes without exposing raw native intrinsics to app code.
+  scaling mistakes without exposing raw native intrinsics to app code. If the
+  lazy native payload bridge is missing, throws, or returns no payload, the same
+  profile SHOULD mark `payloadUnavailable`, include a `fallbackReason`, and
+  preserve native error details when available. Camera payload failure should
+  degrade to a missing camera image so depth surfels can still use fallback
+  colors; depth payload failure remains fatal for that frame's depth samples but
+  must be explicit in logs rather than appearing only as a generic scan-loop
+  exception.
 - Geometry telemetry: final capture logs `PANORAMIC_CAPTURE_GEOMETRY` with
   bounds min/max/center, height-to-horizontal ratio, weighted centroid, average
   accepted scan direction, and normal-projected span/RMS thickness. The
@@ -1289,9 +1296,14 @@ If optional mesh detection is enabled, the validator SHOULD treat a
 `PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE` with `meshPayloadUnavailable` as
 evidence that the optional WebXR mesh bridge may have thrown before post-first
 depth keyframe capture; mesh access is a supplement and must not be allowed to
-turn a depth-backed scan into a one-frame surfel model. Repeated keyframe,
-preview, live-model, render-frame, upload, and native-payload telemetry is
-merged conservatively: the latest model counts are kept for
+turn a depth-backed scan into a one-frame surfel model. The validator SHOULD
+also treat `PANORAMIC_NATIVE_PAYLOAD_PROFILE` with `payloadUnavailable` as
+evidence that lazy native frame bytes were unavailable after an XR frame was
+delivered, and should distinguish depth-payload unavailability from camera
+payload unavailability because only the former prevents depth surfels for that
+frame. Repeated keyframe, preview, live-model, render-frame, upload, and
+native-payload telemetry is merged conservatively: the latest model counts are
+kept for
 capture/render/export consistency, while the worst observed timing, worst
 depth-grid sample count, lowest quality percentage, and any non-fast-path
 unprojection, depth-grid sampling, or camera-color sampling mode, plus any

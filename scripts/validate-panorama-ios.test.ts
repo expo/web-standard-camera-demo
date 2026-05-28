@@ -775,6 +775,30 @@ test('panorama validator identifies optional WebXR mesh bridge failures behind o
   );
 });
 
+test('panorama validator identifies native depth payload failures behind one-frame scans', () => {
+  const seen = parseMetricLogText(`
+    LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"smooth","depthTypeRequest":["smooth","raw"],"meshRequested":false,"scanId":5,"sessionDepthType":"smooth"}
+    LOG PANORAMIC_KEYFRAME_PROFILE {"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":5,"surfelCount":781}
+    LOG PANORAMIC_NATIVE_PAYLOAD_PROFILE {"depthBytes":0,"depthSize":[256,192],"errorMessage":"payload snapshot missing","errorName":"TypeError","fallbackReason":"native-payload-error","frameNumber":2,"includeCameraImage":false,"includeDepthData":true,"payloadUnavailable":true,"requestMs":0.4,"scanId":5}
+    LOG PANORAMIC_KEYFRAME_REJECTION_PROFILE {"errorMessage":"Depth data for this XRFrame is no longer available","errorName":"InvalidStateError","frameCount":2,"keyframes":1,"reason":"scan-loop-error","retainedSamples":781,"scanId":5}
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE).toMatchObject({
+    errorMessage: 'payload snapshot missing',
+    fallbackReason: 'native-payload-error',
+    includeDepthData: true,
+    payloadUnavailable: true,
+  });
+  expect(summary).toContain(
+    'Native payload unavailable: native-payload-error (depth request), error TypeError: payload snapshot missing'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: scan loop callback threw after 1 keyframe(s): InvalidStateError: Depth data for this XRFrame is no longer available; native WebXR depth payload was unavailable (native-payload-error), so JS received an XR frame but could not read depth bytes for post-first surfel capture'
+  );
+});
+
 test('panorama validator diagnoses scan loop scheduling stops', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {

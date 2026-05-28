@@ -784,6 +784,55 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
   }
 });
 
+test('XRCPUDepthInformation logs native payload bridge failures before reporting unavailable depth', () => {
+  const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
+  const originalConsoleLog = console.log;
+  const profileLogs: unknown[] = [];
+  const { frame, referenceSpace } = makeXRFrame({ trackingState: 'normal' });
+  const view = new WebXRView(frame, referenceSpace);
+  const depth = new WebXRCPUDepthInformation(frame, view);
+
+  try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 12 });
+    console.log = (name: unknown, payload?: unknown): void => {
+      if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
+    };
+    (NativeStandardCamera as unknown as Record<string, unknown>).getWebXRLiDARDepthFramePayload = undefined;
+
+    expect(() => depth.data).toThrow('Depth data for this XRFrame is no longer available');
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      fallbackReason: 'missing-native-payload-getter',
+      frameNumber: 1,
+      includeCameraImage: false,
+      includeDepthData: true,
+      payloadUnavailable: true,
+      scanId: 12,
+    });
+
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => {
+      throw new TypeError('native payload failed');
+    };
+
+    expect(() => depth.getDepthInMeters(0.5, 0.5)).toThrow(
+      'Depth data for this XRFrame is no longer available'
+    );
+    expect(JSON.parse(String(profileLogs[1]))).toMatchObject({
+      errorMessage: 'native payload failed',
+      errorName: 'TypeError',
+      fallbackReason: 'native-payload-error',
+      frameNumber: 1,
+      includeCameraImage: false,
+      includeDepthData: true,
+      payloadUnavailable: true,
+      scanId: 12,
+    });
+  } finally {
+    setWebXRDepthProfileTelemetryContext(null);
+    console.log = originalConsoleLog;
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
+  }
+});
+
 test('XRCPUDepthInformation indexes normalized coordinates using WebXR width and height scaling', () => {
   const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
   const originalConsoleLog = console.log;
@@ -813,6 +862,46 @@ test('XRCPUDepthInformation indexes normalized coordinates using WebXR width and
     expect(() => depth.getDepthInMeters(-0.01, 0)).toThrow(RangeError);
     expect(() => depth.getDepthInMeters(0, 1.01)).toThrow(RangeError);
   } finally {
+    console.log = originalConsoleLog;
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
+  }
+});
+
+test('XRCPUCameraImage treats native payload bridge failures as unavailable camera image', () => {
+  const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
+  const originalConsoleLog = console.log;
+  const profileLogs: unknown[] = [];
+  const { frame } = makeXRFrame({ trackingState: 'normal' });
+  const camera = new WebXRCamera(
+    frame,
+    2,
+    1,
+    'bgra8unorm',
+    new WebXRRigidTransform(new Float32Array(IDENTITY))
+  );
+
+  try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 13 });
+    console.log = (name: unknown, payload?: unknown): void => {
+      if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
+    };
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => {
+      throw new TypeError('camera payload failed');
+    };
+
+    expect(WebXRCPUCameraImage.fromCamera(camera)).toBeNull();
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      errorMessage: 'camera payload failed',
+      errorName: 'TypeError',
+      fallbackReason: 'native-payload-error',
+      frameNumber: 1,
+      includeCameraImage: true,
+      includeDepthData: false,
+      payloadUnavailable: true,
+      scanId: 13,
+    });
+  } finally {
+    setWebXRDepthProfileTelemetryContext(null);
     console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
   }

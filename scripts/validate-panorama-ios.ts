@@ -972,10 +972,14 @@ function mergeObservedMetric(
         numberField(incoming, 'mediumConfidencePercent')
       ),
       payloadMs: Math.max(numberField(existing, 'payloadMs'), numberField(incoming, 'payloadMs')),
+      payloadUnavailable: existing.payloadUnavailable === true || incoming.payloadUnavailable === true,
       projectionCameraImageResolution:
         incoming.projectionCameraImageResolution ?? existing.projectionCameraImageResolution,
       projectionDepthToCameraScale: incoming.projectionDepthToCameraScale ?? existing.projectionDepthToCameraScale,
       requestMs: Math.max(numberField(existing, 'requestMs'), numberField(incoming, 'requestMs')),
+      fallbackReason: stringField(incoming, 'fallbackReason') || stringField(existing, 'fallbackReason'),
+      errorMessage: stringField(incoming, 'errorMessage') || stringField(existing, 'errorMessage'),
+      errorName: stringField(incoming, 'errorName') || stringField(existing, 'errorName'),
       validDepthCount: Math.max(
         numberField(existing, 'validDepthCount'),
         numberField(incoming, 'validDepthCount')
@@ -1502,6 +1506,17 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
 
   const nativePayload = seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE;
   if (nativePayload) {
+    if (nativePayload.payloadUnavailable === true) {
+      const requestedPayload = [
+        nativePayload.includeDepthData === true ? 'depth' : '',
+        nativePayload.includeCameraImage === true ? 'camera' : '',
+      ].filter(Boolean).join('+') || 'metadata';
+      const errorDetail = optionalErrorDetail(nativePayload).replace(/,\s*$/, '');
+      lines.push(
+        `Native payload unavailable: ${stringField(nativePayload, 'fallbackReason') || 'unknown'} ` +
+        `(${requestedPayload} request)${errorDetail ? `, ${errorDetail}` : ''}`
+      );
+    }
     lines.push(
       `Depth payload: valid ${formatPercent(numberField(nativePayload, 'validDepthPercent'))}, ` +
       `invalid ${formatPercent(numberField(nativePayload, 'invalidDepthPercent'))}, ` +
@@ -1741,6 +1756,18 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   if (stringField(rejectionProfile ?? {}, 'reason') === 'scan-loop-error') {
     const errorName = stringField(rejectionProfile ?? {}, 'errorName') || 'Error';
     const errorMessage = stringField(rejectionProfile ?? {}, 'errorMessage') || 'see keyframe rejection profile';
+    const nativePayload = seen.PANORAMIC_NATIVE_PAYLOAD_PROFILE;
+    const nativePayloadUnavailable = nativePayload?.payloadUnavailable === true;
+    const nativePayloadFailureDetail = nativePayloadUnavailable
+      ? `; native WebXR ${nativePayload.includeDepthData === true ? 'depth' : nativePayload.includeCameraImage === true ? 'camera' : 'frame'} payload was unavailable (${stringField(nativePayload, 'fallbackReason') || 'unknown'}), ` +
+        `${nativePayload.includeDepthData === true
+          ? 'so JS received an XR frame but could not read depth bytes for post-first surfel capture'
+          : nativePayload.includeCameraImage === true
+            ? 'so camera coloring had to fall back instead of blocking depth surfels on fixed builds'
+            : 'so lazy frame payload access failed after frame delivery'}`
+      : /Depth data for this XRFrame is no longer available/i.test(errorMessage)
+        ? '; the error shape matches missing or expired native WebXR depth payload bytes after frame delivery'
+        : '';
     const meshRequested = seen.PANORAMIC_SCAN_CONFIG?.meshRequested === true;
     const nativeMeshPayload = seen.PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE;
     const meshPayloadUnavailable = nativeMeshPayload?.meshPayloadUnavailable === true;
@@ -1749,7 +1776,7 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
       : meshRequested && /undefined is not a function/i.test(errorMessage)
         ? '; mesh detection was requested and the error shape matches a missing optional WebXR mesh bridge, which can throw before the post-first depth keyframe path'
         : '';
-    return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}${meshFailureDetail}`;
+    return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}${nativePayloadFailureDetail}${meshFailureDetail}`;
   }
 
   if (loopStop) {

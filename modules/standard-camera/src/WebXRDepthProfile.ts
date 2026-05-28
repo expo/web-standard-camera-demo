@@ -532,6 +532,12 @@ type ScheduledXRCallback = {
   rafId: number | null;
 };
 
+type NativePayloadRequestProfile = {
+  includeCameraImage: boolean;
+  includeDepthData: boolean;
+  requestMs: number;
+};
+
 // @ref LLP 0013#xr-session
 // @ref LLP 0014#xr-session
 export class WebXRSession extends EventTarget {
@@ -1112,17 +1118,10 @@ export class WebXRFrame {
   nativeDepthData(): Uint8Array | null {
     this.assertActive();
     if (this.#depthData) return this.#depthData;
-    const requestStart = now();
     const nativeFrame = nativeFrameFor(this);
-    const payload = NativeStandardCamera.getWebXRLiDARDepthFramePayload(
-      nativeFrame.frameNumber,
-      true,
-      false
-    );
-    logNativePayloadProfile(payload, nativeFrame, {
+    const payload = requestNativeFramePayload(nativeFrame, {
       includeCameraImage: false,
       includeDepthData: true,
-      requestMs: now() - requestStart,
     });
     this.#depthData = payload?.depthData ?? null;
     return this.#depthData;
@@ -1133,17 +1132,10 @@ export class WebXRFrame {
     if (this.#cameraData && this.#cameraDataFormat) {
       return { data: this.#cameraData, format: this.#cameraDataFormat };
     }
-    const requestStart = now();
     const nativeFrame = nativeFrameFor(this);
-    const payload = NativeStandardCamera.getWebXRLiDARDepthFramePayload(
-      nativeFrame.frameNumber,
-      false,
-      true
-    );
-    logNativePayloadProfile(payload, nativeFrame, {
+    const payload = requestNativeFramePayload(nativeFrame, {
       includeCameraImage: true,
       includeDepthData: false,
-      requestMs: now() - requestStart,
     });
     if (!payload?.colorData || payload.colorFormat !== 'bgra8unorm') {
       return null;
@@ -1265,10 +1257,65 @@ export class WebXRFrame {
   }
 }
 
+function requestNativeFramePayload(
+  frame: NativeLiDARDepthFrame,
+  request: Omit<NativePayloadRequestProfile, 'requestMs'>
+): NativeLiDARDepthFramePayload | null {
+  const requestStart = now();
+  const getPayload = (
+    NativeStandardCamera as typeof NativeStandardCamera & {
+      getWebXRLiDARDepthFramePayload?: unknown;
+    }
+  ).getWebXRLiDARDepthFramePayload;
+  if (typeof getPayload !== 'function') {
+    logNativePayloadUnavailableProfile(frame, {
+      ...request,
+      requestMs: now() - requestStart,
+    }, 'missing-native-payload-getter');
+    return null;
+  }
+
+  let payload: NativeLiDARDepthFramePayload | null | undefined;
+  try {
+    payload = getPayload.call(
+      NativeStandardCamera,
+      frame.frameNumber,
+      request.includeDepthData,
+      request.includeCameraImage
+    );
+  } catch (e) {
+    logNativePayloadUnavailableProfile(frame, {
+      ...request,
+      requestMs: now() - requestStart,
+    }, e);
+    return null;
+  }
+
+  const requestProfile = {
+    ...request,
+    requestMs: now() - requestStart,
+  };
+  if (!payload) {
+    logNativePayloadUnavailableProfile(
+      frame,
+      requestProfile,
+      request.includeDepthData
+        ? 'native-depth-payload-null'
+        : request.includeCameraImage
+          ? 'native-camera-payload-null'
+          : 'native-payload-null'
+    );
+    return null;
+  }
+
+  logNativePayloadProfile(payload, frame, requestProfile);
+  return payload;
+}
+
 function logNativePayloadProfile(
   payload: NativeLiDARDepthFramePayload | null | undefined,
   frame: NativeLiDARDepthFrame,
-  request: { includeCameraImage: boolean; includeDepthData: boolean; requestMs: number }
+  request: NativePayloadRequestProfile
 ): void {
   if (!payload) return;
   const depthPixelCount = payload.depthData ? Math.max(0, frame.width * frame.height) : 0;
@@ -1328,6 +1375,39 @@ function logNativePayloadProfile(
     ...telemetryContextFields(),
     validDepthCount,
     validDepthPercent: depthPixelCount > 0 ? roundMetric(100 * validDepthCount / depthPixelCount, 1) : 0,
+  }));
+}
+
+function logNativePayloadUnavailableProfile(
+  frame: NativeLiDARDepthFrame,
+  request: NativePayloadRequestProfile,
+  error: unknown
+): void {
+  const capturedImageWidth = frame.capturedImageWidth ?? 0;
+  const capturedImageHeight = frame.capturedImageHeight ?? 0;
+  const fallbackReason = typeof error === 'string' ? error : 'native-payload-error';
+  console.log('PANORAMIC_NATIVE_PAYLOAD_PROFILE', JSON.stringify({
+    cameraBytes: 0,
+    cameraCapturedSize: [capturedImageWidth, capturedImageHeight],
+    colorBytesPerPixel: 0,
+    colorSize: [frame.colorWidth ?? 0, frame.colorHeight ?? 0],
+    depthBytes: 0,
+    depthBytesPerPixel: 0,
+    depthSize: [frame.width, frame.height],
+    depthToCameraScale: [
+      capturedImageWidth > 0 ? roundMetric(frame.width / capturedImageWidth, 4) : 0,
+      capturedImageHeight > 0 ? roundMetric(frame.height / capturedImageHeight, 4) : 0,
+    ],
+    depthType: frame.depthType ?? 'none',
+    fallbackReason,
+    frameNumber: frame.frameNumber,
+    includeCameraImage: request.includeCameraImage,
+    includeDepthData: request.includeDepthData,
+    payloadUnavailable: true,
+    requestMs: roundMetric(request.requestMs),
+    ...telemetryContextFields(),
+    errorMessage: error instanceof Error ? error.message : undefined,
+    errorName: error instanceof Error ? error.name : undefined,
   }));
 }
 
