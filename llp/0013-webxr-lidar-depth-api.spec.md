@@ -120,7 +120,7 @@ async function startLiDARDepthStudio(device: GPUDevice): Promise<XRSession> {
     depthSensing: {
       usagePreference: ["cpu-optimized"],
       dataFormatPreference: ["float32"],
-      depthTypeRequest: ["raw", "smooth"],
+      depthTypeRequest: ["smooth", "raw"],
       matchDepthView: true,
     },
     cameraAccess: {

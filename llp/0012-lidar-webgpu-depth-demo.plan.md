@@ -181,7 +181,7 @@ const session = await navigator.xr.requestSession("immersive-ar", {
   depthSensing: {
     usagePreference: ["cpu-optimized"],
     dataFormatPreference: ["float32"],
-    depthTypeRequest: ["raw", "smooth"],
+    depthTypeRequest: ["smooth", "raw"],
     matchDepthView: true,
   },
 });
@@ -194,6 +194,11 @@ session.requestAnimationFrame((time, frame) => {
   const center = depth?.getDepthInMeters(0.5, 0.5) ?? 0;
 });
 ```
+
+This standalone viewer requests `"smooth"` depth before `"raw"` because its
+Depth mode is a visual inspection surface where spatial stability matters more
+than current-frame delivery. Panorama capture keeps a separate raw-first session
+request because its keyframe pipeline is more sensitive to smoothed-depth lag.
 
 That surface is useful as design vocabulary, but it is not enough to implement
 the existing WebGPU demo with only standardized WebXR APIs:

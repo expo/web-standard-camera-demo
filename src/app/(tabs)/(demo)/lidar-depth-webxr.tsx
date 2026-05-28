@@ -421,7 +421,10 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
           depthSensing: {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
-            depthTypeRequest: ['raw', 'smooth'],
+            // @ref LLP 0012#webxr-surface-for-this-demo-only - This viewer
+            // prioritizes visual stability in Depth mode; panorama capture
+            // keeps its raw-first request separately.
+            depthTypeRequest: ['smooth', 'raw'],
             matchDepthView: true,
           },
           cameraAccess: {
