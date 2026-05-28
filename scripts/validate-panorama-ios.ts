@@ -122,6 +122,7 @@ export interface Options {
   metroUrl: string;
   noLaunch: boolean;
   outJsonPath?: string;
+  profileTarget: 'panorama' | 'webxr-demo';
   profileOnly: boolean;
   routeUrl: string | null;
   timeoutMs: number;
@@ -160,15 +161,18 @@ async function main(): Promise<number> {
 
   const device = await pickConnectedDevice(options.device);
   console.log(`Using device: ${device.name} (${device.identifier})`);
+  const targetLabel = options.profileTarget === 'webxr-demo' ? 'WebXR demo' : 'panorama';
   console.log(
     options.profileOnly
-      ? `Collecting panorama profile logs for ${(options.timeoutMs / 1000).toFixed(0)}s.`
+      ? `Collecting ${targetLabel} profile logs for ${(options.timeoutMs / 1000).toFixed(0)}s.`
       : `Waiting up to ${(options.timeoutMs / 1000).toFixed(0)}s for panorama telemetry.`
   );
   console.log(
-    options.profileOnly
-      ? 'On the phone: pan slowly after the route opens; optionally press Preview, then Capture/Save if you want final metrics.'
-      : 'On the phone: pan slowly after the route opens until surfels appear, Capture, then Save.'
+    options.profileTarget === 'webxr-demo'
+      ? 'On the phone: let the WebXR LiDAR demo run and slowly sweep the scene until WEBGPU_DEMO_PROFILE logs appear.'
+      : options.profileOnly
+        ? 'On the phone: pan slowly after the route opens; optionally press Preview, then Capture/Save if you want final metrics.'
+        : 'On the phone: pan slowly after the route opens until surfels appear, Capture, then Save.'
   );
 
   let logProc: ReturnType<typeof spawn> | null = null;
@@ -259,6 +263,7 @@ export function parseArgs(args: string[]): Options {
   const options: Options = {
     metroUrl: DEFAULT_METRO_URL,
     noLaunch: false,
+    profileTarget: 'panorama',
     profileOnly: false,
     routeUrl: DEFAULT_ROUTE_URL,
     timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -305,6 +310,7 @@ export function parseArgs(args: string[]): Options {
     } else if (arg === '--profile-only') {
       options.profileOnly = true;
     } else if (arg === '--webxr-demo') {
+      options.profileTarget = 'webxr-demo';
       options.profileOnly = true;
       options.routeUrl = WEBXR_DEMO_ROUTE_URL;
     } else if (arg === '--no-route') {

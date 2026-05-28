@@ -24,6 +24,7 @@ test('panorama validator builds an automation-safe dev-client URL', () => {
 
 test('panorama validator WebXR demo preset opens the LiDAR route in profile-only mode', () => {
   expect(parseArgs(['--webxr-demo'])).toMatchObject({
+    profileTarget: 'webxr-demo',
     profileOnly: true,
     routeUrl: 'standardcameraapp:///lidar-depth-webxr?autorun=1',
   });
