@@ -874,6 +874,30 @@ test('panorama validator diagnoses accepted raw samples that do not grow display
   );
 });
 
+test('panorama validator diagnoses stale displayed model publication', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      fusedSurfelCount: 2100,
+      keyframes: 4,
+      rawSampleCount: 3200,
+      retainedSamples: 3200,
+      surfelCount: 780,
+    },
+    PANORAMIC_RENDER_FRAME_PROFILE: {
+      canvasHeight: 1280,
+      canvasWidth: 960,
+      keyframes: 1,
+      rawSampleCount: 780,
+      renderFrameMs: 12,
+      surfelCount: 760,
+    },
+  } satisfies SeenMetrics;
+
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'Displayed-surfels diagnosis: 4 keyframes accepted and 3200 raw samples observed, but the render-frame model is stale at 1 keyframe(s) and 780 raw samples; this points to live publish/render upload staleness rather than frame delivery'
+  );
+});
+
 test('panorama validator diagnoses native WebXR frame fetch errors', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {

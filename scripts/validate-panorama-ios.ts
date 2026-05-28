@@ -1711,6 +1711,10 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
       numberField(keyframeProfile ?? {}, 'rawSampleCount'),
       numberField(keyframeProfile ?? {}, 'retainedSamples')
     );
+    const displayedModel = staleDisplayedModelStage(seen, acceptedKeyframes, rawSamples);
+    if (displayedModel) {
+      return `Displayed-surfels diagnosis: ${acceptedKeyframes} keyframes accepted and ${rawSamples} raw samples observed, but the ${displayedModel.label} model is stale at ${displayedModel.keyframes} keyframe(s) and ${displayedModel.rawSampleCount} raw samples; this points to live publish/render upload staleness rather than frame delivery`;
+    }
     const displayedSurfels = Math.max(
       numberField(keyframeProfile ?? {}, 'fusedSurfelCount'),
       numberField(seen.PANORAMIC_LIVE_MODEL_PROFILE ?? {}, 'surfelCount'),
@@ -1796,6 +1800,24 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   }
 
   return '';
+}
+
+function staleDisplayedModelStage(
+  seen: SeenMetrics,
+  acceptedKeyframes: number,
+  rawSamples: number
+): ModelChainStage | null {
+  const candidates = [
+    modelChainStage('render-frame', seen.PANORAMIC_RENDER_FRAME_PROFILE),
+    modelChainStage('upload', seen.PANORAMIC_MODEL_UPLOAD_PROFILE),
+    modelChainStage('live', seen.PANORAMIC_LIVE_MODEL_PROFILE),
+    modelChainStage('preview', seen.PANORAMIC_PREVIEW_METRICS),
+  ].filter((stage): stage is ModelChainStage => stage !== null);
+  return candidates.find((stage) =>
+    stage.keyframes > 0 &&
+    stage.keyframes < acceptedKeyframes &&
+    (stage.rawSampleCount <= 0 || rawSamples <= 0 || stage.rawSampleCount < rawSamples)
+  ) ?? null;
 }
 
 interface ModelChainStage {
