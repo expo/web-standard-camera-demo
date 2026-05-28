@@ -349,7 +349,10 @@ timings. The WebXR render callback must catch per-frame depth/camera/upload
 exceptions, log a throttled `WEBXR_DEMO_FRAME_ERROR`, and immediately request the
 next XR frame; one stale or missing native payload should make the profile
 visible without leaving the demo stuck on the development menu or a single
-rendered frame.
+rendered frame. The panorama validator's profile-only log parser also consumes
+`WEBGPU_DEMO_PROFILE` and `WEBXR_DEMO_FRAME_ERROR` records so copied physical
+device logs can summarize whether the WebXR demo is missing pose, depth, camera,
+upload, or render work.
 
 Physical iPhone 15 Pro profiling showed ARKit producing 256x192 scene-depth
 frames at 60Hz, while the original WebGPU route rendered only about 6fps because

@@ -56,6 +56,8 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_XR_FRAME_PUMP_PROFILE',
   'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE',
   'PANORAMIC_XR_POSE_PROFILE',
+  'WEBGPU_DEMO_PROFILE',
+  'WEBXR_DEMO_FRAME_ERROR',
 ] as const satisfies readonly OptionalMetricName[];
 const metricLogScanIds = new WeakMap<SeenMetrics, number>();
 
@@ -82,7 +84,9 @@ export type OptionalMetricName =
   | 'PANORAMIC_SCAN_STATS'
   | 'PANORAMIC_XR_FRAME_PUMP_PROFILE'
   | 'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE'
-  | 'PANORAMIC_XR_POSE_PROFILE';
+  | 'PANORAMIC_XR_POSE_PROFILE'
+  | 'WEBGPU_DEMO_PROFILE'
+  | 'WEBXR_DEMO_FRAME_ERROR';
 export type MetricName = RequiredMetricName | OptionalMetricName;
 
 export type SeenMetrics = Partial<Record<MetricName, Record<string, unknown>>>;
@@ -486,7 +490,7 @@ export function recordMetricLine(line: string, seen: SeenMetrics): void {
     console.log(`CAMERA_CONTEXT_PROFILE ${JSON.stringify(seen.CAMERA_CONTEXT_PROFILE)}`);
     return;
   }
-  const match = line.match(/(PANORAMIC_[A-Z_]+)\s+(\{.*\})/);
+  const match = line.match(/((?:PANORAMIC_[A-Z_]+)|WEBGPU_DEMO_PROFILE|WEBXR_DEMO_FRAME_ERROR)\s+(\{.*\})/);
   if (!match) return;
   const name = match[1] as MetricName;
   if (!isObservedMetric(name)) return;
@@ -912,6 +916,28 @@ function mergeObservedMetric(
       ),
     };
   }
+  if (name === 'WEBGPU_DEMO_PROFILE') {
+    return {
+      ...incoming,
+      counts: mergeWebGpuDemoCounts(recordField(existing, 'counts'), recordField(incoming, 'counts')),
+      elapsedMs: numberField(existing, 'elapsedMs') + numberField(incoming, 'elapsedMs'),
+      frameNumber: Math.max(numberField(existing, 'frameNumber'), numberField(incoming, 'frameNumber')),
+      lastFrameOutcome:
+        stringField(incoming, 'lastFrameOutcome') || stringField(existing, 'lastFrameOutcome') || undefined,
+      sessionEnded: incoming.sessionEnded === true || existing.sessionEnded === true,
+      timings: mergeWebGpuDemoTimings(recordField(existing, 'timings'), recordField(incoming, 'timings')),
+    };
+  }
+  if (name === 'WEBXR_DEMO_FRAME_ERROR') {
+    return {
+      ...incoming,
+      errorMessage: stringField(incoming, 'errorMessage') || stringField(existing, 'errorMessage'),
+      errorName: stringField(incoming, 'errorName') || stringField(existing, 'errorName'),
+      frameNumber: Math.max(numberField(existing, 'frameNumber'), numberField(incoming, 'frameNumber')),
+      lastFrameOutcome:
+        stringField(incoming, 'lastFrameOutcome') || stringField(existing, 'lastFrameOutcome') || undefined,
+    };
+  }
   if (name === 'PANORAMIC_LIVE_MODEL_PROFILE') {
     return {
       ...incoming,
@@ -1190,6 +1216,37 @@ function mergeLowestObservedNumber(
   return 0;
 }
 
+function mergeWebGpuDemoCounts(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): Record<string, number> {
+  const merged: Record<string, number> = {};
+  for (const key of new Set([...Object.keys(existing), ...Object.keys(incoming)])) {
+    const existingValue = numberField(existing, key);
+    const incomingValue = numberField(incoming, key);
+    merged[key] = key.endsWith('PerSec')
+      ? Math.max(existingValue, incomingValue)
+      : existingValue + incomingValue;
+  }
+  return merged;
+}
+
+function mergeWebGpuDemoTimings(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): Record<string, Record<string, number>> {
+  const merged: Record<string, Record<string, number>> = {};
+  for (const key of new Set([...Object.keys(existing), ...Object.keys(incoming)])) {
+    const existingTiming = recordField(existing, key);
+    const incomingTiming = recordField(incoming, key);
+    merged[key] = {
+      avgMs: Math.max(numberField(existingTiming, 'avgMs'), numberField(incomingTiming, 'avgMs')),
+      maxMs: Math.max(numberField(existingTiming, 'maxMs'), numberField(incomingTiming, 'maxMs')),
+    };
+  }
+  return merged;
+}
+
 export function isValidMetric(name: MetricName, metric: Record<string, unknown>): boolean {
   if (name === 'CAMERA_CONTEXT_PROFILE') {
     return numberField(metric, 'standardStartRequests') > 0 ||
@@ -1255,6 +1312,16 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
     return numberField(metric, 'frameNumber') > 0 &&
       typeof metric.returnedPose === 'boolean' &&
       stringField(metric, 'trackingState').length > 0;
+  }
+  if (name === 'WEBGPU_DEMO_PROFILE') {
+    return stringField(metric, 'demo').length > 0 &&
+      numberField(metric, 'elapsedMs') >= 0 &&
+      Object.keys(recordField(metric, 'counts')).length > 0;
+  }
+  if (name === 'WEBXR_DEMO_FRAME_ERROR') {
+    return stringField(metric, 'demo').length > 0 &&
+      stringField(metric, 'errorName').length > 0 &&
+      numberField(metric, 'frameNumber') >= 0;
   }
   if (name === 'PANORAMIC_CAPTURE_GEOMETRY') {
     return numberField(metric, 'keyframes') > 0 &&
@@ -1331,6 +1398,21 @@ function hasNonzeroBounds(metric: Record<string, unknown>, field: string): boole
 function numberField(metric: Record<string, unknown>, field: string): number {
   const value = metric[field];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function countField(metric: Record<string, unknown>, field: string): number {
+  return numberField(recordField(metric, 'counts'), field);
+}
+
+function timingField(metric: Record<string, unknown>, field: string): Record<string, unknown> {
+  return recordField(recordField(metric, 'timings'), field);
+}
+
+function recordField(metric: Record<string, unknown>, field: string): Record<string, unknown> {
+  const value = metric[field];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function fusedSurfelDetail(metric: Record<string, unknown>): string {
@@ -1575,6 +1657,29 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `external-lock blocked ${numberField(cameraContext, 'blockedExternalLockStarts')}, ` +
       `duplicate skipped ${numberField(cameraContext, 'skippedDuplicateStarts')}, ` +
       `ignored LiDAR events ${numberField(cameraContext, 'ignoredLiDAREvents')}${gumFailDetail}${ignoredLiDARDetail}`
+    );
+  }
+
+  const webGpuDemo = seen.WEBGPU_DEMO_PROFILE;
+  if (webGpuDemo) {
+    lines.push(webGpuDemoProfileSummary(webGpuDemo));
+    const demoTiming = webGpuDemoTimingSummary(webGpuDemo);
+    if (demoTiming) {
+      lines.push(demoTiming);
+    }
+    const demoDiagnosis = webGpuDemoDiagnosis(webGpuDemo);
+    if (demoDiagnosis) {
+      lines.push(demoDiagnosis);
+    }
+  }
+
+  const webXrFrameError = seen.WEBXR_DEMO_FRAME_ERROR;
+  if (webXrFrameError) {
+    lines.push(
+      `WebXR demo frame error: ${stringField(webXrFrameError, 'errorName') || 'Error'}: ` +
+      `${stringField(webXrFrameError, 'errorMessage') || 'unknown'}, ` +
+      `frame ${numberField(webXrFrameError, 'frameNumber')}, ` +
+      `last outcome ${stringField(webXrFrameError, 'lastFrameOutcome') || 'unknown'}`
     );
   }
 
@@ -2354,6 +2459,67 @@ function humanizeScanLoopStopReason(reason: string): string {
   if (reason === 'session-mismatch') return 'a different XR session became current';
   if (reason.startsWith('status-')) return `capture status became ${reason.slice('status-'.length) || 'unknown'}`;
   return reason || 'unknown';
+}
+
+function webGpuDemoProfileSummary(profile: Record<string, unknown>): string {
+  return (
+    `WebGPU demo ${stringField(profile, 'demo') || 'unknown'}: ` +
+    `outcome ${stringField(profile, 'lastFrameOutcome') || 'unknown'}, ` +
+    `XR callbacks ${countField(profile, 'xrCallbacks')}, ` +
+    `uploads ${countField(profile, 'xrFrames')}, ` +
+    `render frames ${countField(profile, 'renderFrames')}, ` +
+    `misses pose/depth/camera ` +
+    `${countField(profile, 'poseMisses')}/${countField(profile, 'depthMisses')}/${countField(profile, 'cameraMisses')}, ` +
+    `frame errors ${countField(profile, 'frameErrors')}, ` +
+    `session ended ${profile.sessionEnded === true ? 'yes' : 'no'}`
+  );
+}
+
+function webGpuDemoTimingSummary(profile: Record<string, unknown>): string {
+  const entries = [
+    webGpuTimingEntry(profile, 'readDepthData', 'read depth'),
+    webGpuTimingEntry(profile, 'makeDepthUpload', 'make depth upload'),
+    webGpuTimingEntry(profile, 'writeDepthTexture', 'write depth texture'),
+    webGpuTimingEntry(profile, 'readCameraData', 'read camera'),
+    webGpuTimingEntry(profile, 'makeCameraUpload', 'make camera upload'),
+    webGpuTimingEntry(profile, 'writeCameraTexture', 'write camera texture'),
+    webGpuTimingEntry(profile, 'renderSubmitPresent', 'render submit/present'),
+  ].filter((entry): entry is TimingEntry => entry !== null)
+    .sort((a, b) => b.ms - a.ms || a.label.localeCompare(b.label));
+  if (entries.length <= 0) return '';
+  return `WebGPU demo timings: ${entries.slice(0, 4).map(formatTimingEntry).join('; ')}`;
+}
+
+function webGpuTimingEntry(profile: Record<string, unknown>, field: string, label: string): TimingEntry | null {
+  const timing = timingField(profile, field);
+  const ms = numberField(timing, 'maxMs') || numberField(timing, 'avgMs');
+  return ms > 0 ? { detail: `avg ${formatMs(numberField(timing, 'avgMs'))}`, label, ms } : null;
+}
+
+function webGpuDemoDiagnosis(profile: Record<string, unknown>): string {
+  const callbacks = countField(profile, 'xrCallbacks');
+  const uploads = countField(profile, 'xrFrames');
+  const poseMisses = countField(profile, 'poseMisses');
+  const depthMisses = countField(profile, 'depthMisses');
+  const cameraMisses = countField(profile, 'cameraMisses');
+  if (callbacks > 0 && uploads <= 0) {
+    const dominant = [
+      { count: poseMisses, label: 'pose' },
+      { count: depthMisses, label: 'depth' },
+      { count: cameraMisses, label: 'camera' },
+    ].sort((a, b) => b.count - a.count)[0];
+    return (
+      `WebXR demo diagnosis: callbacks are firing but no frames upload; ` +
+      `${dominant.count > 0 ? `${dominant.label} is the dominant missing payload` : 'no specific missing payload was counted'}`
+    );
+  }
+  if (uploads > 0 && countField(profile, 'renderFrames') <= 0) {
+    return 'WebXR demo diagnosis: depth/camera uploads happened but no render frames were submitted';
+  }
+  if (countField(profile, 'frameErrors') > 0) {
+    return 'WebXR demo diagnosis: frame callback exceptions are interrupting the render path';
+  }
+  return '';
 }
 
 function panoramaTimingEntries(seen: SeenMetrics): TimingEntry[] {

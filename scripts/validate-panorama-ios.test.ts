@@ -211,6 +211,40 @@ test('panorama validator reports scan configuration used for profile-only isolat
   );
 });
 
+test('panorama validator summarizes WebXR LiDAR demo frame misses from copied logs', () => {
+  const seen = parseMetricLogText(`
+ LOG WEBGPU_DEMO_PROFILE {"demo":"lidar-depth-webxr","elapsedMs":2000,"frameNumber":0,"lastFrameOutcome":"depth-miss","sessionEnded":false,"counts":{"xrCallbacks":30,"xrCallbacksPerSec":15,"depthMisses":30,"depthMissesPerSec":15,"renderFrames":30,"renderFramesPerSec":15},"timings":{"renderSubmitPresent":{"avgMs":2.5,"maxMs":7.25}}}
+ LOG WEBGPU_DEMO_PROFILE {"demo":"lidar-depth-webxr","elapsedMs":2000,"frameNumber":12,"lastFrameOutcome":"uploaded","sessionEnded":false,"counts":{"xrCallbacks":20,"xrCallbacksPerSec":10,"xrFrames":12,"xrFramesPerSec":6,"renderFrames":20,"renderFramesPerSec":10,"cameraUploadedBytes":4096},"timings":{"writeCameraTexture":{"avgMs":0.4,"maxMs":0.9},"renderSubmitPresent":{"avgMs":3,"maxMs":8}}}
+ LOG WEBXR_DEMO_FRAME_ERROR {"demo":"lidar-depth-webxr","errorMessage":"undefined is not a function","errorName":"TypeError","frameNumber":12,"lastFrameOutcome":"uploaded"}
+  `);
+
+  expect(seen.WEBGPU_DEMO_PROFILE).toMatchObject({
+    demo: 'lidar-depth-webxr',
+    elapsedMs: 4000,
+    frameNumber: 12,
+    lastFrameOutcome: 'uploaded',
+    counts: {
+      depthMisses: 30,
+      renderFrames: 50,
+      xrCallbacks: 50,
+      xrFrames: 12,
+      xrFramesPerSec: 6,
+    },
+    timings: {
+      renderSubmitPresent: {
+        avgMs: 3,
+        maxMs: 8,
+      },
+    },
+  });
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'WebGPU demo lidar-depth-webxr: outcome uploaded, XR callbacks 50, uploads 12, render frames 50, misses pose/depth/camera 0/30/0, frame errors 0, session ended no'
+  );
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'WebXR demo frame error: TypeError: undefined is not a function, frame 12, last outcome uploaded'
+  );
+});
+
 test('panorama validator parses copied log text for offline profiling', () => {
   const seen = parseMetricLogText(`
  LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.68,"cameraColorPercent":100,"fusedSurfelCount":9388,"keyframes":23,"rawSampleCount":12866,"retainedSamples":12866,"surfelCount":830}
