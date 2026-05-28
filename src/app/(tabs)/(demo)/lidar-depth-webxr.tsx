@@ -794,7 +794,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
                 } else {
                   lastCenterDepthRef.current = null;
                   setLastCenterDepthMeters(null);
-                  setCenterDepth('no return');
+                  setCenterDepth('uncertain');
                 }
                 setDepthRange(
                   `${minDepth.toFixed(2)}m-${maxDepth.toFixed(2)}m mean ${depthStats.mean.toFixed(2)}m`
