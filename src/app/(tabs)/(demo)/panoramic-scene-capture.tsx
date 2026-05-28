@@ -1824,6 +1824,27 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
     let appendProfile: AppendDepthSurfelsProfile = {};
     const appendStart = performanceNow();
+    const fusionRawSampleCountBeforeAppend = fusionRef.current.rawSampleCount;
+    const fusionFusedSurfelCountBeforeAppend = fusionRef.current.voxels.size;
+    // @ref LLP 0020#testing-and-validation - Post-append rejection profiles must
+    // prove whether a rejected candidate was only preflight work or whether it
+    // already mutated fusion before failing keyframe acceptance.
+    const rejectedAppendFusionFields = (): Record<string, unknown> => {
+      const rejectedAppendRawSampleDelta = Math.max(
+        0,
+        fusionRef.current.rawSampleCount - fusionRawSampleCountBeforeAppend
+      );
+      const rejectedAppendFusedSurfelDelta = Math.max(
+        0,
+        fusionRef.current.voxels.size - fusionFusedSurfelCountBeforeAppend
+      );
+      return {
+        rejectedAppendFusedSurfelDelta,
+        rejectedAppendMutatedFusion:
+          rejectedAppendRawSampleDelta > 0 || rejectedAppendFusedSurfelDelta > 0,
+        rejectedAppendRawSampleDelta,
+      };
+    };
     let added = appendDepthSurfelsToFusion(
       depth,
       getCameraImage,
@@ -1904,6 +1925,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           minKeyframeSurfels: MIN_KEYFRAME_SURFELS,
           minNewVoxelsForFusion,
           observedDepthSurfels,
+          ...rejectedAppendFusionFields(),
           rotationDeg: roundMetric(precheck.decision.rotationDeg, 1),
           translationM: roundMetric(precheck.decision.translationM, 3),
         });
@@ -1931,6 +1953,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           minKeyframeSurfels: MIN_KEYFRAME_SURFELS,
           minNewVoxelsForFusion,
           observedDepthSurfels,
+          ...rejectedAppendFusionFields(),
           rotationDeg: roundMetric(precheck.decision.rotationDeg, 1),
           translationM: roundMetric(precheck.decision.translationM, 3),
         });
@@ -1987,6 +2010,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         minKeyframeSurfels: MIN_KEYFRAME_SURFELS,
         minNewVoxelsForFusion,
         observedDepthSurfels,
+        ...rejectedAppendFusionFields(),
         rotationDeg: roundMetric(precheck.decision.rotationDeg, 1),
         translationM: roundMetric(precheck.decision.translationM, 3),
       });
@@ -2009,6 +2033,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         minKeyframeSurfels: MIN_KEYFRAME_SURFELS,
         minNewVoxelsForFusion,
         observedDepthSurfels,
+        ...rejectedAppendFusionFields(),
         rotationDeg: roundMetric(precheck.decision.rotationDeg, 1),
         translationM: roundMetric(precheck.decision.translationM, 3),
       });

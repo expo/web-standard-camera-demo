@@ -1303,10 +1303,15 @@ ownership starvation.
 skip reason with pose motion, retained surfel count, depth/miss counters, and
 depth/mesh preflight density when available, so a run that captures no new
 surfels can be distinguished as pose gating, depth starvation, or sparse
-surface contribution. If the WebXR scan frame callback throws, the route SHOULD
-record a `scan-loop-error` rejection profile and keep scheduling frames while
-the same session is still scanning; a single transient callback error must not
-leave the visible preview stuck on the first accepted surfel batch.
+surface contribution. For post-append density/new-voxel rejections, the profile
+SHOULD also report raw-sample and fused-surface deltas since the candidate began,
+so copied logs can distinguish harmless preflight-only skips from rejected
+candidates that already mutated the fusion accumulator and can leave the
+accepted/live model stuck at the first keyframe. If the WebXR scan frame
+callback throws, the route SHOULD record a `scan-loop-error` rejection profile
+and keep scheduling frames while the same session is still scanning; a single
+transient callback error must not leave the visible preview stuck on the first
+accepted surfel batch.
 If optional mesh detection is enabled, the validator SHOULD treat a
 `scan-loop-error` with `TypeError: undefined is not a function` or a
 `PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE` with `meshPayloadUnavailable` as

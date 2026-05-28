@@ -1818,12 +1818,14 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     const errorDetail = errorMessage
       ? `, error ${stringField(rejectionProfile, 'errorName') || 'Error'}: ${errorMessage}`
       : '';
+    const rejectedAppendMutationDetail = keyframeRejectedAppendMutationDetail(rejectionProfile);
     lines.push(
       `Keyframe rejection: ${stringField(rejectionProfile, 'reason') || 'unknown'}, ` +
       `${numberField(rejectionProfile, 'keyframes')} keyframes, frame ${numberField(rejectionProfile, 'frameCount')}, ` +
       `retained ${numberField(rejectionProfile, 'retainedSamples')} samples${fusedSurfelDetail(rejectionProfile)}, ` +
       `translation ${formatMeters(numberField(rejectionProfile, 'translationM'))}, ` +
-      `rotation ${formatNumber(numberField(rejectionProfile, 'rotationDeg'), 1)}deg${errorDetail}${surfelDetail}`
+      `rotation ${formatNumber(numberField(rejectionProfile, 'rotationDeg'), 1)}deg${errorDetail}${surfelDetail}` +
+      rejectedAppendMutationDetail
     );
   }
 
@@ -1947,6 +1949,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     return `First-frame diagnosis: scan loop callback threw after ${acceptedKeyframes} keyframe(s): ${errorName}: ${errorMessage}${nativePayloadFailureDetail}${meshFailureDetail}`;
   }
 
+  const rejectedAppendMutation = rejectedAppendMutationDiagnosis(rejectionProfile, acceptedKeyframes);
+  if (rejectedAppendMutation) {
+    return rejectedAppendMutation;
+  }
+
   if (loopStop) {
     const reason = stringField(loopStop, 'reason') || 'unknown';
     const status = stringField(loopStop, 'status') || 'unknown';
@@ -2027,6 +2034,19 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   return '';
 }
 
+function keyframeRejectedAppendMutationDetail(rejectionProfile: Record<string, unknown>): string {
+  const rejectedAppendRawSampleDelta = numberField(rejectionProfile, 'rejectedAppendRawSampleDelta');
+  const rejectedAppendFusedSurfelDelta = numberField(rejectionProfile, 'rejectedAppendFusedSurfelDelta');
+  if (
+    rejectedAppendRawSampleDelta <= 0 &&
+    rejectedAppendFusedSurfelDelta <= 0 &&
+    rejectionProfile.rejectedAppendMutatedFusion !== true
+  ) {
+    return '';
+  }
+  return `, rejected append mutated fusion +${rejectedAppendRawSampleDelta} raw/+${rejectedAppendFusedSurfelDelta} surfels`;
+}
+
 function cameraOwnershipDiagnosis(seen: SeenMetrics): string {
   const cameraContext = seen.CAMERA_CONTEXT_PROFILE;
   if (!cameraContext) return '';
@@ -2049,6 +2069,26 @@ function cameraOwnershipDiagnosis(seen: SeenMetrics): string {
     return `First-frame diagnosis: camera ownership gate ignored ${ignoredLiDAR} stale LiDAR event(s), so copied logs should be checked for a session-id handoff race before assuming JS keyframe gating`;
   }
   return '';
+}
+
+function rejectedAppendMutationDiagnosis(
+  rejectionProfile: Record<string, unknown> | undefined,
+  acceptedKeyframes: number
+): string {
+  if (!rejectionProfile || acceptedKeyframes > 1) return '';
+  const rejectedAppendRawSampleDelta = numberField(rejectionProfile, 'rejectedAppendRawSampleDelta');
+  const rejectedAppendFusedSurfelDelta = numberField(rejectionProfile, 'rejectedAppendFusedSurfelDelta');
+  if (
+    rejectedAppendRawSampleDelta <= 0 &&
+    rejectedAppendFusedSurfelDelta <= 0 &&
+    rejectionProfile.rejectedAppendMutatedFusion !== true
+  ) {
+    return '';
+  }
+  const reason = stringField(rejectionProfile, 'reason') || 'unknown';
+  return `First-frame diagnosis: a ${reason} rejected keyframe mutated fusion before acceptance ` +
+    `(+${rejectedAppendRawSampleDelta} raw samples, +${rejectedAppendFusedSurfelDelta} fused surfels), ` +
+    `so post-first depth is reaching the JS fusion path but the accepted/live model can remain stuck at ${acceptedKeyframes} keyframe(s)`;
 }
 
 function postFirstFusionGrowthDiagnosis(seen: SeenMetrics, acceptedKeyframes: number): string {

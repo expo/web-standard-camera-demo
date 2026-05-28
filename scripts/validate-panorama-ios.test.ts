@@ -845,6 +845,22 @@ test('panorama validator identifies native depth payload failures behind one-fra
   );
 });
 
+test('panorama validator identifies rejected keyframes that mutate fusion', () => {
+  const seen = parseMetricLogText(`
+    LOG PANORAMIC_KEYFRAME_PROFILE {"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":6,"surfelCount":781}
+    LOG PANORAMIC_KEYFRAME_REJECTION_PROFILE {"combinedPreflightSurfels":120,"frameCount":5,"fusedSurfelCount":900,"keyframes":1,"observedDepthSurfels":110,"rawSampleCount":1120,"reason":"too-few-new-voxels","rejectedAppendFusedSurfelDelta":119,"rejectedAppendMutatedFusion":true,"rejectedAppendRawSampleDelta":339,"retainedSamples":781,"rotationDeg":6,"scanId":6,"translationM":0.15}
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Keyframe rejection: too-few-new-voxels, 1 keyframes, frame 5, retained 781 samples, fused 900 surfels, translation 0.15m, rotation 6deg, observed depth 110, depth+mesh 120, rejected append mutated fusion +339 raw/+119 surfels'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: a too-few-new-voxels rejected keyframe mutated fusion before acceptance (+339 raw samples, +119 fused surfels), so post-first depth is reaching the JS fusion path but the accepted/live model can remain stuck at 1 keyframe(s)'
+  );
+});
+
 test('panorama validator identifies standard-camera ownership races behind one-frame scans', () => {
   const seen = parseMetricLogText(`
     LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"smooth","depthTypeRequest":["smooth","raw"],"meshRequested":false,"scanId":6,"sessionDepthType":"smooth"}
