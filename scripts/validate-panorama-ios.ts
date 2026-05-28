@@ -1078,6 +1078,9 @@ function mergeObservedMetric(
         stringField(incoming, 'lastFrameOutcome') || stringField(existing, 'lastFrameOutcome') || undefined,
       sessionEnded: incoming.sessionEnded === true || existing.sessionEnded === true,
       timings: mergeWebGpuDemoTimings(recordField(existing, 'timings'), recordField(incoming, 'timings')),
+      viewMode: typeof incoming.viewMode === 'number' ? incoming.viewMode : existing.viewMode,
+      viewModeLabel:
+        stringField(incoming, 'viewModeLabel') || stringField(existing, 'viewModeLabel') || undefined,
     };
   }
   if (name === 'WEBXR_DEMO_FRAME_ERROR') {
@@ -1088,6 +1091,9 @@ function mergeObservedMetric(
       frameNumber: Math.max(numberField(existing, 'frameNumber'), numberField(incoming, 'frameNumber')),
       lastFrameOutcome:
         stringField(incoming, 'lastFrameOutcome') || stringField(existing, 'lastFrameOutcome') || undefined,
+      viewMode: typeof incoming.viewMode === 'number' ? incoming.viewMode : existing.viewMode,
+      viewModeLabel:
+        stringField(incoming, 'viewModeLabel') || stringField(existing, 'viewModeLabel') || undefined,
     };
   }
   if (name === 'PANORAMIC_LIVE_MODEL_PROFILE') {
@@ -1827,10 +1833,12 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
 
   const webXrFrameError = seen.WEBXR_DEMO_FRAME_ERROR;
   if (webXrFrameError) {
+    const viewDetail = webGpuDemoViewDetail(webXrFrameError);
     lines.push(
       `WebXR demo frame error: ${stringField(webXrFrameError, 'errorName') || 'Error'}: ` +
       `${stringField(webXrFrameError, 'errorMessage') || 'unknown'}, ` +
       `frame ${numberField(webXrFrameError, 'frameNumber')}, ` +
+      (viewDetail ? `${viewDetail}, ` : '') +
       `last outcome ${stringField(webXrFrameError, 'lastFrameOutcome') || 'unknown'}`
     );
   }
@@ -2702,8 +2710,10 @@ function humanizeScanLoopStopReason(reason: string): string {
 }
 
 function webGpuDemoProfileSummary(profile: Record<string, unknown>): string {
+  const viewDetail = webGpuDemoViewDetail(profile);
   return (
     `WebGPU demo ${stringField(profile, 'demo') || 'unknown'}: ` +
+    (viewDetail ? `${viewDetail}, ` : '') +
     `outcome ${stringField(profile, 'lastFrameOutcome') || 'unknown'}, ` +
     `XR callbacks ${countField(profile, 'xrCallbacks')}, ` +
     `uploads ${countField(profile, 'xrFrames')}, ` +
@@ -2713,6 +2723,13 @@ function webGpuDemoProfileSummary(profile: Record<string, unknown>): string {
     `frame errors ${countField(profile, 'frameErrors')}, ` +
     `session ended ${profile.sessionEnded === true ? 'yes' : 'no'}`
   );
+}
+
+function webGpuDemoViewDetail(profile: Record<string, unknown>): string {
+  const label = stringField(profile, 'viewModeLabel');
+  if (label) return `view ${label}`;
+  if (typeof profile.viewMode === 'number') return `view mode ${profile.viewMode}`;
+  return '';
 }
 
 function webGpuDemoTimingSummary(profile: Record<string, unknown>): string {
