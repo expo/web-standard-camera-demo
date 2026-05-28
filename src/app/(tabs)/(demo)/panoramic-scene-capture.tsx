@@ -848,6 +848,12 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         setError('No valid depth samples have been captured yet.');
         return;
       }
+      // @ref LLP 0020#render-telemetry - Publish the captured model only after
+      // the captured status is visible to the WebGPU render loop. Otherwise the
+      // requestRender() inside publishModel can draw the final model while the
+      // route still reports `building-model`, skipping captured render metrics.
+      statusRef.current = 'captured';
+      setCaptureStatus('captured');
       publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current, source: 'capture' });
       setModelInfo(formatModelInfo(nextModel));
       setQualityInfo(formatQualityInfo(nextModel));
@@ -855,8 +861,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       logCaptureGeometryMetrics(nextModel, scanForwardSumRef.current, scanIdRef.current);
       logScanStats('capture');
       setSaveInfo('ready to save .ply');
-      statusRef.current = 'captured';
-      setCaptureStatus('captured');
+      renderDirtyRef.current = true;
       requestRenderRef.current?.();
       try {
         await stopActiveSession();

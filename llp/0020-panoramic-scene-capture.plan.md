@@ -370,7 +370,10 @@ Implemented:
   nonempty surfel buffer, the viewer logs `PANORAMIC_RENDER_METRICS` with the
   canvas size, presentation format, model revision, keyframe count, surfel
   count, multi-observation percentage, quality percentages, and CPU render
-  frame timing buckets. Each new live, preview, or captured model revision also
+  frame timing buckets. Capture MUST transition the route to `captured` before
+  publishing the captured model revision, so the render scheduled by publication
+  is eligible to emit `PANORAMIC_RENDER_METRICS` instead of drawing under the
+  transient `building-model` status. Each new live, preview, or captured model revision also
   logs `PANORAMIC_RENDER_FRAME_PROFILE` with render-frame, command-encode, and
   submit/present timings; active one-finger orbit and two-finger pan/pinch
   interactions log the same profile at a throttled cadence. Physical logs can
