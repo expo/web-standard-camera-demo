@@ -187,7 +187,10 @@ Implemented:
   from native or keyframe-gate failures. If Capture is requested before enough
   keyframes exist, the route SHOULD emit `PANORAMIC_CAPTURE_BLOCKED_PROFILE`
   with keyframe, sample, status, and in-flight counters so physical logs prove
-  the scan stayed open instead of sealing a one-frame model. If a later scan
+  the scan stayed open instead of sealing a one-frame model. Native payload
+  summaries SHOULD include smoothed-depth confidence fallback reasons, because
+  medium-confidence filtering can leave a nonempty but too-sparse depth payload
+  that still fails the panorama surfel gate after the first frame. If a later scan
   resets non-empty panorama state, the route SHOULD emit
   `PANORAMIC_SCAN_RESET_PROFILE` with the previous scan counts and reset reason,
   so copied multi-attempt logs can distinguish a current one-frame scan from an

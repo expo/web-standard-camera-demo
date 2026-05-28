@@ -1397,6 +1397,7 @@ function logNativePayloadProfile(
     colorSize: [frame.colorWidth ?? 0, frame.colorHeight ?? 0],
     confidenceFilteredDepthCount,
     confidenceFilteredPercent: depthPixelCount > 0 ? roundMetric(100 * confidenceFilteredDepthCount / depthPixelCount, 1) : 0,
+    confidenceFallbackReason: payload.confidenceFallbackReason ?? '',
     confidenceFallbackUsed: payload.confidenceFallbackUsed ?? false,
     confidenceMapUsed: payload.confidenceMapUsed ?? false,
     confidenceThreshold: payload.confidenceThreshold ?? 0,

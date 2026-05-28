@@ -293,6 +293,7 @@ export interface NativeLiDARDepthFramePayload {
   readonly cameraPreviewPath?: 'core-image' | 'ycbcr-direct';
   readonly confidenceFilteredDepthCount?: number;
   readonly confidenceMapUsed?: boolean;
+  readonly confidenceFallbackReason?: 'empty-medium-confidence' | 'sparse-medium-confidence';
   readonly confidenceFallbackUsed?: boolean;
   readonly confidenceThreshold?: number;
   readonly depthCopyMs?: number;

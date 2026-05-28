@@ -1712,7 +1712,10 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `low confidence ${formatPercent(numberField(nativePayload, 'lowConfidencePercent'))}, ` +
       `confidence-filtered ${formatPercent(numberField(nativePayload, 'confidenceFilteredPercent'))}, ` +
       `confidence map ${nativePayload.confidenceMapUsed === true ? 'yes' : 'no'}, ` +
-      `fallback ${nativePayload.confidenceFallbackUsed === true ? 'yes' : 'no'}`
+      `fallback ${nativePayload.confidenceFallbackUsed === true ? 'yes' : 'no'}` +
+      (stringField(nativePayload, 'confidenceFallbackReason')
+        ? ` (${stringField(nativePayload, 'confidenceFallbackReason')})`
+        : '')
     );
     if (
       numberField(nativePayload, 'depthMinMeters') > 0 ||

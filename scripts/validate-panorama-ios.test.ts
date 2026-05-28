@@ -733,6 +733,34 @@ test('panorama validator summarizes model chain mismatches for profile-only logs
   );
 });
 
+test('panorama validator reports smoothed depth confidence fallback reasons', () => {
+  const summary = panoramaBottleneckSummary({
+    PANORAMIC_NATIVE_PAYLOAD_PROFILE: {
+      confidenceFallbackReason: 'sparse-medium-confidence',
+      confidenceFallbackUsed: true,
+      confidenceFilteredPercent: 92,
+      confidenceMapUsed: true,
+      depthMaxMeters: 3.1,
+      depthMeanMeters: 1.3,
+      depthMinMeters: 0.4,
+      depthSize: [256, 192],
+      depthToCameraScale: [0.1333, 0.1333],
+      frameNumber: 4,
+      includeDepthData: true,
+      invalidDepthPercent: 88,
+      lowConfidencePercent: 92,
+      projectionCameraImageResolution: [1920, 1440],
+      projectionDepthToCameraScale: [0.1333, 0.1333],
+      requestMs: 12,
+      validDepthPercent: 12,
+    },
+  });
+
+  expect(summary).toContain(
+    'Depth payload: valid 12%, invalid 88%, low confidence 92%, confidence-filtered 92%, confidence map yes, fallback yes (sparse-medium-confidence)'
+  );
+});
+
 test('panorama validator diagnoses published models that do not reach WebGPU render setup', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {

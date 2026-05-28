@@ -962,6 +962,8 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => ({
       confidenceMapUsed: true,
       confidenceFilteredDepthCount: 2,
+      confidenceFallbackReason: 'sparse-medium-confidence',
+      confidenceFallbackUsed: true,
       confidenceThreshold: 1,
       depthData: nativeBytes,
       frameNumber: 1,
@@ -986,6 +988,8 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
       confidenceMapUsed: true,
       confidenceFilteredDepthCount: 2,
       confidenceFilteredPercent: 0,
+      confidenceFallbackReason: 'sparse-medium-confidence',
+      confidenceFallbackUsed: true,
       confidenceThreshold: 1,
       highConfidenceDepthCount: 30000,
       depthMaxMeters: 3.2,

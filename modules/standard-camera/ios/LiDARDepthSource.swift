@@ -22,6 +22,7 @@ private let webXRMeshPayloadMaxTrianglesPerAnchor = 900
 // LiDAR samples, while smoothed depth may keep medium-or-better samples.
 private let minimumRawARKitDepthConfidence = UInt8(ARConfidenceLevel.high.rawValue)
 private let minimumSmoothARKitDepthConfidence = UInt8(ARConfidenceLevel.medium.rawValue)
+private let minimumSmoothDepthValidPercentBeforeLowConfidenceFallback = 8.0
 
 private func profilingNowMs() -> Double {
   ProcessInfo.processInfo.systemUptime * 1000
@@ -897,8 +898,14 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
         return nil
       }
       var confidenceFallbackUsed = false
+      var confidenceFallbackReason: String?
+      let depthPixelCount = CVPixelBufferGetWidth(snapshot.depthMap) * CVPixelBufferGetHeight(snapshot.depthMap)
+      let minimumSmoothDepthValidCount = Int(
+        (Double(max(depthPixelCount, 0)) * minimumSmoothDepthValidPercentBeforeLowConfidenceFallback / 100).rounded(.up)
+      )
+      let smoothDepthTooSparse = depthPayload.validDepthCount < max(1, minimumSmoothDepthValidCount)
       if snapshot.depthType == .smooth &&
-          depthPayload.validDepthCount == 0 &&
+          smoothDepthTooSparse &&
           depthPayload.confidenceFilteredDepthCount > 0,
           let fallbackPayload = makeDepthData(
             from: snapshot.depthMap,
@@ -906,9 +913,13 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
             confidenceThreshold: UInt8(ARConfidenceLevel.low.rawValue)
           ) {
         // @ref LLP 0013#xr-depth-information — Keep confidence maps internal,
-        // but avoid starving WebXR scene-depth consumers when ARKit labels an
-        // entire smoothed startup frame as low confidence while still providing
-        // positive metric depth values.
+        // but avoid starving WebXR scene-depth consumers when ARKit labels a
+        // smoothed frame as mostly low confidence while still providing positive
+        // metric depth values. Sparse nonzero medium-confidence islands are not
+        // enough for the panorama sampler to form post-first keyframes.
+        confidenceFallbackReason = depthPayload.validDepthCount == 0
+          ? "empty-medium-confidence"
+          : "sparse-medium-confidence"
         depthPayload = fallbackPayload
         confidenceFallbackUsed = true
       }
@@ -917,6 +928,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       result["confidenceMapUsed"] = depthPayload.confidenceMapUsed
       result["confidenceThreshold"] = depthPayload.confidenceThreshold
       result["confidenceFallbackUsed"] = confidenceFallbackUsed
+      if let confidenceFallbackReason {
+        result["confidenceFallbackReason"] = confidenceFallbackReason
+      }
       result["confidenceFilteredDepthCount"] = depthPayload.confidenceFilteredDepthCount
       result["highConfidenceDepthCount"] = depthPayload.highConfidenceDepthCount
       result["minDepth"] = Double(depthPayload.minDepth)
