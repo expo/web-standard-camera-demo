@@ -382,14 +382,19 @@ capability check.
 10. Request native camera permission. If permission is denied or restricted,
    reject with `NotAllowedError`.
 11. If another `getUserMedia` or LiDAR session is active, stop or suspend it
-    through the same external-lock mechanism used by LLP 0012.
+    through the same external-lock mechanism used by LLP 0012. Cold-start
+    autorun MUST NOT start ARKit before the shared camera-lock handler is
+    installed; the profile may wait briefly for that handler, but if it cannot
+    acquire one it must reject instead of starting an unlocked ARKit session.
 12. Start `ARSession` with `ARWorldTrackingConfiguration` and either
     `.smoothedSceneDepth` or `.sceneDepth`.
 13. Resolve with a new `XRSession`.
 
-At most one immersive session may be active at a time. If a session is active,
-a second `requestSession("immersive-ar")` call MUST reject with
-`InvalidStateError`.
+At most one immersive session may be active or starting at a time. If a session
+is active, or if a previous `requestSession("immersive-ar")` call is still
+waiting for the external camera lock or native ARKit startup, a second
+`requestSession("immersive-ar")` call MUST reject with `InvalidStateError`
+before acquiring or releasing the external camera lock.
 
 ## `xr-camera-resolution`
 
@@ -429,8 +434,9 @@ continue.
 `resumeDepthSensing()` MUST set `depthActive` to `true` if the session has not
 ended and the `"depth-sensing"` feature is enabled.
 
-`end()` MUST pause the native `ARSession`, release the external camera lock, fire
-an `end` event, and resolve once no new animation frames will be delivered.
+`end()` MUST pause the native `ARSession`, release the same external camera lock
+handler acquired during `requestSession()`, fire an `end` event, and resolve
+once no new animation frames will be delivered.
 
 ## `xr-reference-space`
 

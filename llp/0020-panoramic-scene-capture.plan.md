@@ -1307,6 +1307,9 @@ If optional mesh detection is enabled, the validator SHOULD treat a
 evidence that the optional WebXR mesh bridge may have thrown before post-first
 depth keyframe capture; mesh access is a supplement and must not be allowed to
 turn a depth-backed scan into a one-frame surfel model. The validator SHOULD
+also preserve `CAMERA_CTX` external-lock engagement/release lines, because
+profile-only autorun can otherwise hide whether `requestSession()` waited for
+the shared AVFoundation handoff before starting ARKit. The validator SHOULD
 also treat `PANORAMIC_NATIVE_PAYLOAD_PROFILE` with `payloadUnavailable` as
 evidence that lazy native frame bytes were unavailable after an XR frame was
 delivered, and should distinguish depth-payload unavailability from camera

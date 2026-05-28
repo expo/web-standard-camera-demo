@@ -1,7 +1,11 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
-import NativeStandardCamera, { type NativeLiDARDepthFrame, type NativeWebXRMeshSummary } from './native';
+import NativeStandardCamera, {
+  type NativeLiDARDepthCapabilities,
+  type NativeLiDARDepthFrame,
+  type NativeWebXRMeshSummary,
+} from './native';
 import {
   WebXRCamera,
   WebXRCPUCameraImage,
@@ -12,8 +16,10 @@ import {
   WebXRReferenceSpace,
   WebXRRigidTransform,
   WebXRSession,
+  WebXRSystem,
   WebXRViewerPose,
   WebXRView,
+  runWithWebXRUserActivation,
   setWebXRDepthCameraLockHandlers,
   setWebXRDepthProfileTelemetryContext,
 } from './WebXRDepthProfile';
@@ -544,6 +550,203 @@ test('XRSession.end releases the external camera lock only after native ARKit st
   } finally {
     setWebXRDepthCameraLockHandlers(null);
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = originalStop;
+  }
+});
+
+test('XRSystem.requestSession waits for camera lock handlers before starting native ARKit', async () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalCapabilities = NativeStandardCamera.getLiDARDepthCapabilities;
+  const originalStart = NativeStandardCamera.startWebXRLiDARDepthAsync;
+  const originalStop = NativeStandardCamera.stopLiDARDepthAsync;
+  let lockCalls = 0;
+  let nativeStarts = 0;
+  let nativeStartedBeforeLock = false;
+  let unlocks = 0;
+  let session: WebXRSession | null = null;
+
+  try {
+    setWebXRDepthCameraLockHandlers(null);
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).getLiDARDepthCapabilities = () => ({
+      frameNumber: 0,
+      meshDetection: false,
+      running: false,
+      sceneDepth: true,
+      sessionId: 0,
+      smoothedSceneDepth: true,
+      state: 'idle',
+      supported: true,
+    });
+    (NativeStandardCamera as typeof NativeStandardCamera).startWebXRLiDARDepthAsync = async (depthType) => {
+      nativeStarts += 1;
+      nativeStartedBeforeLock = lockCalls <= 0;
+      return {
+        depthType: depthType === 'raw' ? 'raw' : 'smooth',
+        frameNumber: 1,
+        meshDetection: false,
+        running: true,
+        sceneDepth: true,
+        sessionId: 42,
+        smoothedSceneDepth: true,
+        state: 'running',
+        supported: true,
+      };
+    };
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = async () => {};
+
+    const system = new WebXRSystem();
+    const sessionPromise = runWithWebXRUserActivation(() =>
+      system.requestSession('immersive-ar', {
+        requiredFeatures: ['depth-sensing'],
+        depthSensing: {
+          dataFormatPreference: ['float32'],
+          depthTypeRequest: ['smooth', 'raw'],
+          matchDepthView: true,
+          usagePreference: ['cpu-optimized'],
+        },
+      })
+    );
+
+    await Promise.resolve();
+
+    expect(nativeStarts).toBe(0);
+
+    setWebXRDepthCameraLockHandlers({
+      lockExternal: async () => {
+        lockCalls += 1;
+      },
+      unlockExternal: () => {
+        unlocks += 1;
+      },
+    });
+    session = await sessionPromise;
+
+    expect(lockCalls).toBe(1);
+    expect(nativeStarts).toBe(1);
+    expect(nativeStartedBeforeLock).toBe(false);
+    expect(session.depthType).toBe('smooth');
+
+    setWebXRDepthCameraLockHandlers(null);
+    await session.end();
+    session = null;
+
+    expect(unlocks).toBe(1);
+  } finally {
+    if (session && !session.ended) {
+      await session.end();
+    }
+    setWebXRDepthCameraLockHandlers(null);
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).getLiDARDepthCapabilities = originalCapabilities;
+    (NativeStandardCamera as typeof NativeStandardCamera).startWebXRLiDARDepthAsync = originalStart;
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = originalStop;
+  }
+});
+
+test('XRSystem.requestSession rejects overlapping starts before taking or releasing the camera lock', async () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalCapabilities = NativeStandardCamera.getLiDARDepthCapabilities;
+  const originalStart = NativeStandardCamera.startWebXRLiDARDepthAsync;
+  const originalStop = NativeStandardCamera.stopLiDARDepthAsync;
+  let lockCalls = 0;
+  let nativeStarts = 0;
+  let resolveNativeStart!: (capabilities: NativeLiDARDepthCapabilities) => void;
+  let unlocks = 0;
+  let session: WebXRSession | null = null;
+
+  try {
+    setWebXRDepthCameraLockHandlers({
+      lockExternal: async () => {
+        lockCalls += 1;
+      },
+      unlockExternal: () => {
+        unlocks += 1;
+      },
+    });
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).getLiDARDepthCapabilities = () => ({
+      frameNumber: 0,
+      meshDetection: false,
+      running: false,
+      sceneDepth: true,
+      sessionId: 0,
+      smoothedSceneDepth: true,
+      state: 'idle',
+      supported: true,
+    });
+    (NativeStandardCamera as typeof NativeStandardCamera).startWebXRLiDARDepthAsync = async (depthType) => {
+      nativeStarts += 1;
+      return new Promise<NativeLiDARDepthCapabilities>((resolve) => {
+        resolveNativeStart = resolve;
+      }).then((capabilities) => ({
+        ...capabilities,
+        depthType: depthType === 'raw' ? 'raw' : 'smooth',
+      }));
+    };
+    (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = async () => {};
+
+    const system = new WebXRSystem();
+    const firstStart = runWithWebXRUserActivation(() =>
+      system.requestSession('immersive-ar', {
+        requiredFeatures: ['depth-sensing'],
+        depthSensing: {
+          dataFormatPreference: ['float32'],
+          depthTypeRequest: ['smooth', 'raw'],
+          matchDepthView: true,
+          usagePreference: ['cpu-optimized'],
+        },
+      })
+    );
+
+    await Promise.resolve();
+
+    let rejection: unknown;
+    try {
+      await runWithWebXRUserActivation(() =>
+        system.requestSession('immersive-ar', {
+          requiredFeatures: ['depth-sensing'],
+          depthSensing: {
+            dataFormatPreference: ['float32'],
+            depthTypeRequest: ['smooth', 'raw'],
+            matchDepthView: true,
+            usagePreference: ['cpu-optimized'],
+          },
+        })
+      );
+    } catch (e) {
+      rejection = e;
+    }
+
+    expect((rejection as Error | undefined)?.name).toBe('InvalidStateError');
+    expect(lockCalls).toBe(1);
+    expect(nativeStarts).toBe(1);
+    expect(unlocks).toBe(0);
+
+    resolveNativeStart({
+      depthType: 'smooth',
+      frameNumber: 1,
+      meshDetection: false,
+      running: true,
+      sceneDepth: true,
+      sessionId: 43,
+      smoothedSceneDepth: true,
+      state: 'running',
+      supported: true,
+    });
+    session = await firstStart;
+    await session.end();
+    session = null;
+
+    expect(unlocks).toBe(1);
+  } finally {
+    if (session && !session.ended) {
+      await session.end();
+    }
+    setWebXRDepthCameraLockHandlers(null);
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).getLiDARDepthCapabilities = originalCapabilities;
+    (NativeStandardCamera as typeof NativeStandardCamera).startWebXRLiDARDepthAsync = originalStart;
     (NativeStandardCamera as typeof NativeStandardCamera).stopLiDARDepthAsync = originalStop;
   }
 });

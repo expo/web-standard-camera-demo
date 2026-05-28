@@ -63,13 +63,19 @@ declare global {
 }
 
 const INSTALLED_SYMBOL = Symbol.for('standard-camera.webxr-depth.installed');
+const CAMERA_LOCK_HANDLERS_TIMEOUT_MS = 500;
 const TRANSIENT_ACTIVATION_MS = 900;
 const VIEWER_POSE_PROFILE_INTERVAL_MS = 1000;
 const XR_FRAME_PUMP_PROFILE_INTERVAL_MS = 1500;
 let transientActivationUntil = 0;
 let nextAnimationFrameHandle = 1;
 let activeImmersiveSession: WebXRSession | null = null;
+let immersiveSessionRequestInFlight = false;
 let cameraLockHandlers: CameraLockHandlers | null = null;
+let cameraLockHandlerWaiters: Array<{
+  resolve: (handlers: CameraLockHandlers) => void;
+  timer: ReturnType<typeof setTimeout>;
+}> = [];
 let lastViewerPoseProfileLoggedAtMs = -Infinity;
 let lastViewerPoseDegradedProfileLoggedAtMs = -Infinity;
 let telemetryContext: WebXRDepthProfileTelemetryContext = {};
@@ -394,6 +400,13 @@ function bgraToRgba(src: Uint8Array): Uint8Array {
 // by the LiDAR native sidecar.
 export function setWebXRDepthCameraLockHandlers(handlers: CameraLockHandlers | null): void {
   cameraLockHandlers = handlers;
+  if (!handlers) return;
+  const waiters = cameraLockHandlerWaiters;
+  cameraLockHandlerWaiters = [];
+  for (const waiter of waiters) {
+    clearTimeout(waiter.timer);
+    waiter.resolve(handlers);
+  }
 }
 
 // @ref LLP 0020#testing-and-validation - Panorama profiling scopes native
@@ -409,6 +422,22 @@ export function setWebXRDepthProfileTelemetryContext(context: WebXRDepthProfileT
 export function runWithWebXRUserActivation<T>(callback: () => T): T {
   setTransientActivation();
   return callback();
+}
+
+function waitForCameraLockHandlers(): Promise<CameraLockHandlers> {
+  if (cameraLockHandlers) {
+    return Promise.resolve(cameraLockHandlers);
+  }
+  return new Promise((resolve, reject) => {
+    const waiter = {
+      resolve,
+      timer: setTimeout(() => {
+        cameraLockHandlerWaiters = cameraLockHandlerWaiters.filter((entry) => entry !== waiter);
+        reject(invalidState('WebXR camera ownership lock is not installed'));
+      }, CAMERA_LOCK_HANDLERS_TIMEOUT_MS),
+    };
+    cameraLockHandlerWaiters.push(waiter);
+  });
 }
 
 // @ref LLP 0013#xr-install
@@ -463,6 +492,9 @@ export class WebXRSystem extends EventTarget {
     if (activeImmersiveSession && !activeImmersiveSession.ended) {
       throw invalidState('An immersive-ar session is already active');
     }
+    if (immersiveSessionRequestInFlight) {
+      throw invalidState('An immersive-ar session is already starting');
+    }
 
     const requiredFeatures = validateRequiredFeatures(options.requiredFeatures);
     const optionalFeatures = collectKnownOptionalFeatures(options.optionalFeatures);
@@ -492,20 +524,33 @@ export class WebXRSystem extends EventTarget {
     if (wantsDepth && !depthType) {
       throw unsupported('Requested depth type is unavailable');
     }
+    immersiveSessionRequestInFlight = true;
     let locked = false;
-    let started: NativeLiDARDepthCapabilities;
+    let lockHandlers: CameraLockHandlers | null = null;
+    let started: NativeLiDARDepthCapabilities | null = null;
     try {
-      await cameraLockHandlers?.lockExternal();
+      // @ref LLP 0013#xr-request-session - Cold-start autorun can reach a
+      // child route's WebXR session effect before CameraProvider's passive
+      // effect installs the shared AVFoundation handoff. Wait briefly rather
+      // than starting ARKit without owning the camera lock.
+      lockHandlers = await waitForCameraLockHandlers();
+      await lockHandlers.lockExternal();
       locked = true;
       started = await NativeStandardCamera.startWebXRLiDARDepthAsync(depthType ?? '', wantsMesh);
     } catch (e) {
-      if (locked) {
-        cameraLockHandlers?.unlockExternal();
+      immersiveSessionRequestInFlight = false;
+      if (locked && lockHandlers) {
+        lockHandlers.unlockExternal();
+      }
+      if (e instanceof DOMException) {
+        throw e;
       }
       rethrowNativeXRStartError(e);
     }
+    immersiveSessionRequestInFlight = false;
 
     const session = new WebXRSession({
+      cameraLockHandlers: lockHandlers,
       cameraAccessEnabled: wantsCamera,
       cameraFormat: wantsCamera ? selectedCameraFormat(options.cameraAccess) : 'bgra8unorm',
       depthEnabled: wantsDepth,
@@ -519,6 +564,7 @@ export class WebXRSystem extends EventTarget {
 }
 
 type WebXRSessionConfig = {
+  cameraLockHandlers?: CameraLockHandlers | null;
   cameraAccessEnabled: boolean;
   cameraFormat: WebXRCameraFormat;
   depthEnabled: boolean;
@@ -543,6 +589,7 @@ type NativePayloadRequestProfile = {
 export class WebXRSession extends EventTarget {
   #cameraAccessEnabled: boolean;
   #cameraFormat: WebXRCameraFormat;
+  #cameraLockHandlers: CameraLockHandlers | null;
   #depthEnabled: boolean;
   #depthType: WebXRDepthType | null;
   #meshDetectionEnabled: boolean;
@@ -567,6 +614,7 @@ export class WebXRSession extends EventTarget {
     super();
     this.#cameraAccessEnabled = config.cameraAccessEnabled;
     this.#cameraFormat = config.cameraFormat;
+    this.#cameraLockHandlers = config.cameraLockHandlers ?? cameraLockHandlers;
     this.#depthEnabled = config.depthEnabled;
     this.#depthType = config.depthType;
     this.#meshDetectionEnabled = config.meshDetectionEnabled;
@@ -851,7 +899,7 @@ export class WebXRSession extends EventTarget {
     }
     if (this.#endDispatched) return false;
     this.#endDispatched = true;
-    cameraLockHandlers?.unlockExternal();
+    this.#cameraLockHandlers?.unlockExternal();
     this.dispatchEvent(new Event('end'));
     return true;
   }
