@@ -1164,7 +1164,28 @@ export class WebXRFrame {
     }
     const requestStart = now();
     const nativeFrame = nativeFrameFor(this);
-    const nativeMeshes = NativeStandardCamera.getWebXRLiDARDepthFrameMeshes(nativeFrame.frameNumber) ?? [];
+    const getMeshes = (
+      NativeStandardCamera as typeof NativeStandardCamera & {
+        getWebXRLiDARDepthFrameMeshes?: unknown;
+      }
+    ).getWebXRLiDARDepthFrameMeshes;
+    if (typeof getMeshes !== 'function') {
+      logNativeMeshPayloadUnavailableProfile(
+        nativeFrame,
+        now() - requestStart,
+        'missing-native-mesh-payload-getter'
+      );
+      this.#nativeMeshPayloads = [];
+      return this.#nativeMeshPayloads;
+    }
+    let nativeMeshes: readonly NativeWebXRMesh[];
+    try {
+      nativeMeshes = getMeshes.call(NativeStandardCamera, nativeFrame.frameNumber) ?? [];
+    } catch (e) {
+      logNativeMeshPayloadUnavailableProfile(nativeFrame, now() - requestStart, e);
+      this.#nativeMeshPayloads = [];
+      return this.#nativeMeshPayloads;
+    }
     logNativeMeshPayloadProfile(nativeMeshes, nativeFrame, now() - requestStart);
     this.#nativeMeshPayloads = nativeMeshes;
     return this.#nativeMeshPayloads;
@@ -1361,6 +1382,25 @@ function logNativeMeshPayloadProfile(
     vertexBytes,
     vertexCount,
     ...telemetryContextFields(),
+  }));
+}
+
+function logNativeMeshPayloadUnavailableProfile(
+  frame: NativeLiDARDepthFrame,
+  requestMs: number,
+  error: unknown
+): void {
+  const fallbackReason = typeof error === 'string' ? error : 'native-mesh-payload-error';
+  console.log('PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE', JSON.stringify({
+    fallbackReason,
+    frameNumber: frame.frameNumber,
+    meshBytes: 0,
+    meshCount: 0,
+    meshPayloadUnavailable: true,
+    requestMs: roundMetric(requestMs),
+    ...telemetryContextFields(),
+    errorMessage: error instanceof Error ? error.message : undefined,
+    errorName: error instanceof Error ? error.name : undefined,
   }));
 }
 

@@ -657,6 +657,11 @@ summaries first, as long as the setlike object corresponds to the active
 `XRMesh.lastChangedTime`, or `XRMesh.semanticLabel` MUST NOT require copying
 the full vertex/index buffers; reading `XRMesh.vertices`, `XRMesh.normals`, or
 `XRMesh.indices` MAY lazily fetch the full geometry for that same frame.
+If the optional native mesh-payload bridge is unavailable or throws while
+resolving those lazy full-geometry buffers, the runtime SHOULD fail closed to
+an empty mesh set for that frame and emit diagnostic telemetry; it MUST NOT let
+optional mesh access abort depth/camera frame delivery for the active WebXR
+session.
 The bridge MAY cache copied native mesh buffers by anchor identity and
 `lastChangedTime`; if it does, each returned `XRMesh` MUST still expose the
 current frame's `meshSpace` pose and the cached geometry MUST only be reused

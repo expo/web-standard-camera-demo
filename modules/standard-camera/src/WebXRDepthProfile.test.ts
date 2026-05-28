@@ -632,6 +632,41 @@ test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', ()
   }
 });
 
+test('XRFrame.detectedMeshes treats a missing optional native mesh bridge as no meshes', () => {
+  const originalMeshGetter = NativeStandardCamera.getWebXRLiDARDepthFrameMeshes;
+  const originalConsoleLog = console.log;
+  const profileLogs: unknown[] = [];
+
+  try {
+    setWebXRDepthProfileTelemetryContext({ scanId: 11 });
+    console.log = (name: unknown, payload?: unknown): void => {
+      if (name === 'PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE') profileLogs.push(payload);
+    };
+    (NativeStandardCamera as unknown as Record<string, unknown>).getWebXRLiDARDepthFrameMeshes = undefined;
+
+    const { frame } = makeXRFrame({
+      meshDetection: true,
+      trackingState: 'normal',
+    });
+    const meshes = frame.detectedMeshes;
+
+    expect(meshes.size).toBe(0);
+    expect([...meshes]).toEqual([]);
+    expect(frame.detectedMeshes).toBe(meshes);
+    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
+      fallbackReason: 'missing-native-mesh-payload-getter',
+      frameNumber: 1,
+      meshCount: 0,
+      meshPayloadUnavailable: true,
+      scanId: 11,
+    });
+  } finally {
+    setWebXRDepthProfileTelemetryContext(null);
+    console.log = originalConsoleLog;
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFrameMeshes = originalMeshGetter;
+  }
+});
+
 test('XRFrame.detectedMeshes preserves XRMesh identity across native anchor updates', () => {
   const initialSummary = {
     id: 'mesh-identity',
