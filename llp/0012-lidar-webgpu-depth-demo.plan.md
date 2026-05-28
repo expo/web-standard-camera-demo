@@ -181,7 +181,7 @@ const session = await navigator.xr.requestSession("immersive-ar", {
   depthSensing: {
     usagePreference: ["cpu-optimized"],
     dataFormatPreference: ["float32"],
-    depthTypeRequest: ["smooth"],
+    depthTypeRequest: ["raw", "smooth"],
     matchDepthView: true,
   },
 });
@@ -219,7 +219,7 @@ So the implementation choices are:
   the RGB/depth bytes the WebGPU renderer needs and keeps the W3C camera story
   focused on `getUserMedia`.
 - **Add WebXR vocabulary to the sidecar payload.** Good incremental improvement:
-  include fields such as `depthType: "smooth"`, `depthUsage:
+  include fields such as `depthType: "raw"` or `depthType: "smooth"`, `depthUsage:
   "cpu-optimized"`, `depthDataFormat: "float32"`, `rawValueToMeters: 1`, and a
   `normDepthBufferFromNormView` transform when ARKit calibration is wired
   through. This borrows the useful WebXR model without claiming `navigator.xr`.

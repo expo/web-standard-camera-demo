@@ -55,10 +55,11 @@ Implemented:
 - WebXR payload tuning: native depth payloads encode ARKit samples below the
   depth-type confidence threshold as invalid `0` depth values, preserving the
   standard `XRCPUDepthInformation.data` shape while avoiding noisy surfels.
-  Smoothed scene depth accepts medium-or-better samples for stable panorama
-  fusion, while raw scene depth uses only high-confidence current-frame samples
-  when smoothed depth is unavailable. If a smoothed-depth frame would be
-  completely invalid after the medium threshold, native payload creation may
+  Raw scene depth uses only high-confidence current-frame samples and is the
+  default panorama request to avoid lagged smoothed-depth delivery during a
+  180-degree sweep. Smoothed scene depth accepts medium-or-better samples when
+  explicitly requested for comparison. If a smoothed-depth frame would be empty
+  or too sparse after the medium threshold, native payload creation may
   retry that frame with low-confidence smoothed samples and report the fallback
   in internal profiling so the scan can still produce startup surfels. The
   CPU-visible camera image is an internal 256x192 BGRA preview for the surfel
@@ -114,8 +115,8 @@ Implemented:
   per-frame sample budget fixed for responsiveness while covering different
   depth pixels across a 180-degree sweep, reducing repeated-grid aliasing in the
   fused surfel model. The current scan budget is a 40x30 sparse depth grid per
-  accepted keyframe; smooth depth and mesh supplementation provide coordinate
-  stability and shape coverage while keeping the JavaScript surfel loop smaller
+  accepted keyframe; raw current-frame depth and mesh supplementation provide
+  timely geometry and shape coverage while keeping the JavaScript surfel loop smaller
   than the earlier 44x34 grid. The keyframe depth cache SHOULD precompute the normalized
   WebXR view-space grid coordinates for each phased scan so depth lookup,
   unprojection, normal estimation, and camera-color sampling share those
@@ -208,11 +209,11 @@ Implemented:
   frame, it SHOULD emit `PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE` with the stop
   reason, status, session-match, session-ended, capture-in-flight, and retained
   sample counters so one-keyframe logs can distinguish native starvation from an
-  app-side scheduling guard. The route accepts `?autorun=1`, `?depth=raw`, and
-  `?mesh=0` for physical-device profiling runs so
+  app-side scheduling guard. The route accepts `?autorun=1`, `?depth=raw`,
+  `?depth=smooth`, and `?mesh=0` for physical-device profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
   the normal Start Scan control for manual use, and so profile-only logs can
-  isolate smooth-depth and mesh-reconstruction effects on frame continuity. Live
+  isolate raw-depth, smooth-depth, and mesh-reconstruction effects on frame continuity. Live
   snapshot publishing uses adaptive backoff after 10k retained samples and
   reports the selected refresh interval in telemetry; manual Preview and final
   Capture still force full model builds. Manual Preview yields a frame and
@@ -948,15 +949,15 @@ consumes the standard normalized camera image transform exposed by
 `XRWebGLBinding`/the repo-local CPU binding analog.
 
 For the panoramic surfel accumulator, the app's WebXR session SHOULD request
-`depthTypeRequest: ["smooth", "raw"]`. ARKit's scene-depth point-cloud guidance
-places each depth-map value in camera space with camera intrinsics, and ARKit
-documents smoothed scene depth as reducing frame-to-frame distance deltas. This
-demo expects the user to perform a deliberate slow 180-degree sweep, so the
-first choice should favor stable world-space surface coordinates and fall back
-to high-confidence raw scene depth only when smoothed depth is unavailable. A
-profile-only deep link MAY request `["raw", "smooth"]` to test whether smoothed
-scene depth is the reason WebXR only delivers one useful surfel batch. The
-keyframe policy still rejects fast camera motion to limit lagged samples.
+`depthTypeRequest: ["raw", "smooth"]`. ARKit's scene-depth point-cloud guidance
+places each depth-map value in camera space with camera intrinsics, and the
+panorama route needs current-frame depth delivery so a deliberate 180-degree
+sweep can keep accepting surfels after the startup frame. The first choice
+therefore favors high-confidence raw scene depth, with smoothed scene depth as
+the fallback when raw scene depth is unavailable. A profile-only deep link MAY
+request `["smooth", "raw"]` to test whether smoothed scene depth is causing
+WebXR to deliver only one useful surfel batch or lagged geometry. The keyframe
+policy still rejects fast camera motion to limit stale samples.
 `PANORAMIC_KEYFRAME_PROFILE` reports the selected `depthType` so
 physical-device logs can confirm which standard WebXR depth mode was active.
 This preference remains a standard WebXR request option; the app MUST NOT call a
@@ -1274,8 +1275,8 @@ scan coverage at least 25% when scan stats are present, nonzero scene bounds,
 no more than the configured sparse depth-grid sample budget per keyframe, and
 the expected `intrinsics-projection` unprojection mode when that field is
 present. When keyframe telemetry reports `depthType`, validation also
-expects `"smooth"` so a physical run cannot silently fall back to noisier raw
-geometry for the deliberate 180-degree panorama fusion path. These budgets can be
+expects `"raw"` so a physical run proves the default current-frame depth path
+instead of silently testing smoothed-depth delivery. These budgets can be
 overridden with the validator's `--max-*`/`--min-*` flags when profiling a
 different device class. The validator
 prints optional profiling telemetry (`PANORAMIC_LIVE_MODEL_PROFILE`,
@@ -1338,7 +1339,7 @@ kept for
 capture/render/export consistency, while the worst observed timing, worst
 depth-grid sample count, lowest quality percentage, and any non-fast-path
 unprojection, depth-grid sampling, or camera-color sampling mode, plus any
-non-smooth depth type, are kept for budget checks and profiling output.
+non-raw depth type, are kept for budget checks and profiling output.
 The validator SHOULD print a
 compact bottleneck summary that ranks observed timing buckets and includes
 fast-path, depth-type, projection-pixel, capture-quality, native depth-validity,

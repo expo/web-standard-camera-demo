@@ -94,8 +94,9 @@ This repo-local profile supports exactly:
 - Depth data format:
   - `"float32"`
 - Depth type:
-  - `"smooth"` when ARKit smoothed scene depth is available
-  - `"raw"` otherwise
+  - selected from `depthTypeRequest`
+  - `"raw"` maps to ARKit current-frame scene depth
+  - `"smooth"` maps to ARKit smoothed scene depth
 - View count:
   - exactly one `XRView` per frame
   - `XRView.eye === "none"`
@@ -119,7 +120,7 @@ async function startLiDARDepthStudio(device: GPUDevice): Promise<XRSession> {
     depthSensing: {
       usagePreference: ["cpu-optimized"],
       dataFormatPreference: ["float32"],
-      depthTypeRequest: ["smooth", "raw"],
+      depthTypeRequest: ["raw", "smooth"],
       matchDepthView: true,
     },
     cameraAccess: {
@@ -358,7 +359,9 @@ capability check.
 7. Select a depth configuration:
    - `usagePreference` MUST include `"cpu-optimized"`.
    - `dataFormatPreference` MUST include `"float32"`.
-   - `depthTypeRequest` SHOULD prefer `"smooth"` before `"raw"`.
+   - `depthTypeRequest` order is app-controlled; panorama-style scans SHOULD
+     prefer `"raw"` before `"smooth"` when current-frame delivery is more
+     important than smoothed distance stability.
    - The selected `depthType` is observable, so the native ARKit session MUST run
      the matching frame semantic. It MUST NOT report `"raw"` while delivering
      `smoothedSceneDepth`, or report `"smooth"` while delivering `sceneDepth`.

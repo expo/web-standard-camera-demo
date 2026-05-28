@@ -421,7 +421,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
           depthSensing: {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
-            depthTypeRequest: ['smooth', 'raw'],
+            depthTypeRequest: ['raw', 'smooth'],
             matchDepthView: true,
           },
           cameraAccess: {

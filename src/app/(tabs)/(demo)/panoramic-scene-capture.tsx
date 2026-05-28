@@ -677,7 +677,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     requestedMesh: boolean
   ): void {
     // @ref LLP 0020#testing-and-validation - Physical profile-only runs can
-    // force raw depth or disable mesh detection to isolate whether a one-frame
+    // force smooth depth or disable mesh detection to isolate whether a one-frame
     // scan is caused by ARKit scene-depth smoothing, mesh reconstruction, or the
     // JS keyframe gates.
     console.log('PANORAMIC_SCAN_CONFIG', JSON.stringify({
@@ -754,8 +754,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             dataFormatPreference: ['float32'],
             // @ref LLP 0020#webxr-depth-geometry-unprojection - The panorama
             // is a deliberate slow 180-degree sweep; normal runs prefer WebXR
-            // smoothed depth, while profile-only deep links can force raw first
-            // to isolate ARKit scene-depth starvation from smoothing.
+            // raw current-frame depth to avoid smoothed semantic stalls, while
+            // profile-only deep links can force smooth first for comparison.
             depthTypeRequest: [...depthTypeRequest],
             matchDepthView: true,
           },

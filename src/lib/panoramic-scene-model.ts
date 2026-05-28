@@ -240,7 +240,7 @@ export function panoramicDepthPreferenceFromSearchParam(
 export function panoramicDepthTypeRequestForPreference(
   preference: PanoramicDepthPreference
 ): readonly PanoramicDepthType[] {
-  return preference === 'raw' ? ['raw', 'smooth'] : ['smooth', 'raw'];
+  return preference === 'smooth' ? ['smooth', 'raw'] : ['raw', 'smooth'];
 }
 
 export function shouldRequestPanoramicMeshDetection(

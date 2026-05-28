@@ -89,8 +89,8 @@ test('panorama validator rejects telemetry outside performance and quality budge
     PANORAMIC_KEYFRAME_PROFILE: { unprojectionMode: 'matrix-inverse' },
   }))).toContain('Keyframe unprojection fast path missed');
   expect(metricSetValidationError(completeMetricSet({
-    PANORAMIC_KEYFRAME_PROFILE: { depthType: 'raw' },
-  }))).toContain('Keyframe depth type was not smooth');
+    PANORAMIC_KEYFRAME_PROFILE: { depthType: 'smooth' },
+  }))).toContain('Keyframe depth type was not raw');
   expect(metricSetValidationError(completeMetricSet({
     PANORAMIC_KEYFRAME_PROFILE: { depthGridSampleMode: 'normalized-transform' },
   }))).toContain('Keyframe depth-grid fast path missed');
@@ -487,7 +487,7 @@ test('panorama validator summarizes likely bottlenecks and quality context', () 
       depthInitialAppendMs: 50,
       depthRecoveryAppendMs: 42,
       depthRecoverySkipped: true,
-      depthType: 'smooth',
+      depthType: 'raw',
       meshAppendMs: 70,
       meshFetchMs: 15,
       meshCameraImageMs: 14,
@@ -680,7 +680,7 @@ test('panorama validator summarizes likely bottlenecks and quality context', () 
   expect(summary).toContain(
     'Fast paths: unprojection matrix-inverse, depth grid normalized-transform, camera color normalized-transform'
   );
-  expect(summary).toContain('Depth mode: smooth');
+  expect(summary).toContain('Depth mode: raw');
   expect(summary).toContain('Keyframe sample loop: 30ms of 180ms append, 40 profiled samples, timed 5 at stride 8');
   expect(summary).toContain(
     'Keyframe fusion contribution: 14.3% new voxels, 104 observed depth surfels, 6 new / 28 updated, 7 plane-projected samples, 18 mature overlap skipped'
@@ -1393,7 +1393,7 @@ function completeMetricSet(
       depthGridSamples: DEFAULT_VALIDATION_BUDGETS.maxKeyframeDepthGridSamples,
       cameraSampleMode: 'precomputed-axis',
       depthGridSampleMode: 'precomputed-identity',
-      depthType: 'smooth',
+      depthType: 'raw',
       fusedSurfelCount: 42,
       keyframes: 3,
       newVoxelCount: 24,

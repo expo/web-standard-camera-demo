@@ -15,7 +15,7 @@ const DEFAULT_ROUTE_URL = `${URL_SCHEME}:///panoramic-scene-capture?autorun=1`;
 const DEFAULT_MAX_KEYFRAME_DEPTH_GRID_SAMPLES = 40 * 30;
 const EXPECTED_CAMERA_SAMPLE_MODE = 'precomputed-axis';
 const EXPECTED_DEPTH_GRID_SAMPLE_MODE = 'precomputed-identity';
-const EXPECTED_KEYFRAME_DEPTH_TYPE = 'smooth';
+const EXPECTED_KEYFRAME_DEPTH_TYPE = 'raw';
 const EXPECTED_KEYFRAME_UNPROJECTION_MODE = 'intrinsics-projection';
 export const DEFAULT_VALIDATION_BUDGETS = {
   maxCaptureBuildMs: 2_000,
@@ -1439,7 +1439,7 @@ export function metricSetValidationError(
   }
   const depthType = stringField(keyframe, 'depthType');
   if (depthType && depthType !== EXPECTED_KEYFRAME_DEPTH_TYPE) {
-    return `Keyframe depth type was not smooth: ${depthType}`;
+    return `Keyframe depth type was not raw: ${depthType}`;
   }
   const depthGridSampleMode = stringField(keyframe, 'depthGridSampleMode');
   if (depthGridSampleMode && depthGridSampleMode !== EXPECTED_DEPTH_GRID_SAMPLE_MODE) {

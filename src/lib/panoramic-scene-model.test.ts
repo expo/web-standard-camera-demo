@@ -1551,7 +1551,7 @@ test('panoramic profiling query helpers isolate depth and mesh variables', () =>
   expect(panoramicDepthPreferenceFromSearchParam(['smooth'])).toBe('smooth');
   expect(panoramicDepthPreferenceFromSearchParam('smoothed')).toBe('smooth');
   expect(panoramicDepthPreferenceFromSearchParam('unknown')).toBe('default');
-  expect(panoramicDepthTypeRequestForPreference('default')).toEqual(['smooth', 'raw']);
+  expect(panoramicDepthTypeRequestForPreference('default')).toEqual(['raw', 'smooth']);
   expect(panoramicDepthTypeRequestForPreference('smooth')).toEqual(['smooth', 'raw']);
   expect(panoramicDepthTypeRequestForPreference('raw')).toEqual(['raw', 'smooth']);
   expect(shouldRequestPanoramicMeshDetection(undefined)).toBe(true);
