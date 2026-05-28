@@ -540,6 +540,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
         let frameNumber = 0;
         let frames = 0;
         let lastFpsReport = Date.now();
+        let lastFrameErrorReport = 0;
         let lastStatsReport = Date.now();
         const startedAt = Date.now();
 
@@ -637,118 +638,153 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
           );
         };
 
+        const reportFrameError = (e: unknown): void => {
+          const errorName = e instanceof Error ? e.name : 'Error';
+          const errorMessage = e instanceof Error ? e.message : String(e);
+          profile.count('frameErrors');
+          setError(`WebXR frame error: ${errorName}: ${errorMessage}`);
+          const now = Date.now();
+          if (now - lastFrameErrorReport < 1000) return;
+          lastFrameErrorReport = now;
+          console.log('WEBXR_DEMO_FRAME_ERROR', JSON.stringify({
+            cameraHeight,
+            cameraWidth,
+            demo: 'lidar-depth-webxr',
+            depthHeight,
+            depthWidth,
+            errorMessage,
+            errorName,
+            frameNumber,
+          }));
+          profile.report({
+            cameraFormat,
+            cameraHeight,
+            cameraWidth,
+            depthHeight,
+            depthWidth,
+            frameErrorName: errorName,
+            frameNumber,
+          }, true);
+        };
+
         const renderFrame = (_time: DOMHighResTimeStamp, frame: WebXRFrame): void => {
           if (cancelled) return;
-          const pose = frame.getViewerPose(referenceSpace);
-          const view = pose?.views[0];
-          if (!view) {
-            xrRafId = session.requestAnimationFrame(renderFrame);
-            return;
-          }
+          try {
+            const pose = frame.getViewerPose(referenceSpace);
+            const view = pose?.views[0];
+            if (!view) {
+              profile.count('poseMisses');
+              return;
+            }
 
-          // @ref LLP 0013#xr-depth-information
-          // @ref LLP 0016#depth-interpretation
-          const depth = frame.getDepthInformation(view);
-          // @ref LLP 0013#xr-camera-image
-          // @ref LLP 0017#xr-webgl-get-camera-image — Use the repo-local CPU
-          // binding analog because this demo uploads camera bytes to WebGPU.
-          const xrCamera = view.camera;
-          const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
+            // @ref LLP 0013#xr-depth-information
+            // @ref LLP 0016#depth-interpretation
+            const depth = frame.getDepthInformation(view);
+            // @ref LLP 0013#xr-camera-image
+            // @ref LLP 0017#xr-webgl-get-camera-image — Use the repo-local CPU
+            // binding analog because this demo uploads camera bytes to WebGPU.
+            const xrCamera = view.camera;
+            const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
 
-          if (depth && camera) {
-            const depthStats = uploadDepth(depth);
-            uploadCamera(camera);
-            profile.count('xrFrames');
-            frameNumber += 1;
-            minDepth = depthStats.min;
-            maxDepth = depthStats.max;
-            const statsNow = Date.now();
-            if (statsNow - lastStatsReport >= 500) {
-              setFrameInfo(`${depth.width}x${depth.height} XR #${frameNumber}`);
-              setCameraInfo(`${camera.width}x${camera.height} ${camera.format}`);
-              if (depthStats.center > 0) {
-                lastCenterDepthRef.current = depthStats.center;
-                setLastCenterDepthMeters(depthStats.center);
-                setCenterDepth(`${depthStats.center.toFixed(2)}m`);
-              } else {
-                lastCenterDepthRef.current = null;
-                setLastCenterDepthMeters(null);
-                setCenterDepth('no return');
+            if (depth && camera) {
+              const depthStats = uploadDepth(depth);
+              uploadCamera(camera);
+              profile.count('xrFrames');
+              frameNumber += 1;
+              minDepth = depthStats.min;
+              maxDepth = depthStats.max;
+              const statsNow = Date.now();
+              if (statsNow - lastStatsReport >= 500) {
+                setFrameInfo(`${depth.width}x${depth.height} XR #${frameNumber}`);
+                setCameraInfo(`${camera.width}x${camera.height} ${camera.format}`);
+                if (depthStats.center > 0) {
+                  lastCenterDepthRef.current = depthStats.center;
+                  setLastCenterDepthMeters(depthStats.center);
+                  setCenterDepth(`${depthStats.center.toFixed(2)}m`);
+                } else {
+                  lastCenterDepthRef.current = null;
+                  setLastCenterDepthMeters(null);
+                  setCenterDepth('no return');
+                }
+                setDepthRange(
+                  `${minDepth.toFixed(2)}m-${maxDepth.toFixed(2)}m mean ${depthStats.mean.toFixed(2)}m`
+                );
+                setForegroundPercent(Math.round(depthStats.foregroundRatio * 100));
+                setMaskInfo(
+                  `${formatPercent(depthStats.foregroundRatio)} closer / ${formatPercent(depthStats.targetRatio)} at target`
+                );
+                setStatus(`live - ${adapter?.info?.vendor ?? 'unknown adapter'}`);
+                lastStatsReport = statsNow;
               }
-              setDepthRange(
-                `${minDepth.toFixed(2)}m-${maxDepth.toFixed(2)}m mean ${depthStats.mean.toFixed(2)}m`
-              );
-              setForegroundPercent(Math.round(depthStats.foregroundRatio * 100));
-              setMaskInfo(
-                `${formatPercent(depthStats.foregroundRatio)} closer / ${formatPercent(depthStats.targetRatio)} at target`
-              );
-              setStatus(`live - ${adapter?.info?.vendor ?? 'unknown adapter'}`);
-              lastStatsReport = statsNow;
+            }
+
+            const elapsed = (Date.now() - startedAt) / 1000;
+            device.queue.writeBuffer(
+              uniformBuffer,
+              0,
+              new Float32Array([
+                depthWidth,
+                depthHeight,
+                cameraWidth,
+                cameraHeight,
+                minDepth,
+                maxDepth,
+                elapsed,
+                stageWidth / stageHeight,
+                frameNumber,
+                targetDepthRef.current,
+                !isDesktop && (cameraWidth > 1 ? cameraWidth > cameraHeight : depthWidth > depthHeight) ? 1 : 0,
+                viewModeRef.current,
+              ])
+            );
+
+            const renderStart = perfNowMs();
+            const encoder = device.createCommandEncoder();
+            const pass = encoder.beginRenderPass({
+              colorAttachments: [
+                {
+                  view: context.getCurrentTexture().createView(),
+                  clearValue: { r: 0.015, g: 0.018, b: 0.026, a: 1 },
+                  loadOp: 'clear',
+                  storeOp: 'store',
+                },
+              ],
+            });
+            if (bindGroup) {
+              pass.setPipeline(pipeline);
+              pass.setBindGroup(0, bindGroup);
+              pass.draw(FULLSCREEN_VERTEX_COUNT);
+            }
+            pass.end();
+            device.queue.submit([encoder.finish()]);
+            context.present();
+            profile.duration('renderSubmitPresent', perfNowMs() - renderStart);
+
+            frames += 1;
+            profile.count('renderFrames');
+            const fpsNow = Date.now();
+            if (fpsNow - lastFpsReport >= 1000) {
+              const fpsValue = frames / ((fpsNow - lastFpsReport) / 1000);
+              setFps(fpsValue.toFixed(1));
+              profile.report({
+                cameraFormat,
+                cameraHeight,
+                cameraWidth,
+                depthHeight,
+                depthWidth,
+                fps: Number(fpsValue.toFixed(1)),
+                frameNumber,
+              });
+              frames = 0;
+              lastFpsReport = fpsNow;
+            }
+          } catch (e) {
+            reportFrameError(e);
+          } finally {
+            if (!cancelled && !session.ended) {
+              xrRafId = session.requestAnimationFrame(renderFrame);
             }
           }
-
-          const elapsed = (Date.now() - startedAt) / 1000;
-          device.queue.writeBuffer(
-            uniformBuffer,
-            0,
-            new Float32Array([
-              depthWidth,
-              depthHeight,
-              cameraWidth,
-              cameraHeight,
-              minDepth,
-              maxDepth,
-              elapsed,
-              stageWidth / stageHeight,
-              frameNumber,
-              targetDepthRef.current,
-              !isDesktop && (cameraWidth > 1 ? cameraWidth > cameraHeight : depthWidth > depthHeight) ? 1 : 0,
-              viewModeRef.current,
-            ])
-          );
-
-          const renderStart = perfNowMs();
-          const encoder = device.createCommandEncoder();
-          const pass = encoder.beginRenderPass({
-            colorAttachments: [
-              {
-                view: context.getCurrentTexture().createView(),
-                clearValue: { r: 0.015, g: 0.018, b: 0.026, a: 1 },
-                loadOp: 'clear',
-                storeOp: 'store',
-              },
-            ],
-          });
-          if (bindGroup) {
-            pass.setPipeline(pipeline);
-            pass.setBindGroup(0, bindGroup);
-            pass.draw(FULLSCREEN_VERTEX_COUNT);
-          }
-          pass.end();
-          device.queue.submit([encoder.finish()]);
-          context.present();
-          profile.duration('renderSubmitPresent', perfNowMs() - renderStart);
-
-          frames += 1;
-          profile.count('renderFrames');
-          const fpsNow = Date.now();
-          if (fpsNow - lastFpsReport >= 1000) {
-            const fpsValue = frames / ((fpsNow - lastFpsReport) / 1000);
-            setFps(fpsValue.toFixed(1));
-            profile.report({
-              cameraFormat,
-              cameraHeight,
-              cameraWidth,
-              depthHeight,
-              depthWidth,
-              fps: Number(fpsValue.toFixed(1)),
-              frameNumber,
-            });
-            frames = 0;
-            lastFpsReport = fpsNow;
-          }
-
-          xrRafId = session.requestAnimationFrame(renderFrame);
         };
 
         xrRafId = session.requestAnimationFrame(renderFrame);
