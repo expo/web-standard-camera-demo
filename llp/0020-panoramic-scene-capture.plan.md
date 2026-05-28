@@ -180,7 +180,14 @@ Implemented:
   starvation while ARKit camera frames continue. If a capture log shows a
   saveable model sealed with only one accepted keyframe and no later scan-loop
   evidence, the validator SHOULD call out an early Capture action separately
-  from native or keyframe-gate failures. The WebXR
+  from native or keyframe-gate failures. If Capture is requested before enough
+  keyframes exist, the route SHOULD emit `PANORAMIC_CAPTURE_BLOCKED_PROFILE`
+  with keyframe, sample, status, and in-flight counters so physical logs prove
+  the scan stayed open instead of sealing a one-frame model. If a later scan
+  resets non-empty panorama state, the route SHOULD emit
+  `PANORAMIC_SCAN_RESET_PROFILE` with the previous scan counts and reset reason,
+  so copied multi-attempt logs can distinguish a current one-frame scan from an
+  earlier discarded multi-keyframe scan. The WebXR
   frame-pump profiler SHOULD emit its first sample immediately instead of
   waiting for its periodic interval, because first-frame-only failures often
   happen before a second profile window opens. If ARKit frames arrive before the

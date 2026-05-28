@@ -787,6 +787,54 @@ test('panorama validator diagnoses one-keyframe capture attempts', () => {
   );
 });
 
+test('panorama validator diagnoses blocked early capture attempts', () => {
+  const seen = {
+    PANORAMIC_CAPTURE_BLOCKED_PROFILE: {
+      acceptedKeyframes: 1,
+      captureInFlight: false,
+      frameCount: 1,
+      fusedSurfelCount: 749,
+      keyframes: 1,
+      previewBuildInFlight: false,
+      rawSampleCount: 781,
+      reason: 'too-few-keyframes',
+      requiredKeyframes: 2,
+      retainedSamples: 781,
+      status: 'scanning',
+    },
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'Capture blocked: too-few-keyframes, status scanning, 1/2 keyframes, 1 frames, retained 781 samples, fused 749 surfels, captureInFlight no, previewBuildInFlight no'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: Capture was blocked after only 1/2 accepted keyframes; the scan was left running instead of sealing a one-frame model'
+  );
+});
+
+test('panorama validator diagnoses a previous multi-keyframe scan reset before a one-frame scan', () => {
+  const seen = parseMetricLogText(`
+ LOG PANORAMIC_SCAN_RESET_PROFILE {"nextScanId":2,"previousAcceptedKeyframes":24,"previousFrameCount":120,"previousFusedSurfelCount":9744,"previousKeyframes":24,"previousRawSampleCount":13496,"previousRetainedSamples":13496,"previousScanId":1,"reason":"start-session","scanId":2,"sessionActive":false,"status":"idle"}
+ LOG PANORAMIC_KEYFRAME_PROFILE {"appendMs":31.48,"cameraColorPercent":100,"fusedSurfelCount":749,"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":2,"surfelCount":781}
+  `);
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(seen.PANORAMIC_SCAN_RESET_PROFILE).toMatchObject({
+    nextScanId: 2,
+    previousKeyframes: 24,
+    scanId: 2,
+  });
+  expect(summary).toContain(
+    'Scan reset: start-session discarded 24 keyframes, 13496 raw samples, 9744 fused surfels; previous scan 1 -> 2, status idle'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: current scan has only 1 keyframe(s) after a start-session reset discarded 24 previous keyframes and 13496 raw samples'
+  );
+});
+
 test('panorama validator diagnoses accepted raw samples that do not grow displayed surfels', () => {
   const seen = {
     PANORAMIC_KEYFRAME_PROFILE: {

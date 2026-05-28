@@ -38,6 +38,7 @@ const REQUIRED_METRICS = [
   'PANORAMIC_EXPORT_METRICS',
 ] as const satisfies readonly RequiredMetricName[];
 const OPTIONAL_METRICS = [
+  'PANORAMIC_CAPTURE_BLOCKED_PROFILE',
   'PANORAMIC_CAPTURE_GEOMETRY',
   'PANORAMIC_KEYFRAME_REJECTION_PROFILE',
   'PANORAMIC_LIVE_MODEL_PROFILE',
@@ -48,6 +49,7 @@ const OPTIONAL_METRICS = [
   'PANORAMIC_PREVIEW_METRICS',
   'PANORAMIC_RENDER_FRAME_PROFILE',
   'PANORAMIC_SCAN_CONFIG',
+  'PANORAMIC_SCAN_RESET_PROFILE',
   'PANORAMIC_SCAN_STATS',
   'PANORAMIC_XR_FRAME_PUMP_PROFILE',
   'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE',
@@ -61,6 +63,7 @@ export type RequiredMetricName =
   | 'PANORAMIC_RENDER_METRICS'
   | 'PANORAMIC_EXPORT_METRICS';
 export type OptionalMetricName =
+  | 'PANORAMIC_CAPTURE_BLOCKED_PROFILE'
   | 'PANORAMIC_CAPTURE_GEOMETRY'
   | 'PANORAMIC_KEYFRAME_REJECTION_PROFILE'
   | 'PANORAMIC_LIVE_MODEL_PROFILE'
@@ -71,6 +74,7 @@ export type OptionalMetricName =
   | 'PANORAMIC_PREVIEW_METRICS'
   | 'PANORAMIC_RENDER_FRAME_PROFILE'
   | 'PANORAMIC_SCAN_CONFIG'
+  | 'PANORAMIC_SCAN_RESET_PROFILE'
   | 'PANORAMIC_SCAN_STATS'
   | 'PANORAMIC_XR_FRAME_PUMP_PROFILE'
   | 'PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE'
@@ -372,11 +376,12 @@ export telemetry must include the Files-visible .ply path, and capture/render
 quality plus performance metrics must satisfy the configured budgets.
 
 The validator also prints optional profiling telemetry when it appears:
-  PANORAMIC_LIVE_MODEL_PROFILE, PANORAMIC_MODEL_UPLOAD_PROFILE,
-  PANORAMIC_KEYFRAME_REJECTION_PROFILE,
+  PANORAMIC_CAPTURE_BLOCKED_PROFILE, PANORAMIC_LIVE_MODEL_PROFILE,
+  PANORAMIC_MODEL_UPLOAD_PROFILE, PANORAMIC_KEYFRAME_REJECTION_PROFILE,
   PANORAMIC_MESH_PROFILE, PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE,
   PANORAMIC_NATIVE_PAYLOAD_PROFILE, PANORAMIC_PREVIEW_METRICS,
-  PANORAMIC_RENDER_FRAME_PROFILE, PANORAMIC_SCAN_CONFIG, PANORAMIC_SCAN_STATS,
+  PANORAMIC_RENDER_FRAME_PROFILE, PANORAMIC_SCAN_CONFIG,
+  PANORAMIC_SCAN_RESET_PROFILE, PANORAMIC_SCAN_STATS,
   PANORAMIC_XR_FRAME_PUMP_PROFILE, PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE, and
   PANORAMIC_CAPTURE_GEOMETRY, plus PANORAMIC_XR_POSE_PROFILE when WebXR
   withholds viewer poses because native tracking is not normal.`);
@@ -1043,6 +1048,18 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
   if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') {
     return numberField(metric, 'frameNumber') > 0 && numberField(metric, 'requestMs') >= 0;
   }
+  if (name === 'PANORAMIC_CAPTURE_BLOCKED_PROFILE') {
+    return stringField(metric, 'reason').length > 0 &&
+      numberField(metric, 'frameCount') >= 0 &&
+      numberField(metric, 'keyframes') >= 0 &&
+      numberField(metric, 'requiredKeyframes') >= 0;
+  }
+  if (name === 'PANORAMIC_SCAN_RESET_PROFILE') {
+    return stringField(metric, 'reason').length > 0 &&
+      numberField(metric, 'nextScanId') >= numberField(metric, 'previousScanId') &&
+      numberField(metric, 'previousFrameCount') >= numberField(metric, 'previousAcceptedKeyframes') &&
+      numberField(metric, 'previousKeyframes') >= 0;
+  }
   if (name === 'PANORAMIC_SCAN_STATS') {
     return numberField(metric, 'frameCount') >= numberField(metric, 'acceptedKeyframes') &&
       numberField(metric, 'elapsedMs') >= 0;
@@ -1363,6 +1380,18 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     );
   }
 
+  const scanReset = seen.PANORAMIC_SCAN_RESET_PROFILE;
+  if (scanReset) {
+    lines.push(
+      `Scan reset: ${stringField(scanReset, 'reason') || 'unknown'} discarded ` +
+      `${numberField(scanReset, 'previousKeyframes')} keyframes, ` +
+      `${numberField(scanReset, 'previousRawSampleCount')} raw samples, ` +
+      `${numberField(scanReset, 'previousFusedSurfelCount')} fused surfels; ` +
+      `previous scan ${numberField(scanReset, 'previousScanId')} -> ${numberField(scanReset, 'nextScanId')}, ` +
+      `status ${stringField(scanReset, 'status') || 'unknown'}`
+    );
+  }
+
   const keyframe = seen.PANORAMIC_KEYFRAME_PROFILE;
   if (keyframe) {
     lines.push([
@@ -1640,6 +1669,19 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
     );
   }
 
+  const captureBlocked = seen.PANORAMIC_CAPTURE_BLOCKED_PROFILE;
+  if (captureBlocked) {
+    lines.push(
+      `Capture blocked: ${stringField(captureBlocked, 'reason') || 'unknown'}, ` +
+      `status ${stringField(captureBlocked, 'status') || 'unknown'}, ` +
+      `${numberField(captureBlocked, 'keyframes')}/${numberField(captureBlocked, 'requiredKeyframes')} keyframes, ` +
+      `${numberField(captureBlocked, 'frameCount')} frames, ` +
+      `retained ${numberField(captureBlocked, 'retainedSamples')} samples${fusedSurfelDetail(captureBlocked)}, ` +
+      `captureInFlight ${captureBlocked.captureInFlight === true ? 'yes' : 'no'}, ` +
+      `previewBuildInFlight ${captureBlocked.previewBuildInFlight === true ? 'yes' : 'no'}`
+    );
+  }
+
   const firstFrameDiagnosis = panoramaFirstFrameDiagnosis(seen);
   if (firstFrameDiagnosis) {
     lines.push(firstFrameDiagnosis);
@@ -1654,11 +1696,18 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
   const rejectionProfile = seen.PANORAMIC_KEYFRAME_REJECTION_PROFILE;
   const framePump = seen.PANORAMIC_XR_FRAME_PUMP_PROFILE;
   const loopStop = seen.PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE;
+  const captureBlocked = seen.PANORAMIC_CAPTURE_BLOCKED_PROFILE;
+  const scanReset = seen.PANORAMIC_SCAN_RESET_PROFILE;
   const acceptedKeyframes = Math.max(
     numberField(keyframeProfile ?? {}, 'keyframes'),
     numberField(scan ?? {}, 'acceptedKeyframes'),
-    numberField(rejectionProfile ?? {}, 'keyframes')
+    numberField(rejectionProfile ?? {}, 'keyframes'),
+    numberField(captureBlocked ?? {}, 'acceptedKeyframes'),
+    numberField(captureBlocked ?? {}, 'keyframes')
   );
+  if (scanReset && acceptedKeyframes <= 1 && numberField(scanReset, 'previousKeyframes') > 1) {
+    return `First-frame diagnosis: current scan has only ${acceptedKeyframes} keyframe(s) after a ${stringField(scanReset, 'reason') || 'unknown'} reset discarded ${numberField(scanReset, 'previousKeyframes')} previous keyframes and ${numberField(scanReset, 'previousRawSampleCount')} raw samples`;
+  }
   if (acceptedKeyframes > 1) {
     const latestKeyframeSamples = numberField(keyframeProfile ?? {}, 'surfelCount');
     const rawSamples = Math.max(
@@ -1734,6 +1783,10 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
     const rejected = scanRejectionSummary(scan);
     const gateDiagnosis = dominantKeyframeGateDiagnosis(scan);
     return `First-frame diagnosis: scan loop ran ${numberField(scan, 'frameCount')} frames but accepted ${acceptedKeyframes}; ${rejected ? `rejected ${rejected}` : 'check pose/depth rejection profiles'}${gateDiagnosis}`;
+  }
+
+  if (captureBlocked && stringField(captureBlocked, 'reason') === 'too-few-keyframes') {
+    return `First-frame diagnosis: Capture was blocked after only ${acceptedKeyframes}/${numberField(captureBlocked, 'requiredKeyframes')} accepted keyframes; the scan was left running instead of sealing a one-frame model`;
   }
 
   const capture = seen.PANORAMIC_CAPTURE_METRICS;

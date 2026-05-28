@@ -114,6 +114,8 @@ const MODEL_VIEW_MODES = [
   { label: 'Depth', value: 1 },
   { label: 'Normals', value: 2 },
 ] as const;
+type CaptureBlockedReason = 'busy' | 'not-scanning' | 'too-few-keyframes';
+type ScanResetReason = 'manual-reset' | 'start-session';
 // @ref LLP 0020#v2-arkit-mesh-snapshot - Mesh supplement refresh uses
 // standard XRMesh object identity plus `lastChangedTime`; native anchor IDs
 // remain hidden inside the WebXR runtime.
@@ -433,8 +435,10 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }, [])
   );
 
-  function resetCapture(): void {
-    scanIdRef.current += 1;
+  function resetCapture(reason: ScanResetReason = 'manual-reset'): void {
+    const nextScanId = scanIdRef.current + 1;
+    logScanResetProfile(reason, nextScanId);
+    scanIdRef.current = nextScanId;
     setWebXRDepthProfileTelemetryContext({ scanId: scanIdRef.current });
     fusionRef.current = createSurfelFusionAccumulator();
     coverageSectorsRef.current = new Set();
@@ -541,6 +545,64 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       scanId: scanIdRef.current,
       status: statusRef.current,
       ...fields,
+    }));
+  }
+
+  function logCaptureBlockedProfile(reason: CaptureBlockedReason): void {
+    const stats = scanStatsRef.current;
+    // @ref LLP 0020#testing-and-validation - Capture is disabled until enough
+    // keyframes exist, but stale taps or programmatic calls still need a copied
+    // device-log breadcrumb that proves the scan was not sealed at one frame.
+    console.log('PANORAMIC_CAPTURE_BLOCKED_PROFILE', JSON.stringify({
+      acceptedKeyframes: stats.acceptedKeyframes,
+      captureInFlight: captureInFlightRef.current,
+      coveragePercent: roundMetric(panoramicCoveragePercent(coverageSectorsRef.current), 1),
+      frameCount: stats.frameCount,
+      fusedSurfelCount: fusionRef.current.voxels.size,
+      keyframes: keyframeCountRef.current,
+      liveSurfelCount,
+      previewBuildInFlight: previewBuildInFlightRef.current,
+      rawSampleCount: fusionRef.current.rawSampleCount,
+      reason,
+      requiredKeyframes: MIN_CAPTURE_KEYFRAMES,
+      retainedSamples: surfelCountRef.current,
+      scanId: scanIdRef.current,
+      status: statusRef.current,
+    }));
+  }
+
+  function logScanResetProfile(reason: ScanResetReason, nextScanId: number): void {
+    const stats = scanStatsRef.current;
+    const previousKeyframes = Math.max(keyframeCountRef.current, stats.acceptedKeyframes);
+    const previousRawSampleCount = fusionRef.current.rawSampleCount;
+    const previousFusedSurfelCount = fusionRef.current.voxels.size;
+    const previousModelSurfelCount = modelRef.current?.surfelCount ?? 0;
+    const hasPreviousScan =
+      previousKeyframes > 0 ||
+      stats.frameCount > 0 ||
+      previousRawSampleCount > 0 ||
+      previousFusedSurfelCount > 0 ||
+      previousModelSurfelCount > 0 ||
+      surfelCountRef.current > 0;
+    if (!hasPreviousScan) return;
+    // @ref LLP 0020#testing-and-validation - Multi-attempt device logs must show
+    // when a later one-frame capture belongs to a fresh scan that discarded an
+    // earlier multi-keyframe model.
+    console.log('PANORAMIC_SCAN_RESET_PROFILE', JSON.stringify({
+      nextScanId,
+      previousAcceptedKeyframes: stats.acceptedKeyframes,
+      previousFrameCount: stats.frameCount,
+      previousFusedSurfelCount,
+      previousKeyframes,
+      previousLiveSurfelCount: liveSurfelCount,
+      previousModelSurfelCount,
+      previousRawSampleCount,
+      previousRetainedSamples: surfelCountRef.current,
+      previousScanId: scanIdRef.current,
+      reason,
+      scanId: nextScanId,
+      sessionActive: sessionRef.current !== null,
+      status: statusRef.current,
     }));
   }
 
@@ -702,7 +764,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           },
         })
       );
-      resetCapture();
+      resetCapture('start-session');
       sessionRef.current = nextSession;
       logScanConfig(nextSession, depthPreference, depthTypeRequest, meshDetectionRequested);
       setSession(nextSession);
@@ -750,9 +812,16 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   async function captureModel(): Promise<void> {
-    if (captureInFlightRef.current || previewBuildInFlightRef.current) return;
-    if (statusRef.current !== 'scanning') return;
+    if (captureInFlightRef.current || previewBuildInFlightRef.current) {
+      logCaptureBlockedProfile('busy');
+      return;
+    }
+    if (statusRef.current !== 'scanning') {
+      logCaptureBlockedProfile('not-scanning');
+      return;
+    }
     if (keyframeCountRef.current < MIN_CAPTURE_KEYFRAMES) {
+      logCaptureBlockedProfile('too-few-keyframes');
       setError(`Keep scanning: capture needs at least ${MIN_CAPTURE_KEYFRAMES} accepted keyframes.`);
       setModelInfo(
         `scan: ${keyframeCountRef.current}/${MAX_KEYFRAMES} keyframes - capture needs ${MIN_CAPTURE_KEYFRAMES}`
@@ -1454,7 +1523,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                       disabled={transitioning}
                       icon="arrow.counterclockwise"
                       label={canRecenterModel ? 'Recenter' : 'Reset'}
-                      onPress={canRecenterModel ? resetViewer : resetCapture}
+                      onPress={canRecenterModel ? resetViewer : () => resetCapture('manual-reset')}
                       tone="reset"
                       width={commandButtonWidth}
                     />
