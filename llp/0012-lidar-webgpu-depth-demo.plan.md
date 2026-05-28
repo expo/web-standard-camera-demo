@@ -377,14 +377,17 @@ overlay over foreground objects detected by the boundary/target-depth logic, and
 draws that target-distance isoline with a bright core plus a thin high-contrast
 halo. Depth mode uses a higher-contrast palette with bright neutral
 quarter-meter contour markers and yellow one-meter contour
-markers for measurement. Depth and Compare reuse the same yellow
-depth-discontinuity rim used by Boundary mode, but do not apply any depth-texel
-boundary mask so the outline does not become crosshatched. Compare's depth side
-uses the same depth-map renderer at reduced strength so measurement and outline
-tuning stays consistent between views. Boundary mode keeps high-contrast edge
-strokes from local depth discontinuities rather than a broad low-opacity
-foreground fill, because the ARKit scene-depth map is low resolution and soft
-outlines read as blur instead of geometry.
+markers for measurement. Depth and Compare keep boundary/discontinuity pixels in
+the depth palette and use luminance contrast rather than replacing them with a
+flat rim color, so object edges remain depth-colored while still reading as
+boundaries. Compare's depth side uses the same depth-map renderer at reduced
+strength so measurement and outline tuning stays consistent between views.
+Boundary mode keeps high-contrast edge strokes from local depth discontinuities
+rather than a broad low-opacity foreground fill, because the ARKit scene-depth
+map is low resolution and soft outlines read as blur instead of geometry. Camera
+sampling outside the fitted ARKit preview frame must return the canvas
+background rather than clamped camera edge texels; otherwise portrait stage
+layouts stretch the left/right camera border into visible bands.
 
 The WGSL shader avoids local identifiers named `target`. The WebGPU compiler on
 device treated `target` as reserved, which failed shader parsing and presented as

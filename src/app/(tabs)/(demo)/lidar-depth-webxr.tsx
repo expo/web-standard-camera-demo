@@ -137,6 +137,10 @@ fn sourceUvForScreen(screenUv: vec2f, width: f32, height: f32) -> vec2f {
   return sourceUvForAspect(screenUv, width, height, u.canvasAspect);
 }
 
+fn inUnitFrame(uv: vec2f) -> bool {
+  return all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0));
+}
+
 fn mixDepthValue(a: f32, b: f32, amount: f32) -> f32 {
   if (!(a > 0.0)) {
     return b;
@@ -259,8 +263,8 @@ fn depthMapView(depth: f32, depthUv: vec2f, markerStrength: f32) -> vec3f {
   color = mix(color, color * 0.22, markerShadow);
   color = mix(color, vec3f(0.92, 1.0, 0.98), minorLine);
   color = mix(color, vec3f(1.0, 0.82, 0.10), majorLine);
-  color = mix(color, color * 0.48, boundaryMask.x * 0.12 * markerStrength);
-  color = mix(color, vec3f(1.0, 0.82, 0.10), boundaryMask.y * 0.42 * markerStrength);
+  color = mix(color, color * 0.50, boundaryMask.x * 0.10 * markerStrength);
+  color = mix(color, min(color * 1.34 + vec3f(0.06), vec3f(1.0)), boundaryMask.y * 0.36 * markerStrength);
   color = mix(color, vec3f(0.02, 0.20, 0.18), targetMask.y * 0.24);
   color = mix(color, vec3f(0.82, 1.0, 0.92), targetMask.x * 0.84);
   return color;
@@ -312,13 +316,16 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
   let colorUv = sourceUvForScreen(in.uv, u.colorWidth, u.colorHeight);
-  let camera = textureSample(cameraTex, cameraSampler, clamp(colorUv, vec2f(0.0), vec2f(1.0))).rgb;
+  var camera = vec3f(0.015, 0.018, 0.026);
+  if (inUnitFrame(colorUv)) {
+    camera = textureSample(cameraTex, cameraSampler, colorUv).rgb;
+  }
   if (u.frameNumber < 1.0 || u.depthWidth < 1.0 || u.depthHeight < 1.0) {
     return vec4f(camera, 1.0);
   }
 
   let depthUv = sourceUvForScreen(in.uv, u.depthWidth, u.depthHeight);
-  let inDepthFrame = all(depthUv >= vec2f(0.0)) && all(depthUv <= vec2f(1.0));
+  let inDepthFrame = inUnitFrame(depthUv);
   if (!inDepthFrame) {
     return vec4f(camera * 0.42, 1.0);
   }
