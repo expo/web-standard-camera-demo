@@ -222,6 +222,12 @@ export function observedDepthSurfelCount(appendedSurfels: number, preflightSurfe
   return Math.max(appended, observed);
 }
 
+export function observedDepthNewVoxelCount(appendedNewVoxels: number, preflightNewVoxels?: number | null): number {
+  const appended = Number.isFinite(appendedNewVoxels) ? Math.max(0, Math.floor(appendedNewVoxels)) : 0;
+  const observed = Number.isFinite(preflightNewVoxels) ? Math.max(0, Math.floor(preflightNewVoxels ?? 0)) : 0;
+  return Math.max(appended, observed);
+}
+
 export function panoramicDepthPreferenceFromSearchParam(
   value: string | readonly string[] | null | undefined
 ): PanoramicDepthPreference {

@@ -860,10 +860,14 @@ surfel threshold are satisfied, instead of running a separate valid-depth
 preflight over the same sparse WebXR grid first. Once the new-voxel threshold
 is already satisfied, any remaining minimum-surfel proof can count valid depth
 samples without unprojecting them into world space or computing voxel keys,
-because only the surface-density gate is still undecided. The contribution preflight
-SHOULD reuse accumulator-owned scratch storage for candidate voxel keys,
-because rejected redundant frames are common during slow scans and should not
-allocate a fresh key set on each XR frame.
+because only the surface-density gate is still undecided. If full append later
+skips mature overlapping voxels, the route SHOULD still base the acceptance
+gate on the preflight-observed surfel and new-voxel counts. Otherwise a useful
+post-first frame can mutate the fusion accumulator but fail keyframe acceptance,
+leaving the live model and rendered preview stuck on the first published
+keyframe. The contribution preflight SHOULD reuse accumulator-owned scratch
+storage for candidate voxel keys, because rejected redundant frames are common
+during slow scans and should not allocate a fresh key set on each XR frame.
 Accepted keyframes also maintain a per-keyframe sparse-depth cache so
 the valid-depth preflight, center samples, and neighboring samples used for
 normal estimation do not repeatedly resample the same WebXR depth-grid

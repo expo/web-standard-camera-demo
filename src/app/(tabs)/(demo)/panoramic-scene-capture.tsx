@@ -50,6 +50,7 @@ import {
   MESH_SURFEL_SAMPLE_BUDGET,
   modelSurfelPointScalePx,
   nextSurfelBufferCapacityBytes,
+  observedDepthNewVoxelCount,
   observedDepthSurfelCount,
   panoramicCoverageKey,
   panoramicCoveragePercent,
@@ -1850,12 +1851,17 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     // surfels behind for a pose reason.
     const sampleDecisionMs = performanceNow() - sampleDecisionStart;
     const observedDepthSurfels = observedDepthSurfelCount(added.surfelCount, appendProfile.preflightSurfels);
+    const observedDepthNewVoxels = observedDepthNewVoxelCount(
+      added.newVoxelCount,
+      appendProfile.preflightNewVoxels
+    );
     // @ref LLP 0020#performance-constraints - Mature overlap skips reduce how
-    // many samples are actually fused, but the density gate should use the
-    // preflight-observed surface count. Otherwise a useful new-voxel keyframe can
-    // be treated as sparse just because duplicate mature voxels were skipped.
+    // many samples are actually fused, but the acceptance gate should use the
+    // preflight-observed surface and new-voxel contribution. Otherwise a useful
+    // keyframe can mutate fusion and then fail publication because duplicate
+    // mature voxels were skipped in the full append path.
     const depthSparse = observedDepthSurfels < MIN_KEYFRAME_SURFELS;
-    const depthTooRedundant = minNewVoxelsForFusion > 0 && added.newVoxelCount < minNewVoxelsForFusion;
+    const depthTooRedundant = minNewVoxelsForFusion > 0 && observedDepthNewVoxels < minNewVoxelsForFusion;
     let meshPreflight: MeshSurfelPreflightResult | null = null;
     let meshPreflightMs = 0;
     let depthRecoveryAppendMs = 0;
@@ -1863,7 +1869,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     let meshRecoveredDepthGate = false;
     if (depthSparse || depthTooRedundant) {
       const meshPreflightStopAtSurfels = Math.max(0, MIN_KEYFRAME_SURFELS - observedDepthSurfels);
-      const meshPreflightStopAtNewVoxels = Math.max(0, minNewVoxelsForFusion - added.newVoxelCount);
+      const meshPreflightStopAtNewVoxels = Math.max(0, minNewVoxelsForFusion - observedDepthNewVoxels);
       const meshPreflightStart = performanceNow();
       meshPreflight = preflightMeshSurfelsForFusion(
         getDetectedMeshes(),
@@ -1880,7 +1886,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       );
       meshPreflightMs = performanceNow() - meshPreflightStart;
       const combinedPreflightSurfels = observedDepthSurfels + meshPreflight.surfelCount;
-      const combinedPreflightNewVoxels = added.newVoxelCount + meshPreflight.newVoxelCount;
+      const combinedPreflightNewVoxels = observedDepthNewVoxels + meshPreflight.newVoxelCount;
       if (combinedPreflightSurfels < MIN_KEYFRAME_SURFELS) {
         recordScanRejection('too-few-surfels');
         maybeLogKeyframeRejectionProfile('too-few-surfels', {
@@ -1890,6 +1896,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           combinedPreflightSurfels,
           depthInitialAppendMs: roundMetric(depthInitialAppendMs),
           depthNewVoxelCount: added.newVoxelCount,
+          depthObservedNewVoxelCount: observedDepthNewVoxels,
           depthSurfelCount: added.surfelCount,
           meshPreflightMs: roundMetric(meshPreflightMs),
           meshPreflightNewVoxelCount: meshPreflight.newVoxelCount,
@@ -1916,6 +1923,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           combinedPreflightSurfels,
           depthInitialAppendMs: roundMetric(depthInitialAppendMs),
           depthNewVoxelCount: added.newVoxelCount,
+          depthObservedNewVoxelCount: observedDepthNewVoxels,
           depthSurfelCount: added.surfelCount,
           meshPreflightMs: roundMetric(meshPreflightMs),
           meshPreflightNewVoxelCount: meshPreflight.newVoxelCount,
@@ -1989,13 +1997,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       }
       return false;
     }
-    if (minNewVoxelsForFusion > 0 && added.newVoxelCount < minNewVoxelsForFusion && !meshRecoveredDepthGate) {
+    if (minNewVoxelsForFusion > 0 && observedDepthNewVoxels < minNewVoxelsForFusion && !meshRecoveredDepthGate) {
       recordScanRejection('too-few-new-voxels');
       maybeLogKeyframeRejectionProfile('too-few-new-voxels', {
         cameraForward: roundVec3(forward),
         cameraPosition: roundVec3(position),
         depthInitialAppendMs: roundMetric(depthInitialAppendMs),
         depthNewVoxelCount: added.newVoxelCount,
+        depthObservedNewVoxelCount: observedDepthNewVoxels,
         depthSurfelCount: added.surfelCount,
         minKeyframeSurfels: MIN_KEYFRAME_SURFELS,
         minNewVoxelsForFusion,
@@ -2004,7 +2013,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         translationM: roundMetric(precheck.decision.translationM, 3),
       });
       setFrameInfo(
-        `waiting for new coverage: ${added.newVoxelCount}/${minNewVoxelsForFusion} new voxels`
+        `waiting for new coverage: ${observedDepthNewVoxels}/${minNewVoxelsForFusion} new voxels`
       );
       return false;
     }
@@ -2132,6 +2141,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       meshPreflightMs,
       meshRecoveredDepthGate,
       newVoxelCount: totalNewVoxelCount,
+      observedDepthNewVoxels,
       observedDepthSurfels,
       position,
       preSampleMs,
@@ -2423,6 +2433,7 @@ function logKeyframeProfile({
   meshPreflightMs,
   meshRecoveredDepthGate,
   newVoxelCount,
+  observedDepthNewVoxels,
   observedDepthSurfels,
   position,
   preSampleMs,
@@ -2464,6 +2475,7 @@ function logKeyframeProfile({
   meshPreflightMs: number;
   meshRecoveredDepthGate: boolean;
   newVoxelCount: number;
+  observedDepthNewVoxels: number;
   observedDepthSurfels: number;
   position: Vec3;
   preSampleMs: number;
@@ -2568,6 +2580,7 @@ function logKeyframeProfile({
     newVoxelPercent: roundMetric(100 * newVoxelCount / Math.max(surfelCount, 1), 1),
     newVoxelPreflightMs: roundMetric(appendProfile.newVoxelPreflightMs ?? 0),
     normalEstimateMs: roundMetric(appendProfile.normalEstimateMs ?? 0),
+    observedDepthNewVoxels,
     observedDepthSurfels,
     planeProjectedSamples: appendProfile.planeProjectedSamples ?? 0,
     preSampleMs: roundMetric(preSampleMs),

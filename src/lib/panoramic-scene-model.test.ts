@@ -28,6 +28,7 @@ import {
   MIN_KEYFRAME_SURFELS,
   modelSurfelPointScalePx,
   nextSurfelBufferCapacityBytes,
+  observedDepthNewVoxelCount,
   observedDepthSurfelCount,
   panoramicCoverageKey,
   panoramicCoveragePercent,
@@ -1533,11 +1534,15 @@ test('derivePanoramicCaptureControls keeps preview scan-only and save capture-on
   });
 });
 
-test('observedDepthSurfelCount uses preflight surface density when append skips mature overlaps', () => {
+test('observed depth gates use preflight contribution when append skips mature overlaps', () => {
   expect(observedDepthSurfelCount(18, 112)).toBe(112);
   expect(observedDepthSurfelCount(96, 48)).toBe(96);
   expect(observedDepthSurfelCount(Number.NaN, 24.9)).toBe(24);
   expect(observedDepthSurfelCount(12.8, null)).toBe(12);
+  expect(observedDepthNewVoxelCount(1, 14)).toBe(14);
+  expect(observedDepthNewVoxelCount(16, 4)).toBe(16);
+  expect(observedDepthNewVoxelCount(Number.NaN, 5.9)).toBe(5);
+  expect(observedDepthNewVoxelCount(3.8, null)).toBe(3);
 });
 
 test('panoramic profiling query helpers isolate depth and mesh variables', () => {
