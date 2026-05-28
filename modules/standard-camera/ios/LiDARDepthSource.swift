@@ -291,6 +291,11 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   private var latestTimestamp: TimeInterval = 0
   private var latestARFrameTimestamp: TimeInterval = 0
   private var latestDepthType: LiDARDepthType = .raw
+  private var latestARFrameRawDepthAvailable = false
+  private var latestARFrameSmoothDepthAvailable = false
+  private var latestDepthMissRequestedType: LiDARDepthType = .raw
+  private var latestDepthMissRawDepthAvailable = false
+  private var latestDepthMissSmoothDepthAvailable = false
   private var latestProjectionMatrix = webXRIdentityMatrix
   private var latestViewTransform = webXRIdentityMatrix
   private var latestNormDepthBufferFromNormView = webXRIdentityMatrix
@@ -306,6 +311,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   private var activeMeshDetection = false
   private var totalDepthMisses: UInt64 = 0
   private var consecutiveDepthMisses: UInt64 = 0
+  private var requestedDepthMissesWithAlternateDepth: UInt64 = 0
   private var lastErrorReason: String?
   private var pendingStart: PendingLiDARStart?
   private var startupTimeout: DispatchWorkItem?
@@ -433,6 +439,11 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestTimestamp = 0
     latestARFrameTimestamp = 0
     latestDepthType = depthType
+    latestARFrameRawDepthAvailable = false
+    latestARFrameSmoothDepthAvailable = false
+    latestDepthMissRequestedType = depthType
+    latestDepthMissRawDepthAvailable = false
+    latestDepthMissSmoothDepthAvailable = false
     activeDepthType = depthType
     latestProjectionMatrix = webXRIdentityMatrix
     latestViewTransform = webXRIdentityMatrix
@@ -446,6 +457,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     lastErrorReason = nil
     totalDepthMisses = 0
     consecutiveDepthMisses = 0
+    requestedDepthMissesWithAlternateDepth = 0
     state = .starting
     activeMeshDetection = enableMeshDetection
     pendingStart = PendingLiDARStart(sessionId: currentSessionId, resolve: resolve, reject: reject)
@@ -498,8 +510,14 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestARFrameNumber = 0
     latestDepthFrameARFrameNumber = 0
     latestARFrameTimestamp = 0
+    latestARFrameRawDepthAvailable = false
+    latestARFrameSmoothDepthAvailable = false
+    latestDepthMissRequestedType = activeDepthType
+    latestDepthMissRawDepthAvailable = false
+    latestDepthMissSmoothDepthAvailable = false
     totalDepthMisses = 0
     consecutiveDepthMisses = 0
+    requestedDepthMissesWithAlternateDepth = 0
     frameSnapshots.removeAll()
     meshAnchors.removeAll()
     meshAnchorChangedTimes.removeAll()
@@ -533,15 +551,31 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     guard active else {
       return
     }
-    let frameDepth = requestedDepthType == .smooth ? frame.smoothedSceneDepth : frame.sceneDepth
+    let rawSceneDepth = frame.sceneDepth
+    let smoothedSceneDepth = frame.smoothedSceneDepth
+    let rawDepthAvailable = rawSceneDepth != nil
+    let smoothDepthAvailable = smoothedSceneDepth != nil
+    let frameDepth = requestedDepthType == .smooth ? smoothedSceneDepth : rawSceneDepth
     guard let depth = frameDepth else {
       lock.lock()
       guard state == .starting || state == .running || state == .interrupted else {
         lock.unlock()
         return
       }
+      let alternateDepthAvailable = requestedDepthType == .smooth ? rawDepthAvailable : smoothDepthAvailable
       totalDepthMisses &+= 1
       consecutiveDepthMisses &+= 1
+      if alternateDepthAvailable {
+        requestedDepthMissesWithAlternateDepth &+= 1
+      }
+      // @ref LLP 0020#testing-and-validation — Preserve whether the requested
+      // ARKit depth semantic was missing while the alternate raw/smoothed
+      // semantic was present, so one-frame scans can be diagnosed from logs.
+      latestARFrameRawDepthAvailable = rawDepthAvailable
+      latestARFrameSmoothDepthAvailable = smoothDepthAvailable
+      latestDepthMissRequestedType = requestedDepthType
+      latestDepthMissRawDepthAvailable = rawDepthAvailable
+      latestDepthMissSmoothDepthAvailable = smoothDepthAvailable
       lock.unlock()
       return
     }
@@ -570,6 +604,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestFrameNumber &+= 1
     latestDepthFrameARFrameNumber = arFrameNumber
     consecutiveDepthMisses = 0
+    latestARFrameRawDepthAvailable = rawDepthAvailable
+    latestARFrameSmoothDepthAvailable = smoothDepthAvailable
     let n = latestFrameNumber
     let projectionMatrixArray = webXRMatrixArray(projectionMatrix)
     let projectionCameraImageResolution = [
@@ -700,8 +736,20 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let arFrameTimestamp = latestARFrameTimestamp
     let depthMissCount = totalDepthMisses
     let currentConsecutiveDepthMisses = consecutiveDepthMisses
+    let alternateDepthMissCount = requestedDepthMissesWithAlternateDepth
     let diagnosticDepthType = activeDepthType
+    let rawDepthAvailable = latestARFrameRawDepthAvailable
+    let smoothDepthAvailable = latestARFrameSmoothDepthAvailable
+    let depthMissRequestedType = latestDepthMissRequestedType
+    let depthMissRawAvailable = latestDepthMissRawDepthAvailable
+    let depthMissSmoothAvailable = latestDepthMissSmoothDepthAvailable
     lock.unlock()
+    let latestDepthMissAlternateAvailable: Bool
+    if depthMissRequestedType == .smooth {
+      latestDepthMissAlternateAvailable = depthMissRawAvailable
+    } else {
+      latestDepthMissAlternateAvailable = depthMissSmoothAvailable
+    }
 
     guard let snapshot else {
       if arFrameNumber > 0 || depthMissCount > 0 || currentConsecutiveDepthMisses > 0 {
@@ -726,10 +774,18 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
           "consecutiveDepthMisses": currentConsecutiveDepthMisses,
           "depthFrameArFrameNumber": depthFrameARFrameNumber,
           "depthMisses": depthMissCount,
+          "latestDepthMissRequestedType": depthMissRequestedType.rawValue,
+          "latestDepthMissRawDepthAvailable": depthMissRawAvailable,
+          "latestDepthMissSmoothDepthAvailable": depthMissSmoothAvailable,
           "frameNumber": 0,
           "minDepth": 0,
           "maxDepth": 0,
           "meanDepth": 0,
+          "rawDepthAvailable": rawDepthAvailable,
+          "requestedDepthMissesWithAlternateDepth": alternateDepthMissCount,
+          "requestedDepthMissingButAlternateAvailable": latestDepthMissAlternateAvailable,
+          "requestedDepthType": diagnosticDepthType.rawValue,
+          "smoothDepthAvailable": smoothDepthAvailable,
         ]
       }
       return nil
@@ -754,10 +810,18 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       "consecutiveDepthMisses": currentConsecutiveDepthMisses,
       "depthFrameArFrameNumber": depthFrameARFrameNumber,
       "depthMisses": depthMissCount,
+      "latestDepthMissRequestedType": depthMissRequestedType.rawValue,
+      "latestDepthMissRawDepthAvailable": depthMissRawAvailable,
+      "latestDepthMissSmoothDepthAvailable": depthMissSmoothAvailable,
       "frameNumber": snapshot.frameNumber,
       "minDepth": 0,
       "maxDepth": 0,
       "meanDepth": 0,
+      "rawDepthAvailable": rawDepthAvailable,
+      "requestedDepthMissesWithAlternateDepth": alternateDepthMissCount,
+      "requestedDepthMissingButAlternateAvailable": latestDepthMissAlternateAvailable,
+      "requestedDepthType": diagnosticDepthType.rawValue,
+      "smoothDepthAvailable": smoothDepthAvailable,
     ]
     if let cameraImage = snapshot.cameraImage {
       let capturedImageWidth = CVPixelBufferGetWidth(cameraImage)

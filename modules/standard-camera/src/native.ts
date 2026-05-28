@@ -248,6 +248,14 @@ export interface NativeLiDARDepthFrame {
   readonly consecutiveDepthMisses?: number;
   readonly depthFrameArFrameNumber?: number;
   readonly depthMisses?: number;
+  readonly latestDepthMissRawDepthAvailable?: boolean;
+  readonly latestDepthMissRequestedType?: NativeLiDARDepthType;
+  readonly latestDepthMissSmoothDepthAvailable?: boolean;
+  readonly rawDepthAvailable?: boolean;
+  readonly requestedDepthMissesWithAlternateDepth?: number;
+  readonly requestedDepthMissingButAlternateAvailable?: boolean;
+  readonly requestedDepthType?: NativeLiDARDepthType;
+  readonly smoothDepthAvailable?: boolean;
   /** Column-major 4x4 matrices in WebXR-compatible order. */
   readonly projectionMatrix?: readonly number[];
   /** ARCamera.imageResolution used to scale intrinsics into projectionMatrix. */

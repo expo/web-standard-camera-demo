@@ -385,6 +385,14 @@ test('XRSession.requestAnimationFrame profiles pre-first-depth native misses wit
       arFrameNumber: 7,
       consecutiveDepthMisses: 7,
       depthMisses: 7,
+      latestDepthMissRawDepthAvailable: true,
+      latestDepthMissRequestedType: 'smooth',
+      latestDepthMissSmoothDepthAvailable: false,
+      rawDepthAvailable: true,
+      requestedDepthMissesWithAlternateDepth: 7,
+      requestedDepthMissingButAlternateAvailable: true,
+      requestedDepthType: 'smooth',
+      smoothDepthAvailable: false,
     });
     console.log = (name: unknown, payload?: unknown): void => {
       if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
@@ -420,7 +428,15 @@ test('XRSession.requestAnimationFrame profiles pre-first-depth native misses wit
       consecutiveDepthMisses: 7,
       depthMisses: 7,
       latestFrameNumber: 0,
+      latestDepthMissRawDepthAvailable: true,
+      latestDepthMissRequestedType: 'smooth',
+      latestDepthMissSmoothDepthAvailable: false,
+      rawDepthAvailable: true,
       reason: 'stale-frame',
+      requestedDepthMissesWithAlternateDepth: 7,
+      requestedDepthMissingButAlternateAvailable: true,
+      requestedDepthType: 'smooth',
+      smoothDepthAvailable: false,
       staleFramePolls: 1,
     });
   } finally {

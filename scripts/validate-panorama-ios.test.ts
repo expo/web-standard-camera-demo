@@ -1182,6 +1182,46 @@ test('panorama validator distinguishes ARKit frame delivery from stale scene-dep
   );
 });
 
+test('panorama validator identifies requested depth semantic starvation with alternate depth available', () => {
+  const seen = {
+    PANORAMIC_KEYFRAME_PROFILE: {
+      keyframes: 1,
+      retainedSamples: 781,
+      surfelCount: 781,
+    },
+    PANORAMIC_XR_FRAME_PUMP_PROFILE: {
+      arFrameDelta: 36,
+      arFrameNumber: 40,
+      consecutiveDepthMisses: 35,
+      deliveredFramePolls: 1,
+      depthFrameArFrameNumber: 4,
+      depthFrameDelta: 1,
+      depthMisses: 35,
+      lastDeliveredFrameNumber: 1,
+      latestDepthMissRawDepthAvailable: true,
+      latestDepthMissRequestedType: 'smooth',
+      latestDepthMissSmoothDepthAvailable: false,
+      latestFrameNumber: 1,
+      rawDepthAvailable: true,
+      reason: 'stale-frame',
+      requestedDepthMissesWithAlternateDepth: 35,
+      requestedDepthMissingButAlternateAvailable: true,
+      requestedDepthType: 'smooth',
+      smoothDepthAvailable: false,
+      staleFramePolls: 42,
+    },
+  } satisfies SeenMetrics;
+
+  const summary = panoramaBottleneckSummary(seen);
+
+  expect(summary).toContain(
+    'XR frame pump: stale-frame, depth frame 1 delivered 1, AR frame 40 (+36), depth AR frame 4 lag 36, depth misses 35 consecutive 35, requested smooth, raw available yes, smooth available no, alternate-available misses 35, delivered polls 1, native errors 0, stale polls 42'
+  );
+  expect(summary).toContain(
+    'First-frame diagnosis: ARKit camera frames are still arriving (+36), but WebXR scene-depth snapshots are stuck on depth frame 1; last depth came from AR frame 4, lag 36, depth misses 35 consecutive 35; requested smooth depth was missing while raw depth was available (35 alternate-available misses); this points to native scene-depth starvation rather than JS keyframe rejection'
+  );
+});
+
 test('panorama validator diagnoses ARKit frames with no scene-depth snapshot', () => {
   const seen = {
     PANORAMIC_SCAN_STATS: {

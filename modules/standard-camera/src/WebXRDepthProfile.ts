@@ -825,10 +825,21 @@ export class WebXRSession extends EventTarget {
       errorMessage: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
       errorName: error instanceof Error ? error.name : error === undefined ? undefined : 'Error',
       lastDeliveredFrameNumber: this.#lastDeliveredFrameNumber,
+      // @ref LLP 0020#testing-and-validation - If ARKit frames continue while
+      // requested scene-depth snapshots stall, carry native raw/smoothed
+      // availability through the JS frame-pump log for physical diagnosis.
+      latestDepthMissRawDepthAvailable: nativeFrame?.latestDepthMissRawDepthAvailable,
+      latestDepthMissRequestedType: nativeFrame?.latestDepthMissRequestedType,
+      latestDepthMissSmoothDepthAvailable: nativeFrame?.latestDepthMissSmoothDepthAvailable,
       latestFrameNumber,
       nativeFrameErrorPolls: this.#nativeFrameErrorPolls,
       noFramePolls: this.#noFramePolls,
+      rawDepthAvailable: nativeFrame?.rawDepthAvailable,
       reason,
+      requestedDepthMissesWithAlternateDepth: nativeFrame?.requestedDepthMissesWithAlternateDepth,
+      requestedDepthMissingButAlternateAvailable: nativeFrame?.requestedDepthMissingButAlternateAvailable,
+      requestedDepthType: nativeFrame?.requestedDepthType,
+      smoothDepthAvailable: nativeFrame?.smoothDepthAvailable,
       staleFramePolls: this.#staleFramePolls,
       ...telemetryContextFields(),
     }));

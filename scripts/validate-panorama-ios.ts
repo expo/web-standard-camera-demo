@@ -1841,7 +1841,8 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `XR frame pump: ${stringField(framePump, 'reason') || 'unknown'}, ` +
       `depth frame ${numberField(framePump, 'latestFrameNumber')} delivered ${numberField(framePump, 'lastDeliveredFrameNumber')}, ` +
       `AR frame ${arFrameNumber} (+${numberField(framePump, 'arFrameDelta')})${depthARFrameDetail}, ` +
-      `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}, ` +
+      `depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}` +
+      `${framePumpDepthSemanticDetail(framePump)}, ` +
       optionalErrorDetail(framePump) +
       `delivered polls ${numberField(framePump, 'deliveredFramePolls')}, ` +
       `native errors ${numberField(framePump, 'nativeFrameErrorPolls')}, ` +
@@ -1983,10 +1984,11 @@ function panoramaFirstFrameDiagnosis(seen: SeenMetrics): string {
         const depthMissDetail = numberField(framePump, 'depthMisses') > 0 || numberField(framePump, 'consecutiveDepthMisses') > 0
           ? `, depth misses ${numberField(framePump, 'depthMisses')} consecutive ${numberField(framePump, 'consecutiveDepthMisses')}`
           : '';
+        const requestedDepthDetail = requestedDepthStarvationDetail(framePump);
         if (latestFrameNumber <= 0) {
-          return `First-frame diagnosis: ARKit camera frames are arriving (+${arFrameDelta}), but WebXR scene-depth snapshots have not been produced yet${depthMissDetail}; this points to native scene-depth starvation before JS can add surfels`;
+          return `First-frame diagnosis: ARKit camera frames are arriving (+${arFrameDelta}), but WebXR scene-depth snapshots have not been produced yet${depthMissDetail}${requestedDepthDetail}; this points to native scene-depth starvation before JS can add surfels`;
         }
-        return `First-frame diagnosis: ARKit camera frames are still arriving (+${arFrameDelta}), but WebXR scene-depth snapshots are stuck on depth frame ${latestFrameNumber}${depthSourceDetail}${depthMissDetail}; this points to native scene-depth starvation rather than JS keyframe rejection`;
+        return `First-frame diagnosis: ARKit camera frames are still arriving (+${arFrameDelta}), but WebXR scene-depth snapshots are stuck on depth frame ${latestFrameNumber}${depthSourceDetail}${depthMissDetail}${requestedDepthDetail}; this points to native scene-depth starvation rather than JS keyframe rejection`;
       }
       return `First-frame diagnosis: WebXR native frame delivery stalled (${reason}; no-frame ${noFramePolls}, stale ${staleFramePolls}) before the app could add more surfels`;
     }
@@ -2373,6 +2375,47 @@ function optionalErrorDetail(metric: Record<string, unknown>): string {
   const errorName = stringField(metric, 'errorName');
   const errorMessage = stringField(metric, 'errorMessage');
   return errorName || errorMessage ? `error ${errorName || 'Error'}: ${errorMessage || 'unknown'}, ` : '';
+}
+
+function framePumpDepthSemanticDetail(metric: Record<string, unknown>): string {
+  const requestedDepthType =
+    stringField(metric, 'requestedDepthType') || stringField(metric, 'latestDepthMissRequestedType');
+  const hasDepthSemanticFields =
+    requestedDepthType.length > 0 ||
+    typeof metric.rawDepthAvailable === 'boolean' ||
+    typeof metric.smoothDepthAvailable === 'boolean' ||
+    numberField(metric, 'requestedDepthMissesWithAlternateDepth') > 0;
+  if (!hasDepthSemanticFields) return '';
+  return (
+    `, requested ${requestedDepthType || 'unknown'}` +
+    `, raw available ${formatBooleanAvailability(metric.rawDepthAvailable)}` +
+    `, smooth available ${formatBooleanAvailability(metric.smoothDepthAvailable)}` +
+    `, alternate-available misses ${numberField(metric, 'requestedDepthMissesWithAlternateDepth')}`
+  );
+}
+
+function requestedDepthStarvationDetail(metric: Record<string, unknown>): string {
+  const alternateMisses = numberField(metric, 'requestedDepthMissesWithAlternateDepth');
+  if (metric.requestedDepthMissingButAlternateAvailable !== true && alternateMisses <= 0) {
+    return '';
+  }
+  const requestedDepthType =
+    stringField(metric, 'latestDepthMissRequestedType') || stringField(metric, 'requestedDepthType');
+  const alternateDepthType = requestedDepthType === 'smooth'
+    ? 'raw'
+    : requestedDepthType === 'raw'
+      ? 'smooth'
+      : 'alternate';
+  const countDetail = alternateMisses > 0
+    ? ` (${alternateMisses} alternate-available miss${alternateMisses === 1 ? '' : 'es'})`
+    : '';
+  return `; requested ${requestedDepthType || 'unknown'} depth was missing while ${alternateDepthType} depth was available${countDetail}`;
+}
+
+function formatBooleanAvailability(value: unknown): string {
+  if (value === true) return 'yes';
+  if (value === false) return 'no';
+  return 'unknown';
 }
 
 function formatMeters(value: number): string {

@@ -1292,7 +1292,13 @@ build/upload budgets when present. `PANORAMIC_XR_FRAME_PUMP_PROFILE` reports
 whether the WebXR animation-frame loop is waiting on no native frame or a stale
 depth frame, plus periodic successful delivery counts and native AR
 frame/depth-miss counters, so physical logs can separate ARKit depth starvation
-from JavaScript keyframe gating.
+from JavaScript keyframe gating. When the requested ARKit depth semantic is
+missing, native frame-pump telemetry SHOULD also report whether raw
+`sceneDepth` and smoothed scene depth were present on the latest AR frame and
+how many requested-depth misses had the alternate semantic available. This lets
+profile-only logs distinguish a selected-depth semantic stall, such as smoothed
+depth disappearing while raw depth still arrives, from total ARKit camera/depth
+ownership starvation.
 `PANORAMIC_KEYFRAME_REJECTION_PROFILE` reports the latest throttled keyframe
 skip reason with pose motion, retained surfel count, depth/miss counters, and
 depth/mesh preflight density when available, so a run that captures no new
