@@ -508,11 +508,18 @@ function applyMetricScanBoundary(seen: SeenMetrics, metric: Record<string, unkno
     return false;
   }
   if (scanId === currentScanId) return true;
+  // @ref LLP 0020#testing-and-validation — CAMERA_CTX provider lines are not
+  // scan-scoped, but they often precede the first current-scan PANORAMIC metric.
+  // Preserve them across scan-id resets so ownership races remain diagnosable.
+  const cameraContext = seen.CAMERA_CONTEXT_PROFILE;
   for (const metricName of REQUIRED_METRICS) {
     delete seen[metricName];
   }
   for (const metricName of OPTIONAL_METRICS) {
     delete seen[metricName];
+  }
+  if (cameraContext) {
+    seen.CAMERA_CONTEXT_PROFILE = cameraContext;
   }
   metricLogScanIds.set(seen, scanId);
   return true;
@@ -567,6 +574,19 @@ function parseCameraContextMetricLine(line: string): Record<string, unknown> | n
   }
   if (/CAMERA_CTX start skipped in-flight/.test(line)) {
     return { skippedDuplicateStarts: 1 };
+  }
+  // @ref LLP 0012#camera-ownership-handoff
+  const externalLockEngaged = line.match(/CAMERA_CTX external-lock engaged\s+(\{.*\})/);
+  if (externalLockEngaged) {
+    const detail = safeParseMetric(externalLockEngaged[1] ?? '{}');
+    return {
+      externalLockEngaged: 1,
+      latestExternalLockHadPendingStart: detail.hadPendingStart === true,
+      latestExternalLockHadStream: detail.hadStream === true,
+    };
+  }
+  if (/CAMERA_CTX external-lock released/.test(line)) {
+    return { externalLockReleased: 1 };
   }
   const ignoredLiDAR = line.match(/CAMERA_CTX lidar event ignored\s+(\{.*\})/);
   if (ignoredLiDAR) {
@@ -841,6 +861,10 @@ function mergeObservedMetric(
       ...incoming,
       blockedExternalLockStarts: numberField(existing, 'blockedExternalLockStarts') +
         numberField(incoming, 'blockedExternalLockStarts'),
+      externalLockEngaged: numberField(existing, 'externalLockEngaged') +
+        numberField(incoming, 'externalLockEngaged'),
+      externalLockReleased: numberField(existing, 'externalLockReleased') +
+        numberField(incoming, 'externalLockReleased'),
       gumFailRequests: numberField(existing, 'gumFailRequests') + numberField(incoming, 'gumFailRequests'),
       gumOkRequests: numberField(existing, 'gumOkRequests') + numberField(incoming, 'gumOkRequests'),
       ignoredLiDAREvents: numberField(existing, 'ignoredLiDAREvents') +
@@ -860,6 +884,10 @@ function mergeObservedMetric(
         stringField(incoming, 'latestIgnoredLiDARState') || stringField(existing, 'latestIgnoredLiDARState'),
       latestStartConstraints:
         stringField(incoming, 'latestStartConstraints') || stringField(existing, 'latestStartConstraints'),
+      latestExternalLockHadPendingStart:
+        incoming.latestExternalLockHadPendingStart ?? existing.latestExternalLockHadPendingStart,
+      latestExternalLockHadStream:
+        incoming.latestExternalLockHadStream ?? existing.latestExternalLockHadStream,
       latestGumFailRequestId: Math.max(
         numberField(existing, 'latestGumFailRequestId'),
         numberField(incoming, 'latestGumFailRequestId')
@@ -1166,6 +1194,8 @@ export function isValidMetric(name: MetricName, metric: Record<string, unknown>)
       numberField(metric, 'gumOkRequests') > 0 ||
       numberField(metric, 'gumFailRequests') > 0 ||
       numberField(metric, 'blockedExternalLockStarts') > 0 ||
+      numberField(metric, 'externalLockEngaged') > 0 ||
+      numberField(metric, 'externalLockReleased') > 0 ||
       numberField(metric, 'skippedDuplicateStarts') > 0 ||
       numberField(metric, 'ignoredLiDAREvents') > 0 ||
       numberField(metric, 'moduleLoads') > 0;
@@ -1517,6 +1547,8 @@ export function panoramaBottleneckSummary(seen: SeenMetrics, limit = 8): string[
       `Camera context: standard starts ${numberField(cameraContext, 'standardStartRequests')}, ` +
       `gUM ok ${numberField(cameraContext, 'gumOkRequests')}, ` +
       `gUM fail ${numberField(cameraContext, 'gumFailRequests')}, ` +
+      `lock engaged ${numberField(cameraContext, 'externalLockEngaged')}, ` +
+      `released ${numberField(cameraContext, 'externalLockReleased')}, ` +
       `external-lock blocked ${numberField(cameraContext, 'blockedExternalLockStarts')}, ` +
       `duplicate skipped ${numberField(cameraContext, 'skippedDuplicateStarts')}, ` +
       `ignored LiDAR events ${numberField(cameraContext, 'ignoredLiDAREvents')}${gumFailDetail}${ignoredLiDARDetail}`
@@ -1999,6 +2031,7 @@ function cameraOwnershipDiagnosis(seen: SeenMetrics): string {
   const standardStarts = numberField(cameraContext, 'standardStartRequests');
   const gumOk = numberField(cameraContext, 'gumOkRequests');
   const blocked = numberField(cameraContext, 'blockedExternalLockStarts');
+  const lockEngaged = numberField(cameraContext, 'externalLockEngaged');
   const ignoredLiDAR = numberField(cameraContext, 'ignoredLiDAREvents');
   const hasPanoramaScan = Boolean(
     seen.PANORAMIC_SCAN_CONFIG ||
@@ -2007,8 +2040,8 @@ function cameraOwnershipDiagnosis(seen: SeenMetrics): string {
       seen.PANORAMIC_SCAN_STATS
   );
   if (!hasPanoramaScan) return '';
-  if (gumOk > 0 && blocked <= 0) {
-    return `First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (${gumOk} ok, ${standardStarts} starts) without an observed external-lock block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch`;
+  if (gumOk > 0 && blocked <= 0 && lockEngaged <= 0) {
+    return `First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (${gumOk} ok, ${standardStarts} starts) without an observed external-lock engagement/block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch`;
   }
   if (ignoredLiDAR > 0) {
     return `First-frame diagnosis: camera ownership gate ignored ${ignoredLiDAR} stale LiDAR event(s), so copied logs should be checked for a session-id handoff race before assuming JS keyframe gating`;

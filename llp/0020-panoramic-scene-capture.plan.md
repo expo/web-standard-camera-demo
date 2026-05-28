@@ -1283,7 +1283,11 @@ camera profile should preserve standard-camera starts, successful or failed
 `getUserMedia` opens, starts blocked by the WebXR external lock, duplicate
 starts coalesced while a start is in flight, and ignored stale LiDAR terminal
 events so a one-frame scan can be checked for AVFoundation/ARKit ownership
-handoff races. The validator validates the optional preview/live
+handoff races. Since `CAMERA_CTX` lines are process-level provider logs rather
+than scan-scoped `PANORAMIC_*` metrics, the validator should keep the derived
+camera context when a later `scanId` boundary resets scan-scoped metrics; losing
+those lines can hide the standard-camera ownership clue that explains a
+first-frame-only surfel run. The validator validates the optional preview/live
 build/upload budgets when present. `PANORAMIC_XR_FRAME_PUMP_PROFILE` reports
 whether the WebXR animation-frame loop is waiting on no native frame or a stale
 depth frame, plus periodic successful delivery counts and native AR

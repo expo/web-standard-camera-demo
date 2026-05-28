@@ -426,11 +426,14 @@ has established its session id. The WebXR explicit `end()` path MUST mark the
 session ended and cancel callbacks immediately, but it MUST keep the external
 camera lock until the native ARKit stop promise resolves. Runtime logs SHOULD
 keep camera ownership clues visible: standard-camera start attempts, successful
-`getUserMedia` opens, starts blocked by the external lock, duplicate starts
-coalesced while one is in flight, and ignored stale LiDAR terminal events. The
-panorama validator may derive a camera-ownership profile from those logs so a
-one-frame WebXR scan can be distinguished from an AVFoundation/ARKit ownership
-race.
+`getUserMedia` opens, explicit external-lock engagement/release, starts blocked
+by the external lock, duplicate starts coalesced while one is in flight, and
+ignored stale LiDAR terminal events. Because provider logs do not carry a
+panorama `scanId`, the panorama validator should preserve the derived
+camera-ownership profile across scan-id boundaries in a pasted log. That lets a
+one-frame WebXR scan be distinguished from an AVFoundation/ARKit ownership race
+even when the relevant `CAMERA_CTX` lines precede the first current-scan
+`PANORAMIC_*` metric.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,

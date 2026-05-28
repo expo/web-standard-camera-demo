@@ -235,22 +235,45 @@ test('panorama validator preserves camera context ownership clues from copied lo
   const seen = parseMetricLogText(`
  LOG CAMERA_CTX start req=3 {"facingMode":"environment"}
  LOG CAMERA_CTX gUM-ok req=3 tracks=1
+ LOG CAMERA_CTX external-lock engaged {"hadPendingStart":true,"hadStream":false}
  LOG CAMERA_CTX start blocked external-lock {"facingMode":"environment"}
  LOG CAMERA_CTX start skipped in-flight {"facingMode":"environment"}
  LOG CAMERA_CTX lidar event ignored {"activeSessionId":2,"reason":"stale-session","sessionId":1,"state":"stopped"}
+ LOG CAMERA_CTX external-lock released
   `);
 
   expect(seen.CAMERA_CONTEXT_PROFILE).toMatchObject({
     blockedExternalLockStarts: 1,
+    externalLockEngaged: 1,
+    externalLockReleased: 1,
     gumOkRequests: 1,
     ignoredLiDAREvents: 1,
+    latestExternalLockHadPendingStart: true,
+    latestExternalLockHadStream: false,
     latestGumOkRequestId: 3,
     latestIgnoredLiDARReason: 'stale-session',
     skippedDuplicateStarts: 1,
     standardStartRequests: 1,
   });
   expect(panoramaBottleneckSummary(seen)).toContain(
-    'Camera context: standard starts 1, gUM ok 1, gUM fail 0, external-lock blocked 1, duplicate skipped 1, ignored LiDAR events 1, ignored LiDAR stale-session'
+    'Camera context: standard starts 1, gUM ok 1, gUM fail 0, lock engaged 1, released 1, external-lock blocked 1, duplicate skipped 1, ignored LiDAR events 1, ignored LiDAR stale-session'
+  );
+});
+
+test('panorama validator keeps camera context clues across scan-id boundaries', () => {
+  const seen = parseMetricLogText(`
+ LOG CAMERA_CTX start req=7 {"facingMode":"environment"}
+ LOG CAMERA_CTX gUM-ok req=7 tracks=1
+ LOG PANORAMIC_SCAN_CONFIG {"depthPreference":"smooth","depthTypeRequest":["smooth","raw"],"meshRequested":false,"scanId":8,"sessionDepthType":"smooth"}
+ LOG PANORAMIC_KEYFRAME_PROFILE {"keyframes":1,"rawSampleCount":781,"retainedSamples":781,"scanId":8,"surfelCount":781}
+  `);
+
+  expect(seen.CAMERA_CONTEXT_PROFILE).toMatchObject({
+    gumOkRequests: 1,
+    standardStartRequests: 1,
+  });
+  expect(panoramaBottleneckSummary(seen)).toContain(
+    'First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (1 ok, 1 starts) without an observed external-lock engagement/block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch'
   );
 });
 
@@ -833,10 +856,10 @@ test('panorama validator identifies standard-camera ownership races behind one-f
   const summary = panoramaBottleneckSummary(seen);
 
   expect(summary).toContain(
-    'Camera context: standard starts 1, gUM ok 1, gUM fail 0, external-lock blocked 0, duplicate skipped 0, ignored LiDAR events 0'
+    'Camera context: standard starts 1, gUM ok 1, gUM fail 0, lock engaged 0, released 0, external-lock blocked 0, duplicate skipped 0, ignored LiDAR events 0'
   );
   expect(summary).toContain(
-    'First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (1 ok, 1 starts) without an observed external-lock block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch'
+    'First-frame diagnosis: standard camera getUserMedia succeeded in the same panorama log (1 ok, 1 starts) without an observed external-lock engagement/block; if this overlaps the scan, AVFoundation may be stealing camera ownership from ARKit after the first surfel batch'
   );
 });
 

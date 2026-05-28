@@ -209,6 +209,13 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     }
     const live = streamRef.current;
     const pendingMedia = getUserMediaInFlightRef.current;
+    // @ref LLP 0012#camera-ownership-handoff — Pasted device logs need to
+    // prove whether WebXR actually acquired the external camera lock before a
+    // standard getUserMedia start could steal AVFoundation from ARKit.
+    console.log(`CAMERA_CTX external-lock engaged ${JSON.stringify({
+      hadPendingStart: pendingMedia !== null,
+      hadStream: live !== null,
+    })}`);
     streamRef.current = null;
     if (mountedRef.current) {
       setStreamState(null);
@@ -234,6 +241,8 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   }, [cameraOwnershipGate]);
 
   const unlockExternal = React.useCallback((): void => {
+    // @ref LLP 0012#camera-ownership-handoff
+    console.log('CAMERA_CTX external-lock released');
     cameraOwnershipGate.unlockExternal();
     if (mountedRef.current) {
       setExternalLocked(false);
