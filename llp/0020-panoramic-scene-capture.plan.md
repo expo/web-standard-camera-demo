@@ -1275,8 +1275,10 @@ scan coverage at least 25% when scan stats are present, nonzero scene bounds,
 no more than the configured sparse depth-grid sample budget per keyframe, and
 the expected `intrinsics-projection` unprojection mode when that field is
 present. When keyframe telemetry reports `depthType`, validation also
-expects `"raw"` so a physical run proves the default current-frame depth path
-instead of silently testing smoothed-depth delivery. These budgets can be
+expects `"raw"`. When scan-config telemetry is present, validation expects a
+raw-first `depthTypeRequest` and `sessionDepthType: "raw"` so a physical run
+proves the default current-frame depth path instead of silently testing
+smoothed-depth delivery. These budgets can be
 overridden with the validator's `--max-*`/`--min-*` flags when profiling a
 different device class. The validator
 prints optional profiling telemetry (`PANORAMIC_LIVE_MODEL_PROFILE`,

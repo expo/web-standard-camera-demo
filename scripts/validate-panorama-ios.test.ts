@@ -92,6 +92,22 @@ test('panorama validator rejects telemetry outside performance and quality budge
     PANORAMIC_KEYFRAME_PROFILE: { depthType: 'smooth' },
   }))).toContain('Keyframe depth type was not raw');
   expect(metricSetValidationError(completeMetricSet({
+    PANORAMIC_SCAN_CONFIG: {
+      depthPreference: 'smooth',
+      depthTypeRequest: ['smooth', 'raw'],
+      meshRequested: true,
+      sessionDepthType: 'smooth',
+    },
+  }))).toContain('Scan depth request was not raw-first');
+  expect(metricSetValidationError(completeMetricSet({
+    PANORAMIC_SCAN_CONFIG: {
+      depthPreference: 'default',
+      depthTypeRequest: ['raw', 'smooth'],
+      meshRequested: true,
+      sessionDepthType: 'smooth',
+    },
+  }))).toContain('Scan session depth type was not raw');
+  expect(metricSetValidationError(completeMetricSet({
     PANORAMIC_KEYFRAME_PROFILE: { depthGridSampleMode: 'normalized-transform' },
   }))).toContain('Keyframe depth-grid fast path missed');
   expect(metricSetValidationError(completeMetricSet({

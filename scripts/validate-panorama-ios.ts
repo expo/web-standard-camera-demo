@@ -1441,6 +1441,19 @@ export function metricSetValidationError(
   if (depthType && depthType !== EXPECTED_KEYFRAME_DEPTH_TYPE) {
     return `Keyframe depth type was not raw: ${depthType}`;
   }
+  const scanConfig = seen.PANORAMIC_SCAN_CONFIG;
+  if (scanConfig) {
+    const requestedDepthTypes = Array.isArray(scanConfig.depthTypeRequest)
+      ? scanConfig.depthTypeRequest.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    if (requestedDepthTypes.length > 0 && requestedDepthTypes[0] !== EXPECTED_KEYFRAME_DEPTH_TYPE) {
+      return `Scan depth request was not raw-first: [${requestedDepthTypes.join(',')}]`;
+    }
+    const sessionDepthType = stringField(scanConfig, 'sessionDepthType');
+    if (sessionDepthType && sessionDepthType !== EXPECTED_KEYFRAME_DEPTH_TYPE) {
+      return `Scan session depth type was not raw: ${sessionDepthType}`;
+    }
+  }
   const depthGridSampleMode = stringField(keyframe, 'depthGridSampleMode');
   if (depthGridSampleMode && depthGridSampleMode !== EXPECTED_DEPTH_GRID_SAMPLE_MODE) {
     return `Keyframe depth-grid fast path missed: ${depthGridSampleMode}`;
