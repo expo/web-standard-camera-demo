@@ -20,11 +20,12 @@ private let lidarStartupTimeoutSeconds: TimeInterval = 5
 private let webXRFrameSnapshotRetentionCount: UInt64 = 3
 private let webXRMeshGeometrySignatureSampleCount = 17
 private let webXRMeshPayloadMaxTrianglesPerAnchor = 900
-// @ref LLP 0013#xr-depth-information — ARKit confidence stays inside the
-// WebXR runtime; raw depth for panorama fusion favors high-confidence current
-// LiDAR samples, while smoothed depth may keep medium-or-better samples. Very
-// sparse confidence-filtered startup frames may fall back to low confidence so
-// WebXR consumers can form geometry instead of stalling at zero surfels.
+// @ref LLP 0013#xr-depth-information
+// @ref LLP 0013#xr-depth-confidence
+// ARKit confidence stays inside the WebXR runtime; raw depth for panorama
+// fusion favors high-confidence current LiDAR samples, while smoothed depth may
+// keep medium-or-better samples. Visual inspection routes may opt into
+// low-confidence positive depth values without exposing ARKit's confidence map.
 private let minimumRawARKitDepthConfidence = UInt8(ARConfidenceLevel.high.rawValue)
 private let minimumSmoothARKitDepthConfidence = UInt8(ARConfidenceLevel.medium.rawValue)
 private let minimumDepthValidPercentBeforeLowConfidenceFallback = 8.0
@@ -925,7 +926,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   func webXRFramePayload(
     frameNumber: UInt64,
     includeDepthData: Bool,
-    includeCameraImage: Bool
+    includeCameraImage: Bool,
+    includeLowConfidenceDepthData: Bool = false
   ) -> [String: Any]? {
     let payloadStartMs = profilingNowMs()
     lock.lock()
@@ -942,7 +944,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     if includeDepthData {
       let depthStartMs = profilingNowMs()
       let confidenceThreshold: UInt8
-      if snapshot.depthType == .raw {
+      if includeLowConfidenceDepthData {
+        confidenceThreshold = UInt8(ARConfidenceLevel.low.rawValue)
+      } else if snapshot.depthType == .raw {
         confidenceThreshold = minimumRawARKitDepthConfidence
       } else {
         confidenceThreshold = minimumSmoothARKitDepthConfidence
@@ -961,7 +965,8 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
         (Double(max(depthPixelCount, 0)) * minimumDepthValidPercentBeforeLowConfidenceFallback / 100).rounded(.up)
       )
       let confidenceFilteredDepthTooSparse = depthPayload.validDepthCount < max(1, minimumDepthValidCount)
-      if confidenceFilteredDepthTooSparse &&
+      if !includeLowConfidenceDepthData &&
+          confidenceFilteredDepthTooSparse &&
           depthPayload.confidenceFilteredDepthCount > 0,
           let fallbackPayload = makeDepthData(
             from: snapshot.depthMap,
@@ -1122,9 +1127,9 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
           .advanced(by: y * confidenceRowBytes)
           .assumingMemoryBound(to: UInt8.self)
         for x in 0..<width {
-          // @ref LLP 0013#xr-depth-information — WebXR encodes invalid depth
-          // as 0; ARKit confidence-filtered scene-depth samples are treated
-          // as unavailable without exposing a non-standard confidence map.
+          // @ref LLP 0013#xr-depth-confidence — WebXR encodes invalid depth
+          // as 0; ARKit confidence filtering is applied internally according
+          // to the session's requested confidence preference.
           let confidence = confidenceValues?[x]
           if let confidence {
             if confidence <= 0 {

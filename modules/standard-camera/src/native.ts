@@ -168,6 +168,12 @@ export interface NativeStandardCameraModule {
     includeDepthData: boolean,
     includeCameraImage: boolean
   ): NativeLiDARDepthFramePayload | null;
+  getWebXRLiDARDepthFramePayloadWithOptions(
+    frameNumber: number,
+    includeDepthData: boolean,
+    includeCameraImage: boolean,
+    includeLowConfidenceDepthData: boolean
+  ): NativeLiDARDepthFramePayload | null;
   getWebXRLiDARDepthFrameMeshes(frameNumber: number): NativeWebXRMesh[] | null;
   addListener(
     eventName: 'onLiDARDepthSessionState',
@@ -365,6 +371,8 @@ const unavailableBackend: NativeStandardCameraModule = {
   stopLiDARDepth: () => unavailable('StandardCamera.stopLiDARDepth'),
   getLatestWebXRLiDARDepthFrame: () => unavailable('StandardCamera.getLatestWebXRLiDARDepthFrame'),
   getWebXRLiDARDepthFramePayload: () => unavailable('StandardCamera.getWebXRLiDARDepthFramePayload'),
+  getWebXRLiDARDepthFramePayloadWithOptions: () =>
+    unavailable('StandardCamera.getWebXRLiDARDepthFramePayloadWithOptions'),
   getWebXRLiDARDepthFrameMeshes: () => unavailable('StandardCamera.getWebXRLiDARDepthFrameMeshes'),
   addListener: () => unavailable('StandardCamera.addListener'),
 };

@@ -1140,6 +1140,74 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
   }
 });
 
+test('XRCPUDepthInformation requests low-confidence native depth when the session opts in', () => {
+  const originalAddListener = NativeStandardCamera.addListener;
+  const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
+  const originalPayloadWithOptionsGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayloadWithOptions;
+  const nativeBuffer = new ArrayBuffer(4);
+  const nativeBytes = new Uint8Array(nativeBuffer);
+  nativeBytes.set(new Uint8Array(new Float32Array([1.25]).buffer));
+  let requestedLowConfidence: boolean | null = null;
+  let requestedDepthData: boolean | null = null;
+  let requestedCameraImage: boolean | null = null;
+
+  try {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => {
+      throw new Error('old payload bridge should not be used');
+    };
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayloadWithOptions = (
+      _frameNumber,
+      includeDepthData,
+      includeCameraImage,
+      includeLowConfidenceDepthData
+    ) => {
+      requestedDepthData = includeDepthData;
+      requestedCameraImage = includeCameraImage;
+      requestedLowConfidence = includeLowConfidenceDepthData;
+      return {
+        confidenceMapUsed: true,
+        confidenceFilteredDepthCount: 0,
+        confidenceThreshold: 0,
+        depthData: nativeBytes,
+        frameNumber: 2,
+        highConfidenceDepthCount: 0,
+        invalidDepthCount: 0,
+        lowConfidenceDepthCount: 1,
+        maxDepth: 1.25,
+        mediumConfidenceDepthCount: 0,
+        meanDepth: 1.25,
+        minDepth: 1.25,
+        validDepthCount: 1,
+      };
+    };
+
+    const session = new WebXRSession({
+      cameraAccessEnabled: false,
+      cameraFormat: 'bgra8unorm',
+      depthEnabled: true,
+      lowConfidenceDepthEnabled: true,
+      depthType: 'raw',
+      meshDetectionEnabled: false,
+      sessionId: 2,
+    });
+    const frame = new WebXRFrame(session, makeNativeFrame(2), 123);
+    const referenceSpace = new WebXRReferenceSpace(session, 'viewer');
+    const view = new WebXRView(frame, referenceSpace);
+    const depth = new WebXRCPUDepthInformation(frame, view);
+
+    expect(depth.data).toBe(nativeBuffer);
+    expect(requestedDepthData === true).toBe(true);
+    expect(requestedCameraImage === false).toBe(true);
+    expect(requestedLowConfidence === true).toBe(true);
+  } finally {
+    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
+    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayloadWithOptions =
+      originalPayloadWithOptionsGetter;
+  }
+});
+
 test('XRCPUDepthInformation logs native payload bridge failures before reporting unavailable depth', () => {
   const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
   const originalConsoleLog = console.log;

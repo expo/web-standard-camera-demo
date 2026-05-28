@@ -97,6 +97,12 @@ This repo-local profile supports exactly:
   - selected from `depthTypeRequest`
   - `"raw"` maps to ARKit current-frame scene depth
   - `"smooth"` maps to ARKit smoothed scene depth
+- Depth confidence preference:
+  - `"default"` keeps ARKit confidence filtering internal and exposes positive
+    depth values that satisfy the depth type's normal confidence threshold
+  - `"low"` keeps low-confidence positive ARKit depth values in
+    `XRCPUDepthInformation.data` for visual inspection without exposing the
+    confidence map
 - View count:
   - exactly one `XRView` per frame
   - `XRView.eye === "none"`
@@ -175,6 +181,7 @@ type XRFeatureDescriptor = "depth-sensing" | "camera-access" | "mesh-detection";
 type XRDepthType = "raw" | "smooth";
 type XRDepthUsage = "cpu-optimized";
 type XRDepthDataFormat = "float32";
+type XRDepthConfidencePreference = "default" | "low";
 
 type XRCameraUsage = "cpu-optimized";
 type XRCameraFormat = "rgba8unorm" | "bgra8unorm";
@@ -190,6 +197,7 @@ interface XRDepthStateInit {
   usagePreference: XRDepthUsage[];
   dataFormatPreference: XRDepthDataFormat[];
   depthTypeRequest?: XRDepthType[];
+  confidencePreference?: XRDepthConfidencePreference;
   matchDepthView?: boolean;
 }
 
@@ -365,6 +373,9 @@ capability check.
    - The selected `depthType` is observable, so the native ARKit session MUST run
      the matching frame semantic. It MUST NOT report `"raw"` while delivering
      `smoothedSceneDepth`, or report `"smooth"` while delivering `sceneDepth`.
+   - `confidencePreference` defaults to `"default"`. `"low"` is a repo-local
+     visual inspection option that keeps low-confidence positive ARKit depth
+     values in the CPU depth buffer while still hiding the confidence map.
    - `matchDepthView` MUST be treated as `true`; `false` is unsupported.
 8. Select a camera configuration:
    - `usagePreference` MUST include `"cpu-optimized"`.
@@ -398,6 +409,20 @@ is active, or if a previous `requestSession("immersive-ar")` call is still
 waiting for the external camera lock or native ARKit startup, a second
 `requestSession("immersive-ar")` call MUST reject with `InvalidStateError`
 before acquiring or releasing the external camera lock.
+
+## `xr-depth-confidence`
+
+ARKit scene depth supplies a confidence map, but this WebXR-shaped profile MUST
+keep that map internal. With `confidencePreference: "default"`, native payload
+creation SHOULD apply the depth type's normal confidence threshold and encode
+confidence-filtered samples as `0` depth. With `confidencePreference: "low"`,
+native payload creation SHOULD preserve positive ARKit depth values even when
+ARKit marks them low confidence, so visual inspection surfaces can render the
+phone-provided ambiguous depth instead of interpolating from neighboring pixels.
+
+The `"low"` preference is not intended for reconstruction-quality sampling.
+Routes that build persistent geometry SHOULD continue to use `"default"` unless
+they explicitly accept low-confidence sensor noise.
 
 ## `xr-camera-resolution`
 
@@ -568,7 +593,9 @@ object.
   when the stricter threshold would make the payload empty or too sparse for
   downstream WebXR consumers to form geometry. Payload telemetry SHOULD report
   whether this fallback was used and whether it was caused by an empty or sparse
-  high/medium-confidence frame.
+  high/medium-confidence frame. If the session was created with
+  `confidencePreference: "low"`, low-confidence positive ARKit depth values
+  SHOULD be preserved instead of treated as unavailable.
 - `normDepthBufferFromNormView` MUST map normalized view coordinates into
   normalized depth-buffer coordinates. It MAY be identity only if the native
   implementation has already produced view-aligned depth.

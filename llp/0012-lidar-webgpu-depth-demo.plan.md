@@ -380,8 +380,14 @@ quarter-meter contour markers and yellow one-meter contour
 markers for measurement. Depth and Compare keep boundary/discontinuity pixels in
 the depth palette and use luminance contrast rather than replacing them with a
 flat rim color, so object edges remain depth-colored while still reading as
-boundaries. Compare's depth side uses the same depth-map renderer at reduced
-strength so measurement and outline tuning stays consistent between views.
+boundaries. Depth mode requests low-confidence positive ARKit depth values for
+visual inspection, composites the depth palette at 85% opacity over in-frame
+camera pixels, and composites it at 100% opacity outside the fitted camera
+frame. Pixels with no positive phone-provided depth should fall back to an
+ambiguous depth-tinted overlay rather than borrowing neighboring depth or
+leaking raw camera pixels. Compare's depth side uses the same depth-map renderer
+at reduced strength so measurement and outline tuning stays consistent between
+views.
 Boundary mode keeps high-contrast edge strokes from local depth discontinuities
 rather than a broad low-opacity foreground fill, because the ARKit scene-depth
 map is low resolution and soft outlines read as blur instead of geometry. Camera

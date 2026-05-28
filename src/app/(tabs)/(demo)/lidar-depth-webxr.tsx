@@ -287,8 +287,21 @@ fn boundaryView(camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
   return color;
 }
 
-fn depthView(depth: f32, depthUv: vec2f) -> vec3f {
-  return depthMapView(depth, depthUv, 1.0);
+fn depthOverlayOpacity(hasCamera: bool) -> f32 {
+  if (hasCamera) {
+    return 0.85;
+  }
+  return 1.0;
+}
+
+fn ambiguousDepthView(camera: vec3f, hasCamera: bool) -> vec3f {
+  let ambiguousColor = mix(clearDepthPalette(0.62), vec3f(0.018, 0.050, 0.070), 0.58);
+  return mix(camera, ambiguousColor, depthOverlayOpacity(hasCamera));
+}
+
+fn depthView(camera: vec3f, depth: f32, depthUv: vec2f, hasCamera: bool) -> vec3f {
+  let depthColor = depthMapView(depth, depthUv, 1.0);
+  return mix(camera, depthColor, depthOverlayOpacity(hasCamera));
 }
 
 fn compareView(screenUv: vec2f, camera: vec3f, depth: f32, depthUv: vec2f) -> vec3f {
@@ -316,20 +329,28 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
   let colorUv = sourceUvForScreen(in.uv, u.colorWidth, u.colorHeight);
+  let hasCamera = inUnitFrame(colorUv);
   let sampledCamera = textureSample(cameraTex, cameraSampler, clamp(colorUv, vec2f(0.0), vec2f(1.0))).rgb;
-  let camera = select(vec3f(0.015, 0.018, 0.026), sampledCamera, inUnitFrame(colorUv));
+  let camera = select(vec3f(0.015, 0.018, 0.026), sampledCamera, hasCamera);
   if (u.frameNumber < 1.0 || u.depthWidth < 1.0 || u.depthHeight < 1.0) {
     return vec4f(camera, 1.0);
   }
 
   let depthUv = sourceUvForScreen(in.uv, u.depthWidth, u.depthHeight);
+  let isDepthMode = u.mode > 0.5 && u.mode <= 1.5;
   let inDepthFrame = inUnitFrame(depthUv);
   if (!inDepthFrame) {
+    if (isDepthMode) {
+      return vec4f(ambiguousDepthView(camera, hasCamera), 1.0);
+    }
     return vec4f(camera * 0.42, 1.0);
   }
 
   let depth = sampleDepth(depthUv);
   if (!(depth > 0.0)) {
+    if (isDepthMode) {
+      return vec4f(ambiguousDepthView(camera, hasCamera), 1.0);
+    }
     return vec4f(camera, 1.0);
   }
 
@@ -339,7 +360,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
   } else if (u.mode > 1.5) {
     color = compareView(in.uv, camera, depth, depthUv);
   } else if (u.mode > 0.5) {
-    color = depthView(depth, depthUv);
+    color = depthView(camera, depth, depthUv, hasCamera);
   }
 
   let vignette = smoothstep(1.28, 0.28, length((in.uv - 0.5) * vec2f(u.canvasAspect, 1.0)));
@@ -463,9 +484,10 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
             // @ref LLP 0012#webxr-surface-for-this-demo-only - This viewer
-            // prioritizes visual stability in Depth mode; panorama capture
-            // keeps its raw-first request separately.
+            // prioritizes inspection over reconstruction, so it keeps
+            // ARKit's low-confidence positive depth values visible.
             depthTypeRequest: ['smooth', 'raw'],
+            confidencePreference: 'low',
             matchDepthView: true,
           },
           cameraAccess: {

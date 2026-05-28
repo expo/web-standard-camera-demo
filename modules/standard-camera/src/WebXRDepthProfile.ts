@@ -20,6 +20,7 @@ export type WebXRFeatureDescriptor = 'depth-sensing' | 'camera-access' | 'mesh-d
 export type WebXRDepthType = 'raw' | 'smooth';
 export type WebXRDepthUsage = 'cpu-optimized';
 export type WebXRDepthDataFormat = 'float32';
+export type WebXRDepthConfidencePreference = 'default' | 'low';
 export type WebXRCameraUsage = 'cpu-optimized';
 export type WebXRCameraFormat = 'rgba8unorm' | 'bgra8unorm';
 
@@ -34,6 +35,7 @@ export interface WebXRDepthStateInit {
   usagePreference: WebXRDepthUsage[];
   dataFormatPreference: WebXRDepthDataFormat[];
   depthTypeRequest?: WebXRDepthType[];
+  confidencePreference?: WebXRDepthConfidencePreference;
   matchDepthView?: boolean;
 }
 
@@ -346,6 +348,13 @@ function validateDepthInit(enabled: boolean, required: boolean, init: WebXRDepth
   if (!init.dataFormatPreference.includes('float32')) {
     throw unsupported('Only float32 depth data is supported');
   }
+  if (
+    init.confidencePreference != null &&
+    init.confidencePreference !== 'default' &&
+    init.confidencePreference !== 'low'
+  ) {
+    throw unsupported(`Unsupported depth confidence preference: ${String(init.confidencePreference)}`);
+  }
   for (const type of init.depthTypeRequest ?? []) {
     if (type !== 'smooth' && type !== 'raw') {
       throw unsupported(`Unsupported depth type: ${String(type)}`);
@@ -521,6 +530,9 @@ export class WebXRSystem extends EventTarget {
     // @ref LLP 0013#xr-request-session — Pick one supported observable
     // depth type before starting ARKit so native semantics and session.depthType match.
     const depthType = wantsDepth ? selectedDepthType(caps, options.depthSensing?.depthTypeRequest) : null;
+    // @ref LLP 0013#xr-depth-confidence — Visual inspection sessions may
+    // preserve low-confidence positive depth without exposing confidence maps.
+    const lowConfidenceDepthEnabled = wantsDepth && options.depthSensing?.confidencePreference === 'low';
     if (wantsDepth && !depthType) {
       throw unsupported('Requested depth type is unavailable');
     }
@@ -554,6 +566,7 @@ export class WebXRSystem extends EventTarget {
       cameraAccessEnabled: wantsCamera,
       cameraFormat: wantsCamera ? selectedCameraFormat(options.cameraAccess) : 'bgra8unorm',
       depthEnabled: wantsDepth,
+      lowConfidenceDepthEnabled,
       depthType: wantsDepth ? (started.depthType ?? depthType) : null,
       meshDetectionEnabled: wantsMesh,
       sessionId: started.sessionId ?? null,
@@ -568,6 +581,7 @@ type WebXRSessionConfig = {
   cameraAccessEnabled: boolean;
   cameraFormat: WebXRCameraFormat;
   depthEnabled: boolean;
+  lowConfidenceDepthEnabled?: boolean;
   depthType: WebXRDepthType | null;
   meshDetectionEnabled: boolean;
   sessionId: number | null;
@@ -581,6 +595,7 @@ type ScheduledXRCallback = {
 type NativePayloadRequestProfile = {
   includeCameraImage: boolean;
   includeDepthData: boolean;
+  includeLowConfidenceDepthData?: boolean;
   requestMs: number;
 };
 
@@ -591,6 +606,7 @@ export class WebXRSession extends EventTarget {
   #cameraFormat: WebXRCameraFormat;
   #cameraLockHandlers: CameraLockHandlers | null;
   #depthEnabled: boolean;
+  #lowConfidenceDepthEnabled: boolean;
   #depthType: WebXRDepthType | null;
   #meshDetectionEnabled: boolean;
   #sessionId: number | null;
@@ -616,6 +632,7 @@ export class WebXRSession extends EventTarget {
     this.#cameraFormat = config.cameraFormat;
     this.#cameraLockHandlers = config.cameraLockHandlers ?? cameraLockHandlers;
     this.#depthEnabled = config.depthEnabled;
+    this.#lowConfidenceDepthEnabled = config.lowConfidenceDepthEnabled === true;
     this.#depthType = config.depthType;
     this.#meshDetectionEnabled = config.meshDetectionEnabled;
     this.#sessionId = config.sessionId;
@@ -680,6 +697,10 @@ export class WebXRSession extends EventTarget {
 
   hasDepthAccess(): boolean {
     return this.#depthEnabled;
+  }
+
+  usesLowConfidenceDepth(): boolean {
+    return this.#lowConfidenceDepthEnabled;
   }
 
   hasCameraAccess(): boolean {
@@ -1183,9 +1204,14 @@ export class WebXRFrame {
     this.assertActive();
     if (this.#depthData) return this.#depthData;
     const nativeFrame = nativeFrameFor(this);
+    // @ref LLP 0013#xr-depth-confidence — The native bridge keeps ARKit's
+    // confidence map internal while honoring the session confidence preference.
     const payload = requestNativeFramePayload(nativeFrame, {
       includeCameraImage: false,
       includeDepthData: true,
+      includeLowConfidenceDepthData: typeof this.session.usesLowConfidenceDepth === 'function'
+        ? this.session.usesLowConfidenceDepth()
+        : false,
     });
     this.#depthData = payload?.depthData ?? null;
     return this.#depthData;
@@ -1200,6 +1226,7 @@ export class WebXRFrame {
     const payload = requestNativeFramePayload(nativeFrame, {
       includeCameraImage: true,
       includeDepthData: false,
+      includeLowConfidenceDepthData: false,
     });
     if (!payload?.colorData || payload.colorFormat !== 'bgra8unorm') {
       return null;
@@ -1326,6 +1353,11 @@ function requestNativeFramePayload(
   request: Omit<NativePayloadRequestProfile, 'requestMs'>
 ): NativeLiDARDepthFramePayload | null {
   const requestStart = now();
+  const getPayloadWithOptions = (
+    NativeStandardCamera as typeof NativeStandardCamera & {
+      getWebXRLiDARDepthFramePayloadWithOptions?: unknown;
+    }
+  ).getWebXRLiDARDepthFramePayloadWithOptions;
   const getPayload = (
     NativeStandardCamera as typeof NativeStandardCamera & {
       getWebXRLiDARDepthFramePayload?: unknown;
@@ -1341,12 +1373,22 @@ function requestNativeFramePayload(
 
   let payload: NativeLiDARDepthFramePayload | null | undefined;
   try {
-    payload = getPayload.call(
-      NativeStandardCamera,
-      frame.frameNumber,
-      request.includeDepthData,
-      request.includeCameraImage
-    );
+    if (request.includeLowConfidenceDepthData === true && typeof getPayloadWithOptions === 'function') {
+      payload = getPayloadWithOptions.call(
+        NativeStandardCamera,
+        frame.frameNumber,
+        request.includeDepthData,
+        request.includeCameraImage,
+        true
+      );
+    } else {
+      payload = getPayload.call(
+        NativeStandardCamera,
+        frame.frameNumber,
+        request.includeDepthData,
+        request.includeCameraImage
+      );
+    }
   } catch (e) {
     logNativePayloadUnavailableProfile(frame, {
       ...request,
@@ -1424,6 +1466,7 @@ function logNativePayloadProfile(
     highConfidencePercent: depthPixelCount > 0 ? roundMetric(100 * highConfidenceDepthCount / depthPixelCount, 1) : 0,
     includeCameraImage: request.includeCameraImage,
     includeDepthData: request.includeDepthData,
+    includeLowConfidenceDepthData: request.includeLowConfidenceDepthData === true,
     invalidDepthCount,
     invalidDepthPercent: depthPixelCount > 0 ? roundMetric(100 * invalidDepthCount / depthPixelCount, 1) : 0,
     lowConfidenceDepthCount,
@@ -1468,6 +1511,7 @@ function logNativePayloadUnavailableProfile(
     frameNumber: frame.frameNumber,
     includeCameraImage: request.includeCameraImage,
     includeDepthData: request.includeDepthData,
+    includeLowConfidenceDepthData: request.includeLowConfidenceDepthData === true,
     payloadUnavailable: true,
     requestMs: roundMetric(request.requestMs),
     ...telemetryContextFields(),

@@ -9,6 +9,7 @@ export type WebXRFeatureDescriptor = 'depth-sensing' | 'camera-access' | 'mesh-d
 export type WebXRDepthType = 'raw' | 'smooth';
 export type WebXRDepthUsage = 'cpu-optimized';
 export type WebXRDepthDataFormat = 'float32';
+export type WebXRDepthConfidencePreference = 'default' | 'low';
 export type WebXRCameraUsage = 'cpu-optimized';
 export type WebXRCameraFormat = 'rgba8unorm' | 'bgra8unorm';
 
@@ -23,6 +24,7 @@ export interface WebXRDepthStateInit {
   usagePreference: WebXRDepthUsage[];
   dataFormatPreference: WebXRDepthDataFormat[];
   depthTypeRequest?: WebXRDepthType[];
+  confidencePreference?: WebXRDepthConfidencePreference;
   matchDepthView?: boolean;
 }
 

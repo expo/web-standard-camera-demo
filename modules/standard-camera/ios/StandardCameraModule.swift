@@ -258,6 +258,23 @@ public final class StandardCameraModule: Module {
       )
     }
 
+    Function("getWebXRLiDARDepthFramePayloadWithOptions") { (
+      frameNumber: Double,
+      includeDepthData: Bool,
+      includeCameraImage: Bool,
+      includeLowConfidenceDepthData: Bool
+    ) -> [String: Any]? in
+      // @ref LLP 0013#xr-depth-confidence — Depth Studio may request
+      // low-confidence positive ARKit depth values for visual inspection while
+      // keeping the confidence map internal to the runtime.
+      LiDARDepthSource.shared.webXRFramePayload(
+        frameNumber: UInt64(frameNumber),
+        includeDepthData: includeDepthData,
+        includeCameraImage: includeCameraImage,
+        includeLowConfidenceDepthData: includeLowConfidenceDepthData
+      )
+    }
+
     Function("getWebXRLiDARDepthFrameMeshes") { (frameNumber: Double) -> [[String: Any]]? in
       // @ref LLP 0013#xr-mesh-detection — Internal WebXR bridge helper. JS
       // observes ARKit mesh anchors only through XRFrame.detectedMeshes.
