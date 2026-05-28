@@ -316,10 +316,8 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
   let colorUv = sourceUvForScreen(in.uv, u.colorWidth, u.colorHeight);
-  var camera = vec3f(0.015, 0.018, 0.026);
-  if (inUnitFrame(colorUv)) {
-    camera = textureSample(cameraTex, cameraSampler, colorUv).rgb;
-  }
+  let sampledCamera = textureSample(cameraTex, cameraSampler, clamp(colorUv, vec2f(0.0), vec2f(1.0))).rgb;
+  let camera = select(vec3f(0.015, 0.018, 0.026), sampledCamera, inUnitFrame(colorUv));
   if (u.frameNumber < 1.0 || u.depthWidth < 1.0 || u.depthHeight < 1.0) {
     return vec4f(camera, 1.0);
   }
