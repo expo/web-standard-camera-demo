@@ -577,7 +577,10 @@ export function installDomShim(): void {
   // a browser, keep the browser-owned constructor: the web runner exercises
   // native browser APIs directly, and replacing DOMException would make real
   // browser errors fail instanceof checks.
-  const hasBrowserDocument = typeof document !== 'undefined' && typeof document.createElement === 'function';
+  const hasBrowserDocument =
+    g.document !== docStub &&
+    typeof document !== 'undefined' &&
+    typeof document.createElement === 'function';
   let SharedDOMException = g.DOMException as new (
     message: string,
     name: string,
@@ -594,7 +597,7 @@ export function installDomShim(): void {
     SharedDOMException = DOMExceptionCls;
   }
 
-  if (!g.OverconstrainedError) {
+  if (!hasBrowserDocument || !g.OverconstrainedError) {
     // Per spec, `OverconstrainedError` IS a `DOMException` with name
     // `"OverconstrainedError"` plus a `constraint` field. WPT tests assert
     // `new OverconstrainedError(...) instanceof DOMException`, so the JS
