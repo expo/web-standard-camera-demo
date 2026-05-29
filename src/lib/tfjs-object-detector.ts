@@ -2,6 +2,8 @@ import type { GraphModel } from '@tensorflow/tfjs-converter';
 import type * as TfjsModule from '@tensorflow/tfjs';
 import type { File as ExpoFileSystemFile, FileHandle, FileMode as ExpoFileMode } from 'expo-file-system';
 
+import { nowMs, round, traceNeuralLens } from './neural-lens-trace';
+
 export const TFJS_OBJECT_PROBES = [
   {
     accentColor: '#60a5fa',
@@ -267,6 +269,12 @@ export function getTfjsObjectCacheInfo(): TfjsObjectCacheInfo {
 function setModelLoadState(status: TfjsModelStatus, phase: TfjsModelLoadPhase): void {
   modelStatus = status;
   modelLoadPhase = phase;
+  traceNeuralLens('tfjs-model-state', {
+    modelLoadCount,
+    phase,
+    runtimeInitCount,
+    status,
+  });
   emitTfjsObjectCacheInfo();
 }
 
@@ -318,8 +326,18 @@ export function makeObjectSceneSummary(detections: readonly ObjectDetectionBox[]
 }
 
 async function loadTfjsObjectModel(): Promise<ObjectModel> {
+  traceNeuralLens('tfjs-model-request', {
+    hasModelPromise: modelPromise !== null,
+    modelLoadCount,
+    modelLoadPhase,
+    modelStatus,
+  });
   if (!modelPromise) {
     modelPromise = (async () => {
+      const modelStartedAt = nowMs();
+      traceNeuralLens('tfjs-model-build-start', {
+        modelLoadCount,
+      });
       setModelLoadState('loading', 'runtime');
       const runtime = await ensureTfjsRuntime();
       await yieldToUi();
@@ -327,13 +345,25 @@ async function loadTfjsObjectModel(): Promise<ObjectModel> {
       const graph = await loadBundledCocoSsdGraphModel(runtime);
       setModelLoadState('loading', 'warmup');
       await yieldToUi();
+      const warmupStartedAt = nowMs();
+      traceNeuralLens('tfjs-model-warmup-start', {
+        backend: runtime.info.backend,
+      });
       const zeroTensor = runtime.tf.zeros([1, 300, 300, 3], 'int32');
       const warmup = await graph.executeAsync(zeroTensor);
       await Promise.all(asTensorArray(warmup).map((tensor) => tensor.data()));
       runtime.tf.dispose(warmup);
       zeroTensor.dispose();
+      traceNeuralLens('tfjs-model-warmup-done', {
+        durationMs: round(nowMs() - warmupStartedAt),
+      });
       modelLoadCount += 1;
       setModelLoadState('ready', 'ready');
+      traceNeuralLens('tfjs-model-build-done', {
+        backend: runtime.info.backend,
+        modelLoadCount,
+        totalMs: round(nowMs() - modelStartedAt),
+      });
       return {
         graph,
         loadMs: Date.now() - start,
@@ -346,6 +376,9 @@ async function loadTfjsObjectModel(): Promise<ObjectModel> {
   } catch (error) {
     modelPromise = null;
     setModelLoadState('error', 'error');
+    traceNeuralLens('tfjs-model-build-error', {
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
     throw error;
   }
 }
@@ -353,41 +386,80 @@ async function loadTfjsObjectModel(): Promise<ObjectModel> {
 async function ensureTfjsRuntime(): Promise<ObjectRuntime> {
   if (!runtimePromise) {
     runtimePromise = (async () => {
-      const start = Date.now();
+      const start = nowMs();
+      traceNeuralLens('tfjs-runtime-start');
       if (!isWebRuntime() && !globalThis.navigator?.gpu) {
         try {
+          const nativeWgpuStartedAt = nowMs();
           await import('react-native-wgpu');
+          traceNeuralLens('tfjs-runtime-native-wgpu-import-done', {
+            durationMs: round(nowMs() - nativeWgpuStartedAt),
+          });
           await yieldToUi();
-        } catch {
+        } catch (error) {
+          traceNeuralLens('tfjs-runtime-native-wgpu-import-error', {
+            error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+          });
           // TFJS will fall back to CPU below if the native WebGPU polyfill cannot load.
         }
       }
+      const tfImportStartedAt = nowMs();
       const tf = await import('@tensorflow/tfjs');
+      traceNeuralLens('tfjs-runtime-tf-import-done', {
+        durationMs: round(nowMs() - tfImportStartedAt),
+      });
       await yieldToUi();
+      const backendImportStartedAt = nowMs();
       await import('@tensorflow/tfjs-backend-webgpu');
+      traceNeuralLens('tfjs-runtime-webgpu-backend-import-done', {
+        durationMs: round(nowMs() - backendImportStartedAt),
+      });
       const hasNavigatorGpu = Boolean(globalThis.navigator?.gpu);
 
       if (hasNavigatorGpu) {
         try {
+          const backendStartedAt = nowMs();
           await tf.setBackend('webgpu');
           await tf.ready();
-        } catch {
+          traceNeuralLens('tfjs-runtime-backend-ready', {
+            backend: tf.getBackend(),
+            durationMs: round(nowMs() - backendStartedAt),
+          });
+        } catch (error) {
+          traceNeuralLens('tfjs-runtime-webgpu-backend-error', {
+            error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+          });
+          const backendStartedAt = nowMs();
           await tf.setBackend('cpu');
           await tf.ready();
+          traceNeuralLens('tfjs-runtime-backend-ready', {
+            backend: tf.getBackend(),
+            durationMs: round(nowMs() - backendStartedAt),
+          });
         }
       } else {
+        const backendStartedAt = nowMs();
         await tf.setBackend('cpu');
         await tf.ready();
+        traceNeuralLens('tfjs-runtime-backend-ready', {
+          backend: tf.getBackend(),
+          durationMs: round(nowMs() - backendStartedAt),
+        });
       }
 
       runtimeInitCount += 1;
       const backend = tf.getBackend();
       emitTfjsObjectCacheInfo();
+      traceNeuralLens('tfjs-runtime-done', {
+        backend,
+        hasNavigatorGpu,
+        totalMs: round(nowMs() - start),
+      });
       return {
         info: {
           backend,
           hasNavigatorGpu,
-          initMs: Date.now() - start,
+          initMs: Math.round(nowMs() - start),
           isWebGpu: backend === 'webgpu',
         },
         tf,
@@ -408,10 +480,20 @@ async function detectTfjsObjects(
   source: TfjsObjectSource,
   options?: { maxBoxes?: number; minScore?: number }
 ): Promise<TfjsObjectResult> {
-  const detectStart = Date.now();
+  const detectStart = nowMs();
   const tf = model.runtime.tf;
+  traceNeuralLens('tfjs-detect-graph-start', {
+    backend: model.runtime.info.backend,
+    inputHeight: input.height,
+    inputWidth: input.width,
+    source: source.kind,
+  });
   const batched = tf.tidy(() => tf.expandDims(input.tensor));
   const output = asTensorArray(await model.graph.executeAsync(batched));
+  traceNeuralLens('tfjs-detect-graph-done', {
+    durationMs: round(nowMs() - detectStart),
+    source: source.kind,
+  });
   const scoresTensor = output[0];
   const boxesTensor = output[1];
   if (!scoresTensor || !boxesTensor) {
@@ -421,10 +503,16 @@ async function detectTfjsObjects(
   }
   const scoresShape = scoresTensor.shape;
   const boxesShape = boxesTensor.shape;
+  const dataStartedAt = nowMs();
   const [scores, boxes] = await Promise.all([scoresTensor.data(), boxesTensor.data()]);
+  traceNeuralLens('tfjs-detect-output-data-done', {
+    durationMs: round(nowMs() - dataStartedAt),
+    source: source.kind,
+  });
   batched.dispose();
   tf.dispose(output);
 
+  const nmsStartedAt = nowMs();
   const [maxScores, classes] = calculateMaxScores(scores, scoresShape[1] ?? 0, scoresShape[2] ?? 0);
   const boxes2d = tf.tensor2d(boxes, [boxesShape[1] ?? 0, boxesShape[3] ?? 4]);
   const scores1d = tf.tensor1d(maxScores);
@@ -444,6 +532,11 @@ async function detectTfjsObjects(
     boxes2d.dispose();
     scores1d.dispose();
   }
+  traceNeuralLens('tfjs-detect-nms-done', {
+    durationMs: round(nowMs() - nmsStartedAt),
+    indexes: indexes.length,
+    source: source.kind,
+  });
 
   const detections = buildDetectedObjects(
     input.width,
@@ -457,7 +550,7 @@ async function detectTfjsObjects(
   return {
     backend: model.runtime.info,
     cache: getTfjsObjectCacheInfo(),
-    detectMs: Date.now() - detectStart,
+    detectMs: Math.round(nowMs() - detectStart),
     detections,
     input: {
       height: input.height,
@@ -472,11 +565,21 @@ async function detectTfjsObjects(
 
 async function loadBundledCocoSsdGraphModel(runtime: ObjectRuntime): Promise<GraphModel> {
   setModelLoadState('loading', 'weights');
+  const weightsStartedAt = nowMs();
   const weightData = await loadBundledWeightData();
+  traceNeuralLens('tfjs-model-weights-ready', {
+    bytes: weightData.buffer.byteLength,
+    durationMs: round(nowMs() - weightsStartedAt),
+    source: weightData.source,
+  });
   const modelJson = getBundledModelJson();
   await yieldToUi();
   setModelLoadState('loading', 'graph');
+  const converterStartedAt = nowMs();
   const tfconv = await import('@tensorflow/tfjs-converter');
+  traceNeuralLens('tfjs-model-converter-import-done', {
+    durationMs: round(nowMs() - converterStartedAt),
+  });
   await yieldToUi();
   const handler = runtime.tf.io.fromMemory({
     convertedBy: modelJson.convertedBy,
@@ -486,26 +589,46 @@ async function loadBundledCocoSsdGraphModel(runtime: ObjectRuntime): Promise<Gra
     weightData: weightData.buffer,
     weightSpecs: modelJson.weightsManifest.flatMap((group) => group.weights),
   });
-  return await withTimeout(
+  const graphStartedAt = nowMs();
+  const graph = await withTimeout(
     tfconv.loadGraphModel(handler, undefined, runtime.tf.io),
     MODEL_ASSET_TIMEOUT_MS,
     'COCO-SSD graph load'
   );
+  traceNeuralLens('tfjs-model-graph-load-done', {
+    durationMs: round(nowMs() - graphStartedAt),
+  });
+  return graph;
 }
 
 async function loadBundledWeightData(): Promise<LoadedWeightData> {
+  if (weightDataPromise) {
+    traceNeuralLens('tfjs-model-weights-cache-hit', {
+      modelWeightSource: modelWeightSource ?? null,
+    });
+  }
   if (!weightDataPromise) {
     weightDataPromise = (async () => {
+      const startedAt = nowMs();
+      traceNeuralLens('tfjs-model-weights-load-start');
       const buffers: ArrayBuffer[] = [];
       const sources = new Set<TfjsModelWeightSource>();
       const shards = getBundledModelShards();
       for (let i = 0; i < shards.length; i += 1) {
         const shard = shards[i];
+        const shardStartedAt = nowMs();
         const asset = await withTimeout(
           readBundledAssetArrayBuffer(shard.filename, shard.moduleId as MetroAssetModule),
           MODEL_ASSET_TIMEOUT_MS,
           `COCO-SSD weight shard ${i + 1}`
         );
+        traceNeuralLens('tfjs-model-weight-shard-done', {
+          bytes: asset.buffer.byteLength,
+          durationMs: round(nowMs() - shardStartedAt),
+          filename: shard.filename,
+          index: i + 1,
+          source: asset.source,
+        });
         buffers.push(asset.buffer);
         sources.add(asset.source);
         await yieldToUi();
@@ -515,8 +638,16 @@ async function loadBundledWeightData(): Promise<LoadedWeightData> {
         : 'mixed';
       modelWeightSource = source;
       emitTfjsObjectCacheInfo();
+      const concatStartedAt = nowMs();
+      const buffer = await concatArrayBuffers(buffers);
+      traceNeuralLens('tfjs-model-weights-load-done', {
+        bytes: buffer.byteLength,
+        concatMs: round(nowMs() - concatStartedAt),
+        source,
+        totalMs: round(nowMs() - startedAt),
+      });
       return {
-        buffer: await concatArrayBuffers(buffers),
+        buffer,
         source,
       };
     })();
@@ -536,6 +667,11 @@ async function readBundledAssetArrayBuffer(
 ): Promise<LoadedModelAssetBuffer> {
   const nativeBuffer = await readNativeBundledModelAsset(filename);
   if (nativeBuffer) {
+    traceNeuralLens('tfjs-model-weight-source', {
+      bytes: nativeBuffer.byteLength,
+      filename,
+      source: 'native-bundle',
+    });
     return {
       buffer: nativeBuffer,
       source: 'native-bundle',
@@ -547,6 +683,11 @@ async function readBundledAssetArrayBuffer(
 
   if (!isWebRuntime()) {
     const downloaded = await asset.downloadAsync();
+    traceNeuralLens('tfjs-model-weight-source', {
+      filename,
+      source: 'metro-asset',
+      uriKind: downloaded.localUri ? 'local' : 'remote',
+    });
     return {
       buffer: await readAssetArrayBuffer(downloaded.localUri ?? downloaded.uri),
       source: 'metro-asset',
@@ -827,7 +968,7 @@ async function createCameraFrameTensor(
   frame: TfjsCameraFrame,
   options?: { rotateForPortrait?: boolean }
 ): Promise<ObjectInput> {
-  const start = Date.now();
+  const start = nowMs();
   if (frame.width <= 0 || frame.height <= 0) {
     throw new Error(`Camera frame has invalid dimensions: ${frame.width}x${frame.height}`);
   }
@@ -835,16 +976,37 @@ async function createCameraFrameTensor(
   const sourceWidth = options?.rotateForPortrait ? frame.height : frame.width;
   const sourceHeight = options?.rotateForPortrait ? frame.width : frame.height;
   const target = fitWithinMaxEdge(sourceWidth, sourceHeight);
+  traceNeuralLens('tfjs-camera-tensor-start', {
+    frameFormat: frame._format ?? null,
+    frameHeight: frame.height,
+    frameNumber: frame._frameNumber ?? null,
+    frameWidth: frame.width,
+    rotateForPortrait: options?.rotateForPortrait ?? false,
+    targetHeight: target.height,
+    targetWidth: target.width,
+  });
+  const sampleStartedAt = nowMs();
   const rgb = frame._data
     ? samplePackedCameraBytesToRgb(frame, target.width, target.height, options)
     : await sampleExternalImageToRgb(frame, target.width, target.height);
+  traceNeuralLens('tfjs-camera-tensor-sample-done', {
+    durationMs: round(nowMs() - sampleStartedAt),
+    inputBytes: frame._data?.byteLength ?? null,
+    rgbValues: rgb.length,
+  });
+  const tensorStartedAt = nowMs();
+  const tensor = tf.tensor3d(rgb, [target.height, target.width, 3], 'int32');
+  traceNeuralLens('tfjs-camera-tensor-created', {
+    durationMs: round(nowMs() - tensorStartedAt),
+    totalMs: round(nowMs() - start),
+  });
 
   return {
     height: target.height,
     sourceHeight,
     sourceWidth,
-    tensor: tf.tensor3d(rgb, [target.height, target.width, 3], 'int32'),
-    tensorMs: Date.now() - start,
+    tensor,
+    tensorMs: Math.round(nowMs() - start),
     width: target.width,
   };
 }

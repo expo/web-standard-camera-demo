@@ -89,6 +89,15 @@ private func notReadable(_ underlying: Error) -> Exception {
 // @ref LLP 0008 — audio implementation
 
 internal func getUserMedia(constraints: GetUserMediaConstraints) async throws -> MediaStream {
+  let gumStartedAt = CFAbsoluteTimeGetCurrent()
+  standardCameraTrace("native-gum-start", [
+    "audio": constraints.audio != nil,
+    "facingMode": constraints.video?.facingMode,
+    "frameRate": constraints.video?.frameRate,
+    "height": constraints.video?.height,
+    "video": constraints.video != nil,
+    "width": constraints.video?.width
+  ])
   // @ref LLP 0003#gum-validate-constraints — at least one of audio/video required
   let videoConstraints = constraints.video
   let audioConstraints = constraints.audio
@@ -153,7 +162,13 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
     ))
   }
 
-  return MediaStream(id: UUID().uuidString, tracks: tracks)
+  let stream = MediaStream(id: UUID().uuidString, tracks: tracks)
+  standardCameraTrace("native-gum-done", [
+    "durationMs": (CFAbsoluteTimeGetCurrent() - gumStartedAt) * 1000,
+    "tracks": tracks.count,
+    "videoDevice": videoDevice?.localizedName
+  ])
+  return stream
 }
 
 // @ref LLP 0003#gum-request-permission — per-mediaType permission gate.
@@ -475,7 +490,18 @@ private func buildCaptureSession(
       }
 
       session.commitConfiguration()
+      let startRunningStartedAt = CFAbsoluteTimeGetCurrent()
+      standardCameraTrace("native-session-start-running-start", [
+        "audio": audioDevice != nil,
+        "video": videoDevice != nil,
+        "videoDevice": videoDevice?.localizedName
+      ])
       session.startRunning()
+      standardCameraTrace("native-session-start-running-done", [
+        "durationMs": (CFAbsoluteTimeGetCurrent() - startRunningStartedAt) * 1000,
+        "isRunning": session.isRunning,
+        "videoDevice": videoDevice?.localizedName
+      ])
 
       continuation.resume(returning: SessionBuildResult(
         session: session,

@@ -3,6 +3,7 @@ import * as React from 'react';
 import { cameraConstraintsEqual, mergeCameraConstraints } from '@/lib/camera-constraints';
 import { KNOWN_FACING_AVAILABILITY, type CameraFacingAvailability } from '@/lib/camera-facing';
 import { createCameraOwnershipGate } from '@/lib/camera-ownership';
+import { nowMs, round, traceNeuralLens } from '@/lib/neural-lens-trace';
 
 import {
   NativeStandardCamera,
@@ -174,6 +175,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   }, []);
 
   const stop = React.useCallback((): void => {
+    const stopStartedAt = nowMs();
     const stopRequestId = startRequestRef.current + 1;
     startRequestRef.current = stopRequestId;
     cameraOwnershipGate.setStartInFlight(false);
@@ -186,6 +188,11 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     if (live) {
       for (const t of live.getTracks()) t.stop();
     }
+    traceNeuralLens('camera-context-stop', {
+      durationMs: round(nowMs() - stopStartedAt),
+      hadStream: live !== null,
+      tracks: live?.getTracks().length ?? 0,
+    });
     if (mountedRef.current) {
       setStreamState(null);
       setSettings(null);
@@ -260,17 +267,32 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
   const start = React.useCallback(
     async (next?: CameraConstraints): Promise<void> => {
+      const startStartedAt = nowMs();
       const effective = next ?? constraints;
+      traceNeuralLens('camera-context-start-called', {
+        explicitConstraints: next != null,
+        facingMode: effective.facingMode ?? null,
+        hasStream: streamRef.current !== null,
+        status,
+      });
       let blockReason = cameraOwnershipGate.startBlockReason({
         explicitConstraints: next != null,
         hasStream: streamRef.current !== null,
       });
       if (blockReason === 'external-lock') {
         console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
+        traceNeuralLens('camera-context-start-blocked', {
+          reason: blockReason,
+          sinceCallMs: round(nowMs() - startStartedAt),
+        });
         return;
       }
       if (blockReason === 'duplicate-default-start') {
         console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
+        traceNeuralLens('camera-context-start-blocked', {
+          reason: blockReason,
+          sinceCallMs: round(nowMs() - startStartedAt),
+        });
         return;
       }
       if (standardStopTimerRef.current) {
@@ -283,10 +305,18 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       });
       if (blockReason === 'external-lock') {
         console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
+        traceNeuralLens('camera-context-start-blocked', {
+          reason: blockReason,
+          sinceCallMs: round(nowMs() - startStartedAt),
+        });
         return;
       }
       if (blockReason === 'duplicate-default-start') {
         console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
+        traceNeuralLens('camera-context-start-blocked', {
+          reason: blockReason,
+          sinceCallMs: round(nowMs() - startStartedAt),
+        });
         return;
       }
       const requestId = startRequestRef.current + 1;
@@ -300,9 +330,15 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       cameraOwnershipGate.setStartInFlight(true);
       const previous = streamRef.current;
       if (previous) {
+        const stopPreviousStartedAt = nowMs();
         streamRef.current = null;
         setStreamState(null);
         for (const t of previous.getTracks()) t.stop();
+        traceNeuralLens('camera-context-previous-stream-stopped', {
+          requestId,
+          durationMs: round(nowMs() - stopPreviousStartedAt),
+          tracks: previous.getTracks().length,
+        });
       }
       setError(null);
       setStatus('requesting');
@@ -325,13 +361,30 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
       let mediaRequest: Promise<MediaStream> | null = null;
       try {
+        const gumStartedAt = nowMs();
+        traceNeuralLens('camera-context-gum-start', {
+          facingMode: effective.facingMode ?? null,
+          frameRate: effective.frameRate ?? null,
+          requestId,
+          width: effective.width ?? null,
+          height: effective.height ?? null,
+        });
         mediaRequest = navigator.mediaDevices.getUserMedia({ video });
         getUserMediaInFlightRef.current = mediaRequest;
         const s = await mediaRequest;
+        traceNeuralLens('camera-context-gum-ok', {
+          durationMs: round(nowMs() - gumStartedAt),
+          requestId,
+          tracks: s.getVideoTracks().length,
+        });
         console.log(
           `CAMERA_CTX gUM-ok req=${requestId} tracks=${s.getVideoTracks().length}`
         );
         if (!mountedRef.current || requestId !== startRequestRef.current) {
+          traceNeuralLens('camera-context-gum-stale', {
+            requestId,
+            sinceCallMs: round(nowMs() - startStartedAt),
+          });
           await stopTracksAndWaitForCaptureRelease(s);
           return;
         }
@@ -343,11 +396,18 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         // Refresh the device list off the hot-swap path so the picker rows
         // don't reflow mid-tap.
         try {
+          const enumerateStartedAt = nowMs();
           const all = await navigator.mediaDevices.enumerateDevices();
+          traceNeuralLens('camera-context-enumerate-devices-ok', {
+            durationMs: round(nowMs() - enumerateStartedAt),
+            requestId,
+            videoInputs: all.filter((d) => d.kind === 'videoinput').length,
+          });
           if (mountedRef.current) {
             setDevices(all.filter((d) => d.kind === 'videoinput'));
           }
         } catch {
+          traceNeuralLens('camera-context-enumerate-devices-error', { requestId });
           // Best-effort; ignore failures.
         }
       } catch (e) {
@@ -356,6 +416,13 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
           `CAMERA_CTX gUM-fail req=${requestId} ${err.name ?? 'Error'}: ${err.message}`
         );
         if (!mountedRef.current || requestId !== startRequestRef.current) return;
+        traceNeuralLens('camera-context-gum-error', {
+          constraint: err.constraint ?? null,
+          error: err.name ?? 'Error',
+          message: err.message,
+          requestId,
+          sinceCallMs: round(nowMs() - startStartedAt),
+        });
         const constraintHint = err.constraint ? ` (${err.constraint})` : '';
         setSettings(null);
         setError(`${err.name ?? 'Error'}${constraintHint}: ${err.message}`);
@@ -367,9 +434,14 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         if (requestId === startRequestRef.current) {
           cameraOwnershipGate.setStartInFlight(false);
         }
+        traceNeuralLens('camera-context-start-finished', {
+          current: requestId === startRequestRef.current,
+          requestId,
+          totalMs: round(nowMs() - startStartedAt),
+        });
       }
     },
-    [cameraOwnershipGate, constraints]
+    [cameraOwnershipGate, constraints, status]
   );
 
   const applyConstraints = React.useCallback(
@@ -377,6 +449,12 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       setConstraints((prev) => {
         const merged = mergeCameraConstraints(prev, patch);
         if (cameraConstraintsEqual(prev, merged)) return prev;
+        traceNeuralLens('camera-context-apply-constraints', {
+          fromFacingMode: prev.facingMode ?? null,
+          hasStream: streamRef.current !== null,
+          nextFacingMode: merged.facingMode ?? null,
+          patchFacingMode: patch.facingMode ?? null,
+        });
         // Re-start only if a stream is already live — picking a constraint
         // before pressing Start should update the stored value silently.
         if (streamRef.current) {
@@ -404,6 +482,12 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     };
     track.addEventListener('ended', onEnded);
     setStatus('playing');
+    traceNeuralLens('camera-context-track-playing', {
+      facingMode: track.getSettings().facingMode ?? null,
+      frameRate: typeof track.getSettings().frameRate === 'number' ? track.getSettings().frameRate : null,
+      height: typeof track.getSettings().height === 'number' ? track.getSettings().height : null,
+      width: typeof track.getSettings().width === 'number' ? track.getSettings().width : null,
+    });
     return () => {
       track.removeEventListener('ended', onEnded);
     };

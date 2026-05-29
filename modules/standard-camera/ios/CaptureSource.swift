@@ -1,5 +1,26 @@
 import Accelerate
 import AVFoundation
+import Foundation
+
+internal func standardCameraTrace(_ event: String, _ payload: [String: Any?] = [:]) {
+#if DEBUG
+  var body: [String: Any] = [
+    "event": event,
+    "ts": Int(Date().timeIntervalSince1970 * 1000)
+  ]
+  for (key, value) in payload {
+    body[key] = value ?? NSNull()
+  }
+  guard
+    let data = try? JSONSerialization.data(withJSONObject: body, options: []),
+    let json = String(data: data, encoding: .utf8)
+  else {
+    NSLog("NEURAL_LENS_TRACE {\"event\":\"%@\",\"serialization\":\"failed\"}", event)
+    return
+  }
+  NSLog("NEURAL_LENS_TRACE %@", json)
+#endif
+}
 
 // @ref LLP 0004#stream-clone — Reference-counted holder of the AVCaptureSession
 // @ref LLP 0004#track-clone — Cloned tracks share a CaptureSource and keep the
@@ -181,6 +202,11 @@ internal final class CaptureSource {
   }
 
   private func stopSessionAndDeactivateAudioIfNeeded() {
+    let startedAt = CFAbsoluteTimeGetCurrent()
+    standardCameraTrace("native-capture-source-stop-start", [
+      "hadAudio": audioDevice != nil,
+      "isRunning": session.isRunning
+    ])
     if session.isRunning {
       session.stopRunning()
     }
@@ -189,6 +215,11 @@ internal final class CaptureSource {
     if audioDevice != nil {
       try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
+    standardCameraTrace("native-capture-source-stop-done", [
+      "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+      "hadAudio": audioDevice != nil,
+      "isRunning": session.isRunning
+    ])
   }
 
   // MARK: - Notification observers
