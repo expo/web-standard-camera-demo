@@ -1,17 +1,17 @@
-# LLP 0004: `HTMLMediaElement.srcObject` subset
+# LLP 0005: `HTMLMediaElement.srcObject` subset
 
 **Type:** Spec
 **Status:** Active
 **Systems:** standard-camera
 **Author:** James Ide
 **Date:** 2026-05-19 (refactored 2026-05-21)
-**Related:** 0001, 0003, 0005, 0008
+**Related:** 0002, 0004, 0006, 0001
 
 ## Summary
 
 We don't have a real `HTMLMediaElement` in React Native, so our `<Video>` component exposes the subset of the `HTMLMediaElement` interface required to consume a `MediaStream` via `srcObject`. The settable surface is exposed both as a prop (`<Video srcObject={stream} />`) and as a property on a ref (`videoRef.current.srcObject = stream`). The ref form mirrors DOM idiom 1:1.
 
-[LLP 0008](./0008-w3c-spec-text.spec.md) deliberately does not cover this material: the W3C "Media Capture and Streams" spec defers HTMLMediaElement behavior to the HTML Standard, which is too large to inline. This LLP is the local source-of-truth for the `srcObject` invariants we implement, with deep links to the HTML Standard for anyone wanting the full spec context.
+[LLP 0001](./0001-w3c-spec-text.spec.md) deliberately does not cover this material: the W3C "Media Capture and Streams" spec defers HTMLMediaElement behavior to the HTML Standard, which is too large to inline. This LLP is the local source-of-truth for the `srcObject` invariants we implement, with deep links to the HTML Standard for anyone wanting the full spec context.
 
 ## Spec sources
 
@@ -29,6 +29,7 @@ We don't have a real `HTMLMediaElement` in React Native, so our `<Video>` compon
 
 The invariants listed below are what falls out of the above when the media provider is a non-seekable `MediaStream`. They're verified by our ported WPT tests (`MediaStream-MediaElement-srcObject.test.ts`).
 
+<a id="srcObject"></a>
 ## The ref surface
 
 A `<Video>` ref exposes:
@@ -75,44 +76,53 @@ interface VideoRef {
 
 ## Required invariants
 
+<a id="readystate"></a><a id="readystate-constants"></a>
 ### `srcObject-readyState`
 
 - Initially `readyState === HAVE_NOTHING (0)`.
-- When the first frame is captured (signaled by the `FrameSink` data-output delegate firing — see [LLP 0005#first-frame-detection](./0005-ios-native-mapping.decision.md)), set `readyState = HAVE_ENOUGH_DATA (4)` and fire `loadeddata`.
+- When the first frame is captured (signaled by the `FrameSink` data-output delegate firing — see [LLP 0006#first-frame-detection](./0006-ios-native-mapping.decision.md)), set `readyState = HAVE_ENOUGH_DATA (4)` and fire `loadeddata`.
 
+<a id="duration"></a>
 ### `srcObject-duration`
 
 - Initially `duration === NaN`.
 - When transitioning to `HAVE_ENOUGH_DATA`, set `duration = Infinity` and fire `durationchange`.
 
+<a id="currentTime"></a>
 ### `srcObject-currentTime`
 
 - Get: returns elapsed wall-clock seconds since `play()` or first frame.
 - Set: the UA MUST ignore attempts to set `currentTime` for a MediaStream source. Per the WPT test, the assignment `vid.currentTime = 42` must leave `currentTime` at `0` (or its actual elapsed value).
 
+<a id="defaultPlaybackRate"></a><a id="playbackRate"></a>
 ### `srcObject-playbackRate`
 
 - Get: always returns `1`.
 - Set: ignored. `vid.playbackRate = 0.5; expect(vid.playbackRate).toBe(1)`.
 
+<a id="preload"></a>
 ### `srcObject-preload`
 
 - Always `"none"`.
 - Set: ignored.
 
+<a id="seekable"></a>
 ### `srcObject-seekable`
 
 - `seekable.length === 0`. We expose a `TimeRanges`-shaped polyfill (`{ length: 0, start, end }` where start/end throw `InvalidStateError` if called with length 0).
 
+<a id="played"></a>
 ### `srcObject-ended`
 
 - `ended` becomes `true` asynchronously after every track in `srcObject` has `readyState === "ended"`. The transition fires an `ended` event. Because `MediaStreamTrack.stop()` does not fire the public track `ended` event, the JS track wrapper queues a prefixed internal `__standardcamera_trackended` event for media-element bookkeeping.
 
+<a id="playback"></a>
 ### `srcObject-play-pause`
 
 - `play()` starts the underlying `AVCaptureSession` if not running; resolves; fires `play`.
 - `pause()` stops the underlying `AVCaptureSession`; sets `paused = true`; fires `pause`.
 
+<a id="prop-vs-ref"></a>
 ## Prop vs. ref attribute
 
 The prop form is for ergonomic React code:

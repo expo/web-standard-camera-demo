@@ -1,28 +1,28 @@
 import AVFoundation
 import ExpoModulesCore
 
-// @ref LLP 0008#dom-mediastreamtrack — Upstream spec text
-// @ref LLP 0003#track-* — MediaStreamTrack subset; native state container
-// @ref LLP 0005#architecture — SharedObject holds metadata; the AVCaptureSession
+// @ref LLP 0001#dom-mediastreamtrack — Upstream spec text
+// @ref LLP 0004#track-* — MediaStreamTrack subset; native state container
+// @ref LLP 0006#architecture — SharedObject holds metadata; the AVCaptureSession
 //                                lives on a CaptureSource (strong-referenced here).
 
 internal final class MediaStreamTrack: SharedObject {
   let id: String
   let kind: String
-  // @ref LLP 0008#dom-mediastreamtrack-label — set at construction, never changes.
+  // @ref LLP 0001#dom-mediastreamtrack-label — set at construction, never changes.
   // The spec defines [[Label]] as initialized to the source's label and contains
   // no normative requirement that it changes when readyState transitions to "ended".
   let label: String
   let settings: [String: Any]
   let constraints: [String: Any]
 
-  // @ref LLP 0003#track-clone — Strong ref so cloning a track keeps the
+  // @ref LLP 0004#track-clone — Strong ref so cloning a track keeps the
   // underlying camera session alive across stream lifetimes. Optional so
   // tests / shared-object lifecycle can clear it after stop.
   private(set) var source: CaptureSource?
 
-  // @ref LLP 0008#dom-mediastreamtrack-enabled — spec attribute
-  // @ref LLP 0003#track-enabled
+  // @ref LLP 0001#dom-mediastreamtrack-enabled — spec attribute
+  // @ref LLP 0004#track-enabled
   var enabled: Bool = true {
     didSet {
       // The data-output connection controls whether frames / audio samples
@@ -33,8 +33,8 @@ internal final class MediaStreamTrack: SharedObject {
       // disabled video track would still render live pixels on screen,
       // violating the spec's "renders as solid black frames" step.
       // Clones share the same connection / preview list with the original
-      // — documented divergence in LLP 0003#track-clone.
-      // @ref LLP 0009#audio-build-session — audio uses its own connection.
+      // — documented divergence in LLP 0004#track-clone.
+      // @ref LLP 0008#audio-build-session — audio uses its own connection.
       if kind == "audio" {
         source?.audioConnection?.isEnabled = enabled
       } else {
@@ -43,12 +43,12 @@ internal final class MediaStreamTrack: SharedObject {
     }
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-muted — spec attribute
-  // @ref LLP 0003#track-muted — Reflects AVCaptureSession interruption state.
+  // @ref LLP 0001#dom-mediastreamtrack-muted — spec attribute
+  // @ref LLP 0004#track-muted — Reflects AVCaptureSession interruption state.
   private(set) var muted: Bool = false
 
-  // @ref LLP 0008#dom-mediastreamtrack-readystate — spec attribute
-  // @ref LLP 0003#track-readyState — "live" until stop() or runtime error.
+  // @ref LLP 0001#dom-mediastreamtrack-readystate — spec attribute
+  // @ref LLP 0004#track-readyState — "live" until stop() or runtime error.
   private(set) var readyState: String = "live"
 
   init(
@@ -78,8 +78,8 @@ internal final class MediaStreamTrack: SharedObject {
     }
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
-  // @ref LLP 0003#track-stop — Synchronous readyState change; no public
+  // @ref LLP 0001#dom-mediastreamtrack-stop — spec algorithm
+  // @ref LLP 0004#track-stop — Synchronous readyState change; no public
   // "ended" event for explicit stop().
   // Per spec step 3, "notify track's source that track is ended"; CaptureSource
   // owns the refcount and stops the AVCaptureSession when this is the last live
@@ -93,8 +93,8 @@ internal final class MediaStreamTrack: SharedObject {
     readyState = "ended"
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-clone — spec algorithm
-  // @ref LLP 0003#track-clone — new id, shares source, fresh enabled/muted/readyState.
+  // @ref LLP 0001#dom-mediastreamtrack-clone — spec algorithm
+  // @ref LLP 0004#track-clone — new id, shares source, fresh enabled/muted/readyState.
   // Named `cloneTrack` (not `clone`) so we don't shadow Swift's NSObject.clone
   // when bridging via Expo Modules. The module exposes this as `clone` on the JS side.
   func cloneTrack() -> MediaStreamTrack {
@@ -116,8 +116,8 @@ internal final class MediaStreamTrack: SharedObject {
     return clone
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-mute-algorithm — spec algorithm
-  // @ref LLP 0003#track-events — mute/unmute fire as a separate task.
+  // @ref LLP 0001#dom-mediastreamtrack-mute-algorithm — spec algorithm
+  // @ref LLP 0004#track-events — mute/unmute fire as a separate task.
   func setMuted(_ value: Bool) {
     if muted == value || readyState == "ended" {
       return
@@ -126,11 +126,11 @@ internal final class MediaStreamTrack: SharedObject {
     emit(event: value ? "mute" : "unmute")
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-getcapabilities — Reports the
+  // @ref LLP 0001#dom-mediastreamtrack-getcapabilities — Reports the
   // capabilities of the underlying AVCaptureDevice. For video tracks we
   // expose the spec-required fields, ranges derived from the device's
   // supported formats / frame-rate ranges where applicable. For audio
-  // tracks we report the spec-required fields from LLP 0008#audio-properties.
+  // tracks we report the spec-required fields from LLP 0001#audio-properties.
   func capabilities() -> [String: Any] {
     if kind == "audio" {
       return audioCapabilities()
@@ -178,8 +178,8 @@ internal final class MediaStreamTrack: SharedObject {
       "aspectRatio": ["min": minAspect, "max": maxAspect],
       "frameRate": ["min": minFps, "max": maxFps],
       "facingMode": [facing],
-      // @ref LLP 0008#video-properties — Both spec values are in scope per
-      // LLP 0001. `'none'` is the device-native path; `'crop-and-scale'`
+      // @ref LLP 0001#video-properties — Both spec values are in scope per
+      // LLP 0002. `'none'` is the device-native path; `'crop-and-scale'`
       // opts in to the FrameSink crop+scale stage (CaptureSource.swift).
       "resizeMode": ["none", "crop-and-scale"],
       "deviceId": device.uniqueID,
@@ -187,7 +187,7 @@ internal final class MediaStreamTrack: SharedObject {
     ]
   }
 
-  // @ref LLP 0009#audio-track-capabilities — Audio capability shape.
+  // @ref LLP 0008#audio-track-capabilities — Audio capability shape.
   private func audioCapabilities() -> [String: Any] {
     let device = source?.audioDevice
     let avs = AVAudioSession.sharedInstance()
@@ -207,7 +207,7 @@ internal final class MediaStreamTrack: SharedObject {
     ]
   }
 
-  // @ref LLP 0009#audio-pick-device — Stable id for an audio device even when
+  // @ref LLP 0008#audio-pick-device — Stable id for an audio device even when
   // iOS reports an empty `uniqueID` (the simulator's audio device sometimes does).
   private func audioDeviceIdFor(_ device: AVCaptureDevice?) -> String {
     guard let device else { return "" }
@@ -298,7 +298,7 @@ internal final class MediaStreamTrack: SharedObject {
   }
 
   // Called by CaptureSource when an AVCaptureSession runtime error fires.
-  // @ref LLP 0008#event-mediastreamtrack-ended — non-stop() termination path.
+  // @ref LLP 0001#event-mediastreamtrack-ended — non-stop() termination path.
   func endByRuntimeError() {
     if readyState == "ended" {
       return

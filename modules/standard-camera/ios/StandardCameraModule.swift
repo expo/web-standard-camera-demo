@@ -31,7 +31,7 @@ private final class CaptureReleaseBlockedException: Exception {
 }
 
 // @ref LLP 0000 — standard-camera module entry point
-// @ref LLP 0001 — Spec subset index; every Function/Property below maps to a clause
+// @ref LLP 0002 — Spec subset index; every Function/Property below maps to a clause
 
 public final class StandardCameraModule: Module {
   public func definition() -> ModuleDefinition {
@@ -50,7 +50,7 @@ public final class StandardCameraModule: Module {
 
     // MARK: - MediaDevices
 
-    // @ref LLP 0002 — getUserMedia subset
+    // @ref LLP 0003 — getUserMedia subset
     AsyncFunction("getUserMediaAsync") { (constraints: GetUserMediaConstraints, promise: Promise) in
       Task {
         do {
@@ -62,14 +62,14 @@ public final class StandardCameraModule: Module {
       }
     }
 
-    // @ref LLP 0001#mediadevices-enumeratedevices — Walk every built-in camera
+    // @ref LLP 0001#dom-mediadevices-enumeratedevices — Walk every built-in camera
     // type and surface each as its own MediaDeviceInfo. Modern iPhones expose
     // a mix of physical lenses (`.builtInWideAngleCamera`,
     // `.builtInUltraWideCamera`, `.builtInTelephotoCamera`,
     // `.builtInTrueDepthCamera`) and virtual auto-switching cameras
     // (`.builtInDualCamera`, `.builtInDualWideCamera`, `.builtInTripleCamera`,
     // `.builtInLiDARDepthCamera`); each has a stable `uniqueID` we use as both
-    // `deviceId` and `groupId`. Per LLP 0002 the JS layer hides `deviceId` /
+    // `deviceId` and `groupId`. Per LLP 0003 the JS layer hides `deviceId` /
     // `label` / `groupId` until a successful video gUM, so calling this
     // pre-grant just reveals the count and kind.
     AsyncFunction("enumerateDevicesAsync") { () -> [[String: Any]] in
@@ -100,7 +100,7 @@ public final class StandardCameraModule: Module {
           ])
         }
       }
-      // @ref LLP 0009#audio-pick-device — Single audio device entry: the
+      // @ref LLP 0008#audio-pick-device — Single audio device entry: the
       // system's currently-routed input. We don't enumerate every port
       // (built-in / headset / bluetooth) because the iOS audio capture API
       // surfaces only the active route as an AVCaptureDevice.
@@ -143,7 +143,7 @@ public final class StandardCameraModule: Module {
       return out
     }
 
-    // @ref LLP 0007#harness-surface — Native passthrough so WPT_RESULT / WPT_DONE
+    // @ref LLP 0010#harness-surface — Native passthrough so WPT_RESULT / WPT_DONE
     // lines reach the simulator's unified-log stream even in Release builds,
     // where React Native's `console.log` is not bridged to NSLog.
     Function("__systemLogForTesting") { (message: String) in
@@ -187,7 +187,7 @@ public final class StandardCameraModule: Module {
     }
 
     // MARK: - LiDAR depth demo extension
-    // @ref LLP 0012#native-extension-shape — This is intentionally not
+    // @ref LLP 0013#native-extension-shape — This is intentionally not
     // navigator.mediaDevices API. Native ARKit produces depth frames; WebGPU
     // consumes them in the demo route.
 
@@ -239,7 +239,7 @@ public final class StandardCameraModule: Module {
     }
 
     Function("getLatestWebXRLiDARDepthFrame") { () -> [String: Any]? in
-      // @ref LLP 0013#xr-camera-resolution — WebXR owns the CPU-visible camera
+      // @ref LLP 0014#xr-camera-resolution — WebXR owns the CPU-visible camera
       // image size as a private implementation detail.
       LiDARDepthSource.shared.latestWebXRFrame()
     }
@@ -249,7 +249,7 @@ public final class StandardCameraModule: Module {
       includeDepthData: Bool,
       includeCameraImage: Bool
     ) -> [String: Any]? in
-      // @ref LLP 0013#xr-frame-loop — Internal WebXR bridge helper. JS still
+      // @ref LLP 0014#xr-frame-loop — Internal WebXR bridge helper. JS still
       // observes data only through XRCPUDepthInformation / XRCPUCameraBinding.
       LiDARDepthSource.shared.webXRFramePayload(
         frameNumber: UInt64(frameNumber),
@@ -264,7 +264,7 @@ public final class StandardCameraModule: Module {
       includeCameraImage: Bool,
       includeLowConfidenceDepthData: Bool
     ) -> [String: Any]? in
-      // @ref LLP 0013#xr-depth-confidence — Depth Studio may request
+      // @ref LLP 0014#xr-depth-confidence — Depth Studio may request
       // low-confidence positive ARKit depth values for visual inspection while
       // keeping the confidence map internal to the runtime.
       LiDARDepthSource.shared.webXRFramePayload(
@@ -276,12 +276,12 @@ public final class StandardCameraModule: Module {
     }
 
     Function("getWebXRLiDARDepthFrameMeshes") { (frameNumber: Double) -> [[String: Any]]? in
-      // @ref LLP 0013#xr-mesh-detection — Internal WebXR bridge helper. JS
+      // @ref LLP 0014#xr-mesh-detection — Internal WebXR bridge helper. JS
       // observes ARKit mesh anchors only through XRFrame.detectedMeshes.
       LiDARDepthSource.shared.webXRFrameMeshes(frameNumber: UInt64(frameNumber))
     }
 
-    // @ref LLP 0008#dom-mediadevices-getsupportedconstraints — Per spec, this
+    // @ref LLP 0001#dom-mediadevices-getsupportedconstraints — Per spec, this
     // returns a `MediaTrackSupportedConstraints` dictionary listing every
     // constraint name the UA recognizes — regardless of whether the current
     // device actually supports it. WPT tests assert every standard field is
@@ -312,15 +312,15 @@ public final class StandardCameraModule: Module {
       ]
     }
 
-    // @ref LLP 0008#mediastream-constructor — script-constructed MediaStream
-    // @ref LLP 0003#stream-construction — Native handle for a JS-constructed
+    // @ref LLP 0001#mediastream-constructor — script-constructed MediaStream
+    // @ref LLP 0004#stream-construction — Native handle for a JS-constructed
     // stream so it still has a SharedObject id for instanceof / native-prop forwarding.
     Function("createMediaStream") { (tracks: [MediaStreamTrack]) -> MediaStream in
       return MediaStream(id: UUID().uuidString, tracks: tracks)
     }
 
     // MARK: - MediaStream class
-    // @ref LLP 0003#stream-*
+    // @ref LLP 0004#stream-*
 
     Class(MediaStream.self) {
       Property("id") { (stream: MediaStream) -> String in stream.id }
@@ -343,22 +343,22 @@ public final class StandardCameraModule: Module {
         stream.getTrackById(trackId)
       }
 
-      // @ref LLP 0008#dom-mediastream-addtrack — script-initiated; no event fires
+      // @ref LLP 0001#dom-mediastream-addtrack — script-initiated; no event fires
       Function("addTrack") { (stream: MediaStream, track: MediaStreamTrack) in
         stream.addTrack(track)
       }
 
-      // @ref LLP 0008#dom-mediastream-removetrack — script-initiated; no event fires
+      // @ref LLP 0001#dom-mediastream-removetrack — script-initiated; no event fires
       Function("removeTrack") { (stream: MediaStream, track: MediaStreamTrack) in
         stream.removeTrack(track)
       }
 
-      // @ref LLP 0008#dom-mediastream-clone
+      // @ref LLP 0001#dom-mediastream-clone
       Function("clone") { (stream: MediaStream) -> MediaStream in
         stream.clone()
       }
 
-      // @ref LLP 0012#native-extension-shape — Internal demo handoff hook:
+      // @ref LLP 0013#native-extension-shape — Internal demo handoff hook:
       // stops the stream's tracks, then resolves only after AVFoundation has
       // reached the serialized capture release point.
       AsyncFunction("__stopTracksAndWaitForCaptureReleaseAsync") { (stream: MediaStream, promise: Promise) in
@@ -381,7 +381,7 @@ public final class StandardCameraModule: Module {
     }
 
     // MARK: - MediaStreamTrack class
-    // @ref LLP 0003#track-*
+    // @ref LLP 0004#track-*
 
     Class(MediaStreamTrack.self) {
       Property("id") { (track: MediaStreamTrack) -> String in track.id }
@@ -411,7 +411,7 @@ public final class StandardCameraModule: Module {
         track.constraints
       }
 
-      // @ref LLP 0008#dom-mediastreamtrack-getcapabilities — report the
+      // @ref LLP 0001#dom-mediastreamtrack-getcapabilities — report the
       // capabilities of the AVCaptureDevice. We surface fixed ranges based on
       // the current device's active format. Spec-required fields for video
       // tracks: width, height, aspectRatio, frameRate, facingMode, resizeMode,
@@ -420,7 +420,7 @@ public final class StandardCameraModule: Module {
         track.capabilities()
       }
 
-      // @ref LLP 0008#dom-mediastreamtrack-clone
+      // @ref LLP 0001#dom-mediastreamtrack-clone
       Function("clone") { (track: MediaStreamTrack) -> MediaStreamTrack in
         track.cloneTrack()
       }
@@ -438,7 +438,7 @@ public final class StandardCameraModule: Module {
         track.getLatestFrame()
       }
 
-      // @ref LLP 0009#audio-build-session — Symmetric audio-buffer accessor.
+      // @ref LLP 0008#audio-build-session — Symmetric audio-buffer accessor.
       // `maxFrames` caps the frame count returned (one frame = one sample
       // per channel); the actual return may be shorter if the ring hasn't
       // filled yet. Returns nil on a video track, an ended track, or before
@@ -457,7 +457,7 @@ public final class StandardCameraModule: Module {
     }
 
     // MARK: - VideoView
-    // @ref LLP 0004#srcObject
+    // @ref LLP 0005#srcObject
 
     View(VideoView.self) {
       Events(

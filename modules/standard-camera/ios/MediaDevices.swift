@@ -1,7 +1,7 @@
 import AVFoundation
 import ExpoModulesCore
 
-// @ref LLP 0002 — getUserMedia subset
+// @ref LLP 0003 — getUserMedia subset
 // The TypeScript layer flattens spec-shaped constraints (which may be boolean or
 // ConstrainDOMString objects) into the simple optionals below before calling
 // native. See modules/standard-camera/src/MediaDevices.ts for the normalizer.
@@ -21,16 +21,16 @@ internal struct FlatVideoConstraints: Record {
   @Field var height: Int?
   @Field var frameRate: Double?
   @Field var aspectRatio: Double?
-  // @ref LLP 0008#video-properties — One of `"none"` / `"crop-and-scale"`.
+  // @ref LLP 0001#video-properties — One of `"none"` / `"crop-and-scale"`.
   // JS-side `flattenVideo` already rejects any other `{exact}` value with
   // OverconstrainedError; native trusts the value here. When
   // `"crop-and-scale"` is set together with `width` / `height`, FrameSink
-  // applies a center-crop + bilinear rescale (see LLP 0001's
+  // applies a center-crop + bilinear rescale (see LLP 0002's
   // "`resizeMode: \"crop-and-scale\"` is in scope" callout).
   @Field var resizeMode: String?
 }
 
-// @ref LLP 0009#audio-build-session — Flat audio constraints from JS. The
+// @ref LLP 0008#audio-build-session — Flat audio constraints from JS. The
 // spec's `echoCancellation` is `boolean | "all" | "remote-only"`; we split it
 // into two fields at the bridge so the Record can stay strongly typed.
 // `echoCancellationMode` is set only when the caller supplies the enum string.
@@ -49,7 +49,7 @@ internal struct FlatAudioConstraints: Record {
 }
 
 // MARK: - DOMException-shaped throws
-// @ref LLP 0002#gum-error-mapping — error.name must match the spec; we encode
+// @ref LLP 0003#gum-error-mapping — error.name must match the spec; we encode
 // the OverconstrainedError constraint into the message as "...: <name>" so the
 // TS layer can parse it onto .constraint.
 
@@ -62,41 +62,41 @@ private func spec(_ name: String, _ description: String) -> Exception {
   Exception(name: name, description: "[\(name)] \(description)")
 }
 
-// @ref LLP 0008#error-notallowederror — user denied permission
+// @ref LLP 0001#error-notallowederror — user denied permission
 private func notAllowed() -> Exception {
   spec("NotAllowedError", "Permission denied")
 }
 
-// @ref LLP 0008#error-notfounderror — no suitable device matching constraints
+// @ref LLP 0001#error-notfounderror — no suitable device matching constraints
 private func notFound() -> Exception {
   spec("NotFoundError", "Requested device not found")
 }
 
-// @ref LLP 0008#error-overconstrainederror — required constraint unsatisfiable;
+// @ref LLP 0001#error-overconstrainederror — required constraint unsatisfiable;
 //   carries the offending constraint name in the message for TS to parse onto .constraint.
 private func overconstrained(_ constraint: String) -> Exception {
   spec("OverconstrainedError", "Constraint cannot be satisfied: \(constraint)")
 }
 
-// @ref LLP 0008#error-notreadableerror — hardware/system level capture failure
+// @ref LLP 0001#error-notreadableerror — hardware/system level capture failure
 private func notReadable(_ underlying: Error) -> Exception {
   spec("NotReadableError", "Camera could not be opened: \(underlying.localizedDescription)")
 }
 
 // MARK: - Implementation
-// @ref LLP 0008#dom-mediadevices-getusermedia — spec algorithm
-// @ref LLP 0002 — our subset of the algorithm
-// @ref LLP 0009 — audio implementation
+// @ref LLP 0001#dom-mediadevices-getusermedia — spec algorithm
+// @ref LLP 0003 — our subset of the algorithm
+// @ref LLP 0008 — audio implementation
 
 internal func getUserMedia(constraints: GetUserMediaConstraints) async throws -> MediaStream {
-  // @ref LLP 0002#gum-validate-constraints — at least one of audio/video required
+  // @ref LLP 0003#gum-validate-constraints — at least one of audio/video required
   let videoConstraints = constraints.video
   let audioConstraints = constraints.audio
   if videoConstraints == nil && audioConstraints == nil {
     throw spec("TypeError", "At least one of audio and video must be requested")
   }
 
-  // @ref LLP 0002#gum-request-permission — request for each requested type
+  // @ref LLP 0003#gum-request-permission — request for each requested type
   if videoConstraints != nil {
     try await requestPermission(for: .video)
   }
@@ -104,11 +104,11 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
     try await requestPermission(for: .audio)
   }
 
-  // @ref LLP 0009#audio-pick-device
+  // @ref LLP 0008#audio-pick-device
   let videoDevice = try videoConstraints.map { try pickDevice(constraints: $0) }
   let audioDevice = try audioConstraints.map { try pickAudioDevice(constraints: $0) }
 
-  // @ref LLP 0002#gum-build-session, LLP 0009#audio-build-session — build the
+  // @ref LLP 0003#gum-build-session, LLP 0008#audio-build-session — build the
   // shared session and attach inputs/outputs atomically.
   let frameSink = videoDevice != nil ? FrameSink() : nil
   let audioSink = audioDevice != nil ? AudioSink() : nil
@@ -156,7 +156,7 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
   return MediaStream(id: UUID().uuidString, tracks: tracks)
 }
 
-// @ref LLP 0002#gum-request-permission — per-mediaType permission gate.
+// @ref LLP 0003#gum-request-permission — per-mediaType permission gate.
 private func requestPermission(for mediaType: AVMediaType) async throws {
   let status = AVCaptureDevice.authorizationStatus(for: mediaType)
   switch status {
@@ -172,7 +172,7 @@ private func requestPermission(for mediaType: AVMediaType) async throws {
   }
 }
 
-// @ref LLP 0009#audio-pick-device — Single audio device per call. Honors
+// @ref LLP 0008#audio-pick-device — Single audio device per call. Honors
 // `deviceId` and `groupId` separately so an unsatisfied `groupId` rejects
 // with the matching `OverconstrainedError(constraint: "groupId")`.
 private func pickAudioDevice(constraints: FlatAudioConstraints) throws -> AVCaptureDevice {
@@ -210,7 +210,7 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
     throw overconstrained("deviceId")
   }
 
-  // @ref LLP 0002#gum-pick-device — default to back camera when no facingMode is
+  // @ref LLP 0003#gum-pick-device — default to back camera when no facingMode is
   // specified. Back is the better default for a "camera demo" surface.
   // If facingMode was explicitly requested and isn't one of the spec's "user" /
   // "environment" values, reject with OverconstrainedError — the JS normalizer
@@ -249,7 +249,7 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
     }
   }
 
-  // @ref LLP 0002#gum-pick-device — If the caller explicitly asked for a
+  // @ref LLP 0003#gum-pick-device — If the caller explicitly asked for a
   // facingMode and we can't honor it, fail instead of silently substituting
   // the other camera. The JS-side normalizer collapses `{exact: ...}` and the
   // basic-constraint forms into the same flat string, so we treat any
@@ -261,7 +261,7 @@ private func pickDevice(constraints: FlatVideoConstraints) throws -> AVCaptureDe
   //   - There are no video devices at all (the typical iOS simulator) →
   //     `NotFoundError`. This lets the WPT runner mark the test as
   //     `environment-skip` rather than reporting it as a regression
-  //     (see [LLP 0007#harness-surface](./0007-in-app-wpt-runner.guide.md)).
+  //     (see [LLP 0010#harness-surface](./0010-in-app-wpt-runner.guide.md)).
   let hasAnyVideoDevice = AVCaptureDevice.default(for: .video) != nil
   if facingModeRequested {
     if hasAnyVideoDevice {
@@ -285,7 +285,7 @@ internal struct SessionBuildResult {
   let audioSettings: [String: Any]?
 }
 
-// @ref LLP 0002#gum-build-session, LLP 0009#audio-build-session — atomic
+// @ref LLP 0003#gum-build-session, LLP 0008#audio-build-session — atomic
 // build of an AVCaptureSession containing zero/one video input + sink and
 // zero/one audio input + sink. Combined audio + video calls share this
 // session so the lifecycle is naturally coordinated.
@@ -299,7 +299,7 @@ private func buildCaptureSession(
 ) async throws -> SessionBuildResult {
   return try await withCheckedThrowingContinuation { continuation in
     MediaStream.sessionQueue.async {
-      // @ref LLP 0009#audio-session-configuration — Configure AVAudioSession
+      // @ref LLP 0008#audio-session-configuration — Configure AVAudioSession
       // before the AVCaptureSession is started so the audio chain is ready.
       if audioDevice != nil {
         do {
@@ -389,7 +389,7 @@ private func buildCaptureSession(
           return videoDevice.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
         }()
 
-        // @ref LLP 0008#video-properties — Resolve the actual `resizeMode`
+        // @ref LLP 0001#video-properties — Resolve the actual `resizeMode`
         // and the target dimensions the source will deliver. The default
         // when the caller didn't specify `resizeMode` is `'crop-and-scale'`,
         // matching how desktop browsers honour `width` / `height` ideals
@@ -435,7 +435,7 @@ private func buildCaptureSession(
       }
 
       // === Audio path ===========================================================
-      // @ref LLP 0009#audio-build-session — Add audio input/output inside the
+      // @ref LLP 0008#audio-build-session — Add audio input/output inside the
       // same configuration block as the video side. Connections come up
       // together when we commit.
       var audioSettings: [String: Any]? = nil
@@ -465,7 +465,7 @@ private func buildCaptureSession(
         audioConnection = audioSink.output.connection(with: .audio)
 
         // Snapshot the audio settings from the actual AVAudioSession state.
-        // @ref LLP 0009#audio-track-settings
+        // @ref LLP 0008#audio-track-settings
         let avs = AVAudioSession.sharedInstance()
         audioSettings = makeAudioSettings(
           device: audioDevice,
@@ -488,7 +488,7 @@ private func buildCaptureSession(
   }
 }
 
-// @ref LLP 0009#audio-session-configuration — Set category/mode/active.
+// @ref LLP 0008#audio-session-configuration — Set category/mode/active.
 private func configureAudioSession(constraints: FlatAudioConstraints?) throws {
   let session = AVAudioSession.sharedInstance()
   try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
@@ -505,7 +505,7 @@ private func configureAudioSession(constraints: FlatAudioConstraints?) throws {
   try session.setActive(true, options: [])
 }
 
-// @ref LLP 0009#audio-track-settings — Snapshot for `track.getSettings()`.
+// @ref LLP 0008#audio-track-settings — Snapshot for `track.getSettings()`.
 private func makeAudioSettings(
   device: AVCaptureDevice,
   session: AVAudioSession,
@@ -560,7 +560,7 @@ private func pickPreset(width: Int?, height: Int?) -> AVCaptureSession.Preset {
   return .high
 }
 
-// @ref LLP 0002#gum-pick-device — Pick the device format whose dimensions and
+// @ref LLP 0003#gum-pick-device — Pick the device format whose dimensions and
 // frame-rate range satisfy the caller's constraints. Iterates `device.formats`
 // scoring (width, height, frameRate) against the request; the lowest score
 // wins. Returns nil if no format covers the requested frame rate (so the
@@ -604,7 +604,7 @@ private func pickActiveFormat(
   return (chosen, bestRate)
 }
 
-// @ref LLP 0008#video-properties — Resolve the target output dimensions
+// @ref LLP 0001#video-properties — Resolve the target output dimensions
 // for a `resizeMode: "crop-and-scale"` request. Constraints come in as
 // flat scalars (basic / ideal / max collapsed by `flattenVideo` on the JS
 // side), so we honor whichever of `width` / `height` / `aspectRatio` the
@@ -661,7 +661,7 @@ private func constraintsAsDictionary(_ c: FlatVideoConstraints) -> [String: Any]
   return dict
 }
 
-// @ref LLP 0009#audio-build-session — Round-trip the caller's audio
+// @ref LLP 0008#audio-build-session — Round-trip the caller's audio
 // constraints into the track's getConstraints() output.
 private func audioConstraintsAsDictionary(_ c: FlatAudioConstraints) -> [String: Any] {
   var dict: [String: Any] = [:]

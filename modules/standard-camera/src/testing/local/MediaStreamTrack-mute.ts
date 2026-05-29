@@ -1,4 +1,4 @@
-// @ref LLP 0003#track-events — mute/unmute when AVCaptureSession is interrupted.
+// @ref LLP 0004#track-events — mute/unmute when AVCaptureSession is interrupted.
 // We don't port these from the canonical WPT suite because that suite tests via
 // the (Permissions-API-driven) revoke flow which we don't model; instead we drive
 // the same DOM-side observation via a synthetic interruption that mirrors what
@@ -35,7 +35,7 @@ function simulate(stream: MediaStream, reasonCode: number, ended: boolean): void
   (stream as unknown as NativeBackdoor)._native.__simulateInterruptionForTesting(reasonCode, ended);
 }
 
-// @ref LLP 0003#track-muted — initially false
+// @ref LLP 0004#track-muted — initially false
 promise_test(async () => {
   const stream = await navigator.mediaDevices.getUserMedia({ video: true });
   const track = stream.getVideoTracks()[0];
@@ -43,7 +43,7 @@ promise_test(async () => {
   for (const t of stream.getTracks()) t.stop();
 }, 'MediaStreamTrack.muted is false on a live track');
 
-// @ref LLP 0003#track-events — mute event fires on interruption
+// @ref LLP 0004#track-events — mute event fires on interruption
 promise_test(async () => {
   const stream = await navigator.mediaDevices.getUserMedia({ video: true });
   const track = stream.getVideoTracks()[0];
@@ -54,7 +54,7 @@ promise_test(async () => {
   for (const t of stream.getTracks()) t.stop();
 }, 'track fires "mute" event when AVCaptureSession is interrupted (thermal pressure)');
 
-// @ref LLP 0003#track-events — unmute event fires on interruption end
+// @ref LLP 0004#track-events — unmute event fires on interruption end
 promise_test(async () => {
   const stream = await navigator.mediaDevices.getUserMedia({ video: true });
   const track = stream.getVideoTracks()[0];
@@ -68,7 +68,7 @@ promise_test(async () => {
   for (const t of stream.getTracks()) t.stop();
 }, 'track fires "unmute" event when AVCaptureSession interruption ends');
 
-// @ref LLP 0003#track-events — a stopped track does not emit mute/unmute
+// @ref LLP 0004#track-events — a stopped track does not emit mute/unmute
 promise_test(async () => {
   const stream = await navigator.mediaDevices.getUserMedia({ video: true });
   const track = stream.getVideoTracks()[0];
@@ -81,7 +81,7 @@ promise_test(async () => {
   assert_false(fired, 'mute did not fire on a stopped track');
 }, 'A stopped track does not fire "mute" on subsequent interruptions');
 
-// @ref LLP 0003#track-stop — step 4: stop the underlying capture session
+// @ref LLP 0004#track-stop — step 4: stop the underlying capture session
 // when no live tracks remain. We can't directly observe AVCaptureSession from JS,
 // so we verify the visible consequence: stream.active becomes false.
 promise_test(async () => {

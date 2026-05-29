@@ -1,12 +1,12 @@
 import Accelerate
 import AVFoundation
 
-// @ref LLP 0003#stream-clone — Reference-counted holder of the AVCaptureSession
-// @ref LLP 0003#track-clone — Cloned tracks share a CaptureSource and keep the
+// @ref LLP 0004#stream-clone — Reference-counted holder of the AVCaptureSession
+// @ref LLP 0004#track-clone — Cloned tracks share a CaptureSource and keep the
 //                              camera open as long as at least one track is live.
-// @ref LLP 0005#architecture — This class is the AVFoundation realization of
+// @ref LLP 0006#architecture — This class is the AVFoundation realization of
 //                               the spec's [[Source]] concept.
-// @ref LLP 0009 — Audio capture shares the same CaptureSource; the audio
+// @ref LLP 0008 — Audio capture shares the same CaptureSource; the audio
 //                 connection and AVAudioSession-interruption observer live here.
 
 internal final class CaptureSource {
@@ -24,13 +24,13 @@ internal final class CaptureSource {
   weak var audioConnection: AVCaptureConnection?
 
   // Notification observers — closure-based so we don't need to be NSObject.
-  // Per LLP 0003#stream-events, AVCaptureSession interruption / runtime errors
+  // Per LLP 0004#stream-events, AVCaptureSession interruption / runtime errors
   // surface on the session, so observers live here. The source fans out events
   // to every registered MediaStreamTrack — originals and clones.
   private var interruptionObserver: NSObjectProtocol?
   private var interruptionEndedObserver: NSObjectProtocol?
   private var runtimeErrorObserver: NSObjectProtocol?
-  // @ref LLP 0009#audio-track-events — AVAudioSession posts a separate
+  // @ref LLP 0008#audio-track-events — AVAudioSession posts a separate
   // interruption notification (phone call, another app's session preempts
   // ours). Translate it into the same mute/unmute fan-out so audio tracks
   // see the same interruption semantics as video tracks.
@@ -46,10 +46,10 @@ internal final class CaptureSource {
   // tracks the video track's enabled state — without this, a disabled
   // track stops delivering to the FrameSink but the preview keeps showing
   // live pixels, which violates the spec's "renders as solid black frames"
-  // step in [LLP 0003#track-enabled].
+  // step in [LLP 0004#track-enabled].
   private let previewSubscribers = NSHashTable<VideoView>.weakObjects()
   // Strict count, decremented from MediaStreamTrack.stop(). When this hits
-  // zero the session is stopped; see LLP 0003#track-stop step 4.
+  // zero the session is stopped; see LLP 0004#track-stop step 4.
   private var liveTrackCount = 0
   private let lock = NSLock()
 
@@ -89,7 +89,7 @@ internal final class CaptureSource {
   }
 
   // Called from MediaStreamTrack.init for both original and cloned tracks.
-  // @ref LLP 0003#track-clone — increments the live count
+  // @ref LLP 0004#track-clone — increments the live count
   func registerTrack(_ track: MediaStreamTrack) {
     lock.lock()
     liveTrackCount += 1
@@ -126,7 +126,7 @@ internal final class CaptureSource {
     return true
   }
 
-  // @ref LLP 0003#track-enabled — Video track enable toggle. Updates the
+  // @ref LLP 0004#track-enabled — Video track enable toggle. Updates the
   // input → FrameSink connection (consumer-facing) AND every subscribed
   // VideoView's preview-layer connection (renderer-facing). The two
   // connections are independent on AVCaptureSession, so without the
@@ -143,7 +143,7 @@ internal final class CaptureSource {
   }
 
   // Called from MediaStreamTrack.stop() and .endByRuntimeError().
-  // @ref LLP 0003#track-stop — notify the source; if no live tracks
+  // @ref LLP 0004#track-stop — notify the source; if no live tracks
   // remain, stop the underlying AVCaptureSession.
   func unregisterTrack(_ track: MediaStreamTrack) {
     lock.lock()
@@ -159,7 +159,7 @@ internal final class CaptureSource {
     }
   }
 
-  // @ref LLP 0012#native-extension-shape — ARKit cannot take the camera until
+  // @ref LLP 0013#native-extension-shape — ARKit cannot take the camera until
   // the AVFoundation source has actually reached the serialized stop point on
   // `MediaStream.sessionQueue`.
   func waitForRelease(completion: @escaping (Bool) -> Void) {
@@ -184,7 +184,7 @@ internal final class CaptureSource {
     if session.isRunning {
       session.stopRunning()
     }
-    // @ref LLP 0009#audio-session-configuration — release the system audio
+    // @ref LLP 0008#audio-session-configuration — release the system audio
     // session so other apps can resume playback when the last reference goes.
     if audioDevice != nil {
       try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
@@ -192,7 +192,7 @@ internal final class CaptureSource {
   }
 
   // MARK: - Notification observers
-  // @ref LLP 0003#track-events — Wire AVCaptureSession interruptions to track
+  // @ref LLP 0004#track-events — Wire AVCaptureSession interruptions to track
   // mute/unmute events. Covers:
   //   - app backgrounded (videoDeviceNotAvailableInBackground)
   //   - camera in use by another app (videoDeviceInUseByAnotherClient)
@@ -223,7 +223,7 @@ internal final class CaptureSource {
     ) { [weak self] _ in
       self?.handleRuntimeError()
     }
-    // @ref LLP 0009#audio-track-events — AVAudioSession interruption notifications.
+    // @ref LLP 0008#audio-track-events — AVAudioSession interruption notifications.
     if audioDevice != nil {
       audioInterruptionObserver = nc.addObserver(
         forName: AVAudioSession.interruptionNotification,
@@ -266,7 +266,7 @@ internal final class CaptureSource {
 
   // Test hook — posts the same notifications iOS would, so WPT tests can
   // verify the mute/unmute path without needing real thermal pressure.
-  // @ref LLP 0007#testing-overheating
+  // @ref LLP 0010#testing-overheating
   func simulateInterruption(reasonCode: Int, ended: Bool) {
     let name: Notification.Name = ended
       ? AVCaptureSession.interruptionEndedNotification
@@ -279,7 +279,7 @@ internal final class CaptureSource {
   }
 }
 
-// @ref LLP 0005#first-frame-detection — Holds an AVCaptureVideoDataOutput
+// @ref LLP 0006#first-frame-detection — Holds an AVCaptureVideoDataOutput
 // attached to the session purely so frames are actively delivered and we get
 // a reliable "first sample" callback. The VideoView subscribes to its
 // `onFirstFrame` callback to fire the loadeddata event.
@@ -304,7 +304,7 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   // grabFrame just keeps re-reading the same retained buffer.
   private var frameCounter: UInt64 = 0
 
-  // @ref LLP 0008#video-properties — When set (by `buildCaptureSession` for
+  // @ref LLP 0001#video-properties — When set (by `buildCaptureSession` for
   // `resizeMode: 'crop-and-scale'` streams that also have `width`/`height`
   // constraints), every delivered sample buffer is center-cropped to the
   // source's nearest aspect-matching rect and bilinear-scaled to this size
@@ -410,7 +410,7 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     }
   }
 
-  // @ref LLP 0008#video-properties — Center-crop the source buffer to the
+  // @ref LLP 0001#video-properties — Center-crop the source buffer to the
   // largest rect matching the target aspect ratio, then bilinear-scale to
   // the target size. Returns nil if any of the vImage / CV calls fail; the
   // caller falls back to passthrough so a crop-and-scale glitch never
@@ -479,7 +479,7 @@ internal final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   }
 }
 
-// @ref LLP 0009#audio-build-session — Audio analog of FrameSink. Holds an
+// @ref LLP 0008#audio-build-session — Audio analog of FrameSink. Holds an
 // AVCaptureAudioDataOutput attached to the session so samples actively flow
 // and `audioConnection.isEnabled = false` actually has something to gate.
 // Also maintains a small rolling buffer of the most-recent Float32 LPCM

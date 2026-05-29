@@ -15,18 +15,18 @@ Start at `llp/0000-standard-camera.explainer.md`. Document numbering and types f
 Every load-bearing implementation detail that exists because a spec clause says so should have an `@ref` comment pointing at the relevant LLP section:
 
 ```swift
-// @ref LLP 0003#track-stop — MediaStreamTrack.stop() must transition readyState to "ended"
+// @ref LLP 0004#track-stop — MediaStreamTrack.stop() must transition readyState to "ended"
 ```
 
 ```ts
-// @ref LLP 0004#srcobject-currentTime — UA MUST ignore attempts to set currentTime on a MediaStream source
+// @ref LLP 0005#srcobject-currentTime — UA MUST ignore attempts to set currentTime on a MediaStream source
 ```
 
 Run the `ref-check` skill (`/ref-check`) before requesting review to catch broken references and orphaned annotations.
 
 ## Scope reminder
 
-This project implements a tiny subset of the W3C "Media Capture and Streams" spec on iOS only. Before adding a feature, check `llp/0001-spec-subset-scope.spec.md` — if the clause is marked "out of scope", do not add it without first updating LLP 0001.
+This project implements a tiny subset of the W3C "Media Capture and Streams" spec on iOS only. Before adding a feature, check `llp/0002-spec-subset-scope.spec.md` — if the clause is marked "out of scope", do not add it without first updating LLP 0002.
 
 ## Testing
 

@@ -1,4 +1,4 @@
-// @ref LLP 0002#gum-error-mapping — DOMException polyfill with `name` and the
+// @ref LLP 0003#gum-error-mapping — DOMException polyfill with `name` and the
 // OverconstrainedError-specific `constraint` field
 
 export class DOMException extends Error {

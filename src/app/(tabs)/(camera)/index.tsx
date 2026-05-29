@@ -103,7 +103,7 @@ export default function HomeScreen(): React.JSX.Element {
     }, [externalLocked, start, status, stream, userStopped])
   );
 
-  // @ref LLP 0021#decision — Web browsers can omit `settings.facingMode` for
+  // @ref LLP 0009#decision — Web browsers can omit `settings.facingMode` for
   // desktop cameras; this demo treats that missing signal as front/self-view.
   // Native iOS still uses the exact AVFoundation direction.
   const activeFacing = displayFacingMode({ constraints, settings });

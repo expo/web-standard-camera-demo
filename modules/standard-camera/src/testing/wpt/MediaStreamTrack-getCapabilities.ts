@@ -1,11 +1,11 @@
 // @ts-nocheck
-// @ref LLP 0007 — Adapted from wpt/mediacapture-streams/MediaStreamTrack-getCapabilities.https.html
+// @ref LLP 0010 — Adapted from wpt/mediacapture-streams/MediaStreamTrack-getCapabilities.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStreamTrack-getCapabilities.https.html
 //
 // This file DEVIATES from the verbatim-port convention: upstream registers
 // each per-property sub-test from inside its parent test's body (after the
 // device's capabilities are read at runtime). Our runner now forbids
-// mid-run registration (see LLP 0007#static-test-registration), so we flatten
+// mid-run registration (see LLP 0010#static-test-registration), so we flatten
 // the pattern: a single "setup" test per category opens the stream and
 // snapshots capabilities into module-scope state, and the per-property
 // sub-tests are pre-registered at module load and consume that snapshot.

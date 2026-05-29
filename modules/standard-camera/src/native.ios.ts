@@ -1,4 +1,4 @@
-// @ref LLP 0005 — iOS backend for the web-shaped camera API.
+// @ref LLP 0006 — iOS backend for the web-shaped camera API.
 
 import { requireNativeModule } from 'expo';
 

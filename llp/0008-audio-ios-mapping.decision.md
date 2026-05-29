@@ -1,17 +1,17 @@
-# LLP 0009: Audio capture — iOS implementation
+# LLP 0008: Audio capture — iOS implementation
 
 **Type:** Decision
 **Status:** Active
 **Systems:** standard-camera, ios
 **Author:** James Ide
 **Date:** 2026-05-22
-**Related:** 0001, 0002, 0003, 0005, 0008
+**Related:** 0002, 0003, 0004, 0006, 0001
 
 ## Summary
 
 This LLP documents how our local Expo module turns `navigator.mediaDevices.getUserMedia({ audio: <truthy> })` into an `AVCaptureSession` + `AVAudioSession` configuration on iOS, and how a combined `getUserMedia({ audio: true, video: true })` call yields a single `MediaStream` containing one audio and one video track sharing one session.
 
-Section anchors below are stable; code annotations cite them as `@ref LLP 0009#<anchor>`. The spec text for the constrainable audio surface lives in [LLP 0008](./0008-w3c-spec-text.spec.md); the scope decision is in [LLP 0001](./0001-spec-subset-scope.spec.md).
+Section anchors below are stable; code annotations cite them as `@ref LLP 0008#<anchor>`. The spec text for the constrainable audio surface lives in [LLP 0001](./0001-w3c-spec-text.spec.md); the scope decision is in [LLP 0002](./0002-spec-subset-scope.spec.md).
 
 ## Why a single session for combined audio/video
 
@@ -19,7 +19,7 @@ Section anchors below are stable; code annotations cite them as `@ref LLP 0009#<
 
 1. **Lifecycle is naturally shared.** Stopping the session releases both inputs; an interruption on the session covers both modalities.
 2. **Notification fan-out reuses the existing observer plumbing.** `CaptureSource` already installs observers on the session and fans out to every track; the audio track just registers in the same set.
-3. **The clone semantics from [LLP 0003#stream-clone](./0003-mediastream.spec.md#stream-clone) work unchanged.** Each track strong-refs the same `CaptureSource`; the live count covers both kinds.
+3. **The clone semantics from [LLP 0004#stream-clone](./0004-mediastream.spec.md#stream-clone) work unchanged.** Each track strong-refs the same `CaptureSource`; the live count covers both kinds.
 
 The alternative — separate `AVAudioEngine` for audio and `AVCaptureSession` for video — would require duplicating interruption observers, would not let the session's runtime-error notification end the audio track, and would force a custom merge step in `MediaStream`. We accept the constraint that audio-only `getUserMedia` also opens an `AVCaptureSession` (with only an audio input and an `AVCaptureAudioDataOutput` sink) for symmetry.
 
@@ -54,7 +54,7 @@ iOS simulators sometimes hand back an empty string for the audio device's `uniqu
    - `echoCancellation: false | { exact: false }` or omitted → `.default`. No processing applied.
 3. `try AVAudioSession.sharedInstance().setActive(true, options: [])`. Activation must happen before `AVCaptureSession.startRunning()`.
 
-These calls can throw; we map every `AVAudioSession`-originated error to `NotReadableError` (cf. [LLP 0002#gum-error-mapping](./0002-getusermedia.spec.md#gum-error-mapping)).
+These calls can throw; we map every `AVAudioSession`-originated error to `NotReadableError` (cf. [LLP 0003#gum-error-mapping](./0003-getusermedia.spec.md#gum-error-mapping)).
 
 ## `audio-build-session`
 
@@ -95,7 +95,7 @@ The audio track's `getSettings()` returns:
 }
 ```
 
-These properties are the entries in the constrainable audio set the spec mandates ([LLP 0008#audio-properties](./0008-w3c-spec-text.spec.md#audio-properties)).
+These properties are the entries in the constrainable audio set the spec mandates ([LLP 0001#audio-properties](./0001-w3c-spec-text.spec.md#audio-properties)).
 
 ## `audio-track-capabilities`
 
@@ -145,11 +145,11 @@ iOS additionally posts `AVAudioSession.interruptionNotification` (separate from 
 When `getUserMedia({ audio: true, video: true })` is invoked:
 
 1. Permissions are requested in the order video, then audio. If either denies, the entire call rejects with `NotAllowedError` and we tear down anything we'd already partially created (`AVAudioSession.setActive(false)`; we never started the `AVCaptureSession`).
-2. The single `AVCaptureSession` is built with both inputs added in the same `beginConfiguration` / `commitConfiguration` block. This guarantees both connections come up atomically, matching the rationale in [LLP 0002#gum-build-session](./0002-getusermedia.spec.md#gum-build-session).
+2. The single `AVCaptureSession` is built with both inputs added in the same `beginConfiguration` / `commitConfiguration` block. This guarantees both connections come up atomically, matching the rationale in [LLP 0003#gum-build-session](./0003-getusermedia.spec.md#gum-build-session).
 3. Two `MediaStreamTrack`s are created, both holding the same `CaptureSource`. The `CaptureSource`'s live-count starts at 2; stopping one track decrements but does not stop the session. Stopping both (across any clones) does.
 
 ## Open questions
 
 1. iOS `setMode(.voiceChat)` also tries to route audio through the earpiece for the actual playback path (since voice-chat sessions typically include a downlink). We override with `.defaultToSpeaker`; verify on a real device that capture quality and routing both behave.
 2. Should `applyConstraints({ echoCancellation: false })` reconfigure `AVAudioSession.mode` live? In v1 it rejects with `OverconstrainedError` (consistent with the video track's behavior). Reconfiguring `AVAudioSession.mode` mid-capture is supported by iOS but requires a brief deactivate/reactivate; defer.
-3. The simulator delivers audio from the Mac host's default input. This means `bun run test:ios` *can* validate the audio path end-to-end, unlike video which has no simulator device (see [LLP 0007](./0007-in-app-wpt-runner.guide.md)). Combined `audio + video` tests still skip on the simulator because the video side fails to find a device.
+3. The simulator delivers audio from the Mac host's default input. This means `bun run test:ios` *can* validate the audio path end-to-end, unlike video which has no simulator device (see [LLP 0010](./0010-in-app-wpt-runner.guide.md)). Combined `audio + video` tests still skip on the simulator because the video side fails to find a device.

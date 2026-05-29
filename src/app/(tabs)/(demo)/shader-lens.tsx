@@ -29,7 +29,7 @@ import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
 
-// @ref LLP 0010#demo-2-shader-playground — Live camera frames flow through
+// @ref LLP 0012#demo-2-shader-playground — Live camera frames flow through
 // getUserMedia + ImageCapture into a WebGPU texture, then selectable WGSL
 // fragment shaders process the frame without a WASM or native CV runtime.
 
@@ -295,13 +295,13 @@ export default function ShaderLensScreen(): React.JSX.Element {
       return;
     }
     try {
-      // @ref LLP 0010#frame-bound-demo-mirroring — Snapshot mirroring with
+      // @ref LLP 0012#frame-bound-demo-mirroring — Snapshot mirroring with
       // the ImageCapture; stopped/replacing iOS tracks can lose facingMode
       // before an awaited grabFrame() returns.
       const mirrored = cameraFrameFacingMode(track.getSettings()) === 'user';
       imageCaptureRef.current = new ImageCapture(track);
       imageCaptureMirroredRef.current = mirrored;
-      // @ref LLP 0010#frame-bound-demo-mirroring — Avoid accepting the
+      // @ref LLP 0012#frame-bound-demo-mirroring — Avoid accepting the
       // replacement camera's transient exposure-settling frames without
       // depending on native-only frame diagnostics.
       imageCaptureAcceptAfterRef.current = Date.now() + CAMERA_CAPTURE_SETTLE_MS;
@@ -611,7 +611,7 @@ export default function ShaderLensScreen(): React.JSX.Element {
   const previewWidth = Math.min(previewStageWidth, previewStageHeight * previewAspect);
   const previewHeight = previewWidth / previewAspect;
   const cameraFacing = displayFacingMode({ constraints, settings });
-  // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
+  // @ref LLP 0009#decision — Demo Back controls stay visible but disabled
   // when the web provider proves no environment camera exists.
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
 

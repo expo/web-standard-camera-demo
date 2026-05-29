@@ -25,7 +25,7 @@ import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
 
-// @ref LLP 0010#demo-1-rotating-cube-of-cameras — Existing WebGPU camera
+// @ref LLP 0012#demo-1-rotating-cube-of-cameras — Existing WebGPU camera
 // demo remains a first-class selectable route in the demo catalog.
 //
 // Rotating cube whose six faces all show the live camera. The demo reads the
@@ -42,7 +42,7 @@ import { ImageCapture } from '../../../../modules/standard-camera';
 //   - navigator.gpu / WGSL                  (WebGPU)
 //
 // The only non-spec piece is the bridge ImageCapture pulls bytes through; see
-// LLP 0010 + 0011 for context.
+// LLP 0012 + 0011 for context.
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -148,7 +148,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
   } = useCamera();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const cameraFacing = displayFacingMode({ constraints, settings });
-  // @ref LLP 0021#decision — Demo Back controls stay visible but disabled
+  // @ref LLP 0009#decision — Demo Back controls stay visible but disabled
   // when the web provider proves no environment camera exists.
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
   const setFacing = React.useCallback(
@@ -210,7 +210,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
       const mirrored = cameraFrameFacingMode(track.getSettings()) === 'user';
       imageCaptureRef.current = new ImageCapture(track);
       imageCaptureMirroredRef.current = mirrored;
-      // @ref LLP 0010#frame-bound-demo-mirroring — Avoid accepting the
+      // @ref LLP 0012#frame-bound-demo-mirroring — Avoid accepting the
       // replacement camera's transient exposure-settling frames without
       // depending on native-only frame diagnostics.
       imageCaptureAcceptAfterRef.current = Date.now() + CAMERA_CAPTURE_SETTLE_MS;
@@ -436,7 +436,7 @@ export default function CubeOfCamerasScreen(): React.JSX.Element {
             // expensive browser ImageCapture copy cannot stop animation.
             const ic = imageCaptureRef.current;
             if (ic) {
-              // @ref LLP 0010#frame-bound-demo-mirroring — Snapshot mirroring
+              // @ref LLP 0012#frame-bound-demo-mirroring — Snapshot mirroring
               // with the capture object; stopped tracks can lose facingMode
               // before an in-flight grabFrame() resolves.
               scheduleCameraUpload(ic, imageCaptureMirroredRef.current);

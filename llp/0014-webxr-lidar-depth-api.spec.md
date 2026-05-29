@@ -1,11 +1,11 @@
-# LLP 0013: WebXR-shaped LiDAR depth API
+# LLP 0014: WebXR-shaped LiDAR depth API
 
 **Type:** Spec
 **Status:** Active / Research implementation
 **Systems:** demo, webxr-lidar-api, standard-camera-native-extension
 **Author:** James Ide
 **Date:** 2026-05-25
-**Related:** 0000, 0001, 0010, 0012, 0014, 0015, 0016, 0017
+**Related:** 0000, 0002, 0012, 0013
 
 ## Summary
 
@@ -36,12 +36,9 @@ WebGPU renderer can upload them to `GPUTexture`s itself.
 - WebXR Depth Sensing Module: https://www.w3.org/TR/webxr-depth-sensing-1/
 - WebXR Raw Camera Access Module: https://immersive-web.github.io/raw-camera-access/
 
-In-repo scoped source slices:
-
-- [LLP 0014: WebXR Device API](./0014-webxr-device-api-spec-slices.spec.md)
-- [LLP 0015: WebXR Augmented Reality Module](./0015-webxr-ar-module-spec-slices.spec.md)
-- [LLP 0016: WebXR Depth Sensing Module](./0016-webxr-depth-sensing-spec-slices.spec.md)
-- [LLP 0017: WebXR Raw Camera Access](./0017-webxr-raw-camera-access-spec-slices.spec.md)
+Earlier revisions of this repo also kept verbatim per-document spec slices for
+each of the above (LLPs 0014–0017). Those were tombstoned once this profile
+became the single research surface; cite the URLs above for normative text.
 
 ## Conformance Model
 
@@ -54,7 +51,7 @@ LiDAR demo surface. Any code that installs `navigator.xr` under this LLP MUST
 label the surface experimental and MUST NOT imply general browser compatibility.
 
 Section anchors below are stable; code annotations may cite them as
-`@ref LLP 0013#<anchor>`.
+`@ref LLP 0014#<anchor>`.
 
 ## Goals
 
@@ -396,7 +393,7 @@ capability check.
 10. Request native camera permission. If permission is denied or restricted,
    reject with `NotAllowedError`.
 11. If another `getUserMedia` or LiDAR session is active, stop or suspend it
-    through the same external-lock mechanism used by LLP 0012. Cold-start
+    through the same external-lock mechanism used by LLP 0013. Cold-start
     autorun MUST NOT start ARKit before the shared camera-lock handler is
     installed; the profile may wait briefly for that handler, but if it cannot
     acquire one it must reject instead of starting an unlocked ARKit session.
@@ -908,7 +905,7 @@ The first research implementation is present as:
 - `src/app/(tabs)/(demo)/lidar-depth-webxr.tsx`
 
 The implementation is a JavaScript WebXR-shaped profile over the existing
-native LiDAR sidecar from LLP 0012. It installs `navigator.xr` only when the
+native LiDAR sidecar from LLP 0013. It installs `navigator.xr` only when the
 WebXR profile installer is called, then implements the supported profile from
 this LLP: `"immersive-ar"`, `"viewer"`/`"local"` reference spaces,
 `"depth-sensing"`, `"camera-access"`, CPU `float32` depth, CPU camera bytes,

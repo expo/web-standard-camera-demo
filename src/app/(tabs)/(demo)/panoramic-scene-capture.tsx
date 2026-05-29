@@ -97,7 +97,7 @@ import {
   type WebXRSession,
 } from '../../../../modules/standard-camera';
 
-// @ref LLP 0020#reconstruction-pipeline - Panoramic capture uses only
+// @ref LLP 0015#reconstruction-pipeline - Panoramic capture uses only
 // WebXR-shaped depth, pose, camera-image, and optional mesh-detection access:
 // no app-facing native AR APIs. The captured model is currently a camera-colored
 // surfel cloud rendered with WebGPU.
@@ -122,7 +122,7 @@ const MODEL_VIEW_MODES = [
 type CaptureBlockedReason = 'busy' | 'not-scanning' | 'too-few-keyframes';
 type ModelPublishSource = 'capture' | 'live' | 'preview' | 'reset';
 type ScanResetReason = 'manual-reset' | 'start-session';
-// @ref LLP 0020#v2-arkit-mesh-snapshot - Mesh supplement refresh uses
+// @ref LLP 0015#v2-arkit-mesh-snapshot - Mesh supplement refresh uses
 // standard XRMesh object identity plus `lastChangedTime`; native anchor IDs
 // remain hidden inside the WebXR runtime.
 const meshIdentitySerials = new WeakMap<WebXRMesh, number>();
@@ -375,7 +375,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   const setViewerState = React.useCallback((nextViewer: ViewerState): void => {
-    // @ref LLP 0020#model-view - WebGPU reads the viewer from a ref each
+    // @ref LLP 0015#model-view - WebGPU reads the viewer from a ref each
     // frame; drag updates avoid React state so touch rotation stays responsive.
     viewerRef.current = nextViewer;
     renderDirtyRef.current = true;
@@ -501,7 +501,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       current[1] + forward[1],
       current[2] + forward[2],
     ];
-    // @ref LLP 0020#model-view - Recompute 180-degree coverage around the
+    // @ref LLP 0015#model-view - Recompute 180-degree coverage around the
     // accepted scan arc so the hint follows partial sweeps in AR world space.
     scanForwardSamplesRef.current = [...scanForwardSamplesRef.current, forward];
     coverageSectorsRef.current = panoramicCoverageSectors(scanForwardSamplesRef.current);
@@ -533,7 +533,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
     lastKeyframeRejectionProfileLoggedAtMsRef.current = now;
     const stats = scanStatsRef.current;
-    // @ref LLP 0020#testing-and-validation - Rejection profiles explain why a
+    // @ref LLP 0015#testing-and-validation - Rejection profiles explain why a
     // physical scan can appear to capture no surfels even though the XR loop is
     // running, without forcing CPU depth/camera work on pose-only rejects.
     console.log('PANORAMIC_KEYFRAME_REJECTION_PROFILE', JSON.stringify({
@@ -556,7 +556,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   function logCaptureBlockedProfile(reason: CaptureBlockedReason): void {
     const stats = scanStatsRef.current;
-    // @ref LLP 0020#testing-and-validation - Capture is disabled until enough
+    // @ref LLP 0015#testing-and-validation - Capture is disabled until enough
     // keyframes exist, but stale taps or programmatic calls still need a copied
     // device-log breadcrumb that proves the scan was not sealed at one frame.
     console.log('PANORAMIC_CAPTURE_BLOCKED_PROFILE', JSON.stringify({
@@ -591,7 +591,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       previousModelSurfelCount > 0 ||
       surfelCountRef.current > 0;
     if (!hasPreviousScan) return;
-    // @ref LLP 0020#testing-and-validation - Multi-attempt device logs must show
+    // @ref LLP 0015#testing-and-validation - Multi-attempt device logs must show
     // when a later one-frame capture belongs to a fresh scan that discarded an
     // earlier multi-keyframe model.
     console.log('PANORAMIC_SCAN_RESET_PROFILE', JSON.stringify({
@@ -653,7 +653,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   function logXRScanLoopStopProfile(reason: string, session: WebXRSession): void {
     const stats = scanStatsRef.current;
-    // @ref LLP 0020#testing-and-validation - If recursive XR frame scheduling
+    // @ref LLP 0015#testing-and-validation - If recursive XR frame scheduling
     // stops after a first keyframe, logs need to show whether the app stopped
     // intentionally or the session/status guard rejected the next frame.
     console.log('PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE', JSON.stringify({
@@ -680,7 +680,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     requestedDepthTypes: readonly string[],
     requestedMesh: boolean
   ): void {
-    // @ref LLP 0020#testing-and-validation - Physical profile-only runs can
+    // @ref LLP 0015#testing-and-validation - Physical profile-only runs can
     // force smooth depth or disable mesh detection to isolate whether a one-frame
     // scan is caused by ARKit scene-depth smoothing, mesh reconstruction, or the
     // JS keyframe gates.
@@ -698,7 +698,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     if (now - lastScanStatsLoggedAtMsRef.current < SCAN_STATS_PROFILE_INTERVAL_MS) {
       return;
     }
-    // @ref LLP 0020#testing-and-validation - Profile-only physical runs need
+    // @ref LLP 0015#testing-and-validation - Profile-only physical runs need
     // scan-loop telemetry even when no keyframes are accepted yet, so pose/depth
     // misses and rejection reasons are visible without waiting for Capture.
     logScanStats('periodic');
@@ -716,7 +716,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     for (const mesh of detectedMeshes) {
       latestChangedTime = Math.max(latestChangedTime, mesh.lastChangedTime);
     }
-    // @ref LLP 0020#v2-arkit-mesh-snapshot - Mesh telemetry lets physical-device logs
+    // @ref LLP 0015#v2-arkit-mesh-snapshot - Mesh telemetry lets physical-device logs
     // show whether the WebXR mesh-backed surfel path has enough geometry to
     // improve scan quality on the real device. It stays on
     // `XRFrame.detectedMeshes` summary fields so periodic rejected frames do
@@ -756,7 +756,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           depthSensing: {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
-            // @ref LLP 0020#webxr-depth-geometry-unprojection - The panorama
+            // @ref LLP 0015#webxr-depth-geometry-unprojection - The panorama
             // is a deliberate slow 180-degree sweep; normal runs prefer WebXR
             // raw current-frame depth to avoid smoothed semantic stalls, while
             // profile-only deep links can force smooth first for comparison.
@@ -857,7 +857,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
         setError('No valid depth samples have been captured yet.');
         return;
       }
-      // @ref LLP 0020#render-telemetry - Publish the captured model only after
+      // @ref LLP 0015#render-telemetry - Publish the captured model only after
       // the captured status is visible to the WebGPU render loop. Otherwise the
       // requestRender() inside publishModel can draw the final model while the
       // route still reports `building-model`, skipping captured render metrics.
@@ -953,7 +953,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
     const now = performanceNow();
     const hasPublishedModel = modelRef.current !== null;
-    // @ref LLP 0020#performance-constraints - Live scan feedback backs off as
+    // @ref LLP 0015#performance-constraints - Live scan feedback backs off as
     // retained samples and build cost grow, but early accepted keyframes still
     // publish immediately so the display cannot remain on the first keyframe
     // while the user starts a 180-degree sweep. Preview/Capture still force a
@@ -980,7 +980,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     lastLiveModelKeyframesRef.current = keyframeCountRef.current;
     lastLiveModelPublishedAtMsRef.current = performanceNow();
     lastLiveModelRawSampleCountRef.current = fusionRef.current.rawSampleCount;
-    // @ref LLP 0020#model-view - During a 180-degree scan, keep live snapshots
+    // @ref LLP 0015#model-view - During a 180-degree scan, keep live snapshots
     // centered around the evolving accepted view until the user manually
     // inspects the model, then preserve that chosen inspection view.
     publishModel(nextModel, { recenter: !viewerManuallyAdjustedRef.current, source: 'live' });
@@ -991,7 +991,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     return true;
   }
 
-  // @ref LLP 0020#privacy-and-permissions - Export is an explicit user action
+  // @ref LLP 0015#privacy-and-permissions - Export is an explicit user action
   // and uses the system share sheet; captures are not uploaded or saved silently.
   async function saveModel(): Promise<void> {
     const capturedModel = status === 'captured' ? modelRef.current : null;
@@ -1072,7 +1072,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
 
   const modelPanResponder = React.useMemo(
     () =>
-      // @ref LLP 0020#model-view - Model-view supports one-finger orbit plus
+      // @ref LLP 0015#model-view - Model-view supports one-finger orbit plus
       // two-finger pan/pinch inspection of the surfel cloud.
       // eslint-disable-next-line react-hooks/refs -- PanResponder stores handlers; refs are read when gestures fire.
       PanResponder.create({
@@ -1322,7 +1322,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             0,
             viewerRef.current
           );
-          // @ref LLP 0020#webgpu-rendering - Dense surfel captures render as
+          // @ref LLP 0015#webgpu-rendering - Dense surfel captures render as
           // smaller camera-facing splats to reduce overdraw on device GPUs.
           const pointScalePx = modelSurfelPointScalePx(currentModel?.surfelCount ?? 0);
           uniforms[16] = pointScalePx / Math.max(width, 1);
@@ -1539,7 +1539,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                 </VStack>
               </Host>
               {model ? (
-                // @ref LLP 0020#model-view - Model-view exposes inspection
+                // @ref LLP 0015#model-view - Model-view exposes inspection
                 // modes for camera color, geometric depth, and fused normals.
                 <View style={[styles.modeControl, { width: stageWidth }]}>
                   <Text style={styles.modeControlLabel}>View</Text>
@@ -1625,7 +1625,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           return;
         }
         maybeLogMeshProfile(frame);
-        // @ref LLP 0020#keyframe-policy - `predictedDisplayTime` describes when
+        // @ref LLP 0015#keyframe-policy - `predictedDisplayTime` describes when
         // the native frame was captured/displayed. The panorama throttle uses JS
         // callback wall time so delayed WebXR delivery does not collapse several
         // scan candidates into the first keyframe's interval bucket.
@@ -1649,13 +1649,14 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
             cachedCameraImage = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
             return cachedCameraImage;
           };
-          // @ref LLP 0017#xr-webgl-get-camera-image — This route uses the
-          // repo-local CPU binding analog to sample camera colors into surfels;
-          // no native camera side API is called outside the WebXR-shaped frame.
+          // @ref LLP 0014#xr-camera-image — This route uses the repo-local CPU
+          // binding analog (XRCPUCameraBinding) to sample camera colors into
+          // surfels; no native camera side API is called outside the
+          // WebXR-shaped frame.
           maybeCaptureKeyframe(
             depth,
             getCameraImage,
-            // @ref LLP 0013#xr-depth-information — XRDepthInformation includes
+            // @ref LLP 0014#xr-depth-information — XRDepthInformation includes
             // XRViewGeometry; use the depth object's associated projection and
             // transform for reconstruction instead of exposing native intrinsics.
             depth.projectionMatrix,
@@ -1678,7 +1679,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         recordScanRejection('scan-loop-error');
-        // @ref LLP 0020#testing-and-validation - A thrown frame callback used
+        // @ref LLP 0015#testing-and-validation - A thrown frame callback used
         // to stop recursive XR RAF scheduling, leaving a scan with only the
         // first accepted surfel batch. Keep the loop alive and make the failure
         // visible in copied physical-device logs.
@@ -1727,7 +1728,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     });
     const preSampleMs = performanceNow() - preSampleStart;
     if (!decision.accepted) {
-      // @ref LLP 0020#performance-constraints - Reject pose-only non-keyframes
+      // @ref LLP 0015#performance-constraints - Reject pose-only non-keyframes
       // before touching WebXR CPU depth/camera data.
       recordScanRejection(decision.reason);
       maybeLogKeyframeRejectionProfile(decision.reason, {
@@ -1819,7 +1820,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const { forward, position, preSampleMs } = precheck;
     const candidateCoverageSector = panoramicCoverageKey(forward, { centerForward: scanForwardSumRef.current });
     const addsCoverageSector = !coverageSectorsRef.current.has(candidateCoverageSector);
-    // @ref LLP 0020#performance-constraints - After the first keyframe,
+    // @ref LLP 0015#performance-constraints - After the first keyframe,
     // require world-space contribution before asking WebXR for the CPU camera
     // image and before doing the full color/normal fusion pass. New 180-degree
     // coverage sectors use a lighter gate; already-covered sectors use the
@@ -1846,7 +1847,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const appendStart = performanceNow();
     const fusionRawSampleCountBeforeAppend = fusionRef.current.rawSampleCount;
     const fusionFusedSurfelCountBeforeAppend = fusionRef.current.voxels.size;
-    // @ref LLP 0020#testing-and-validation - Post-append rejection profiles must
+    // @ref LLP 0015#testing-and-validation - Post-append rejection profiles must
     // prove whether a rejected candidate was only preflight work or whether it
     // already mutated fusion before failing keyframe acceptance.
     const rejectedAppendFusionFields = (): Record<string, unknown> => {
@@ -1886,7 +1887,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const depthInitialAppendMs = performanceNow() - appendStart;
     let appendMs = performanceNow() - appendStart;
     const sampleDecisionStart = performanceNow();
-    // @ref LLP 0020#keyframe-policy - Pose/time/speed rejections happen before
+    // @ref LLP 0015#keyframe-policy - Pose/time/speed rejections happen before
     // WebXR CPU depth/camera access. After append, only density/contribution
     // gates can reject the candidate, so a rejected frame cannot leave fused
     // surfels behind for a pose reason.
@@ -1896,7 +1897,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       added.newVoxelCount,
       appendProfile.preflightNewVoxels
     );
-    // @ref LLP 0020#performance-constraints - Mature overlap skips reduce how
+    // @ref LLP 0015#performance-constraints - Mature overlap skips reduce how
     // many samples are actually fused, but the acceptance gate should use the
     // preflight-observed surface and new-voxel contribution. Otherwise a useful
     // keyframe can mutate fusion and then fail publication because duplicate
@@ -2072,7 +2073,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       lastMeshSupplementSignatureRef.current !== null &&
       nextKeyframeOrdinal - lastMeshSupplementKeyframeRef.current >= MESH_SUPPLEMENT_REFRESH_KEYFRAMES;
     const meshCoverageCheckDue = addsCoverageSector;
-    // @ref LLP 0020#v2-arkit-mesh-snapshot - When depth alone accepted this
+    // @ref LLP 0015#v2-arkit-mesh-snapshot - When depth alone accepted this
     // keyframe, defer XRFrame.detectedMeshes summary reads except for first /
     // newly covered 180-degree sectors, periodic refresh checks, or explicit
     // supplement refreshes. Mesh rescue still reads immediately because it can
@@ -2131,7 +2132,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const totalSurfelCount = added.surfelCount + meshAdded.surfelCount;
     const totalUpdatedVoxelCount = added.updatedVoxelCount + meshAdded.updatedVoxelCount;
 
-    // @ref LLP 0020#performance-constraints - Accepted samples are inserted
+    // @ref LLP 0015#performance-constraints - Accepted samples are inserted
     // into voxel fusion during the WebXR depth pass, avoiding a second JS array
     // walk on the XR frame path.
     const fusionMs = 0;
@@ -2441,7 +2442,7 @@ function logModelPublishProfile(
   recenter: boolean,
   scanId: number
 ): void {
-  // @ref LLP 0020#testing-and-validation - Publish telemetry proves that a fresh
+  // @ref LLP 0015#testing-and-validation - Publish telemetry proves that a fresh
   // live/preview/capture model reached React state before WebGPU upload/render
   // telemetry, isolating stale display from keyframe capture.
   console.log('PANORAMIC_MODEL_PUBLISH_PROFILE', JSON.stringify({

@@ -1,10 +1,10 @@
 import AVFoundation
 import ExpoModulesCore
 
-// @ref LLP 0004#srcObject-* — HTMLMediaElement.srcObject subset, mirrored on a
+// @ref LLP 0005#srcObject-* — HTMLMediaElement.srcObject subset, mirrored on a
 //                              native ExpoView. The TS wrapper exposes the
 //                              spec-shaped surface; this class is the bridge.
-// @ref LLP 0005#architecture — AVCaptureVideoPreviewLayer renders the session.
+// @ref LLP 0006#architecture — AVCaptureVideoPreviewLayer renders the session.
 // The backing layer is the AVCaptureVideoPreviewLayer itself (via
 // `+layerClass`) so React Native's style writes land on it directly. The web
 // spec idiom for mirroring a preview — `transform: scaleX(-1)` on the video
@@ -93,7 +93,7 @@ internal final class VideoView: ExpoView {
     previewLayer.needsDisplayOnBoundsChange = true
     previewLayer.addSublayer(disabledMaskLayer)
 
-    // @ref LLP 0004#preview-mirroring — Spec idiom for mirroring a preview is
+    // @ref LLP 0005#preview-mirroring — Spec idiom for mirroring a preview is
     // `transform: scaleX(-1)` on the video element. RN writes that onto
     // `layer.transform`. AVCaptureVideoPreviewLayer's video rendering uses an
     // IOSurface fast path that ignores the CALayer transform, so we translate
@@ -197,7 +197,7 @@ internal final class VideoView: ExpoView {
     CATransaction.commit()
   }
 
-  // @ref LLP 0004#srcobject-readyState — Reset to HAVE_NOTHING; fire
+  // @ref LLP 0005#srcobject-readyState — Reset to HAVE_NOTHING; fire
   //                                       loadeddata when frames arrive.
   private func attachStream() {
     firstFrameObserver?.invalidate()
@@ -227,7 +227,7 @@ internal final class VideoView: ExpoView {
     CATransaction.setDisableActions(true)
     previewLayer.session = session
 
-    // @ref LLP 0005#first-frame-detection — Explicitly enable the connection
+    // @ref LLP 0006#first-frame-detection — Explicitly enable the connection
     // (expo-camera pattern). Initial enabled state comes from the stream's
     // first video track so a stream attached while its track is already
     // disabled doesn't briefly show live pixels.
@@ -244,7 +244,7 @@ internal final class VideoView: ExpoView {
     // the session attached — `connection.isVideoMirrored` only exists once
     // the connection does.
     applyPendingMirrorToConnection()
-    // @ref LLP 0005#preview-orientation-and-mirroring — Apply rotation after
+    // @ref LLP 0006#preview-orientation-and-mirroring — Apply rotation after
     // mirroring so the last AVFoundation connection write is the orientation
     // correction for the current camera/preview-layer pair.
     if let connection = previewLayer.connection {
@@ -252,7 +252,7 @@ internal final class VideoView: ExpoView {
     }
     CATransaction.commit()
 
-    // @ref LLP 0003#track-enabled — Subscribe so the preview layer's
+    // @ref LLP 0004#track-enabled — Subscribe so the preview layer's
     // connection tracks future `track.enabled` toggles, not just the
     // initial state captured above.
     if let source = videoTrack?.source {
@@ -260,7 +260,7 @@ internal final class VideoView: ExpoView {
       source.registerPreview(self)
     }
 
-    // @ref LLP 0005#first-frame-detection — Drive loadeddata off the FrameSink's
+    // @ref LLP 0006#first-frame-detection — Drive loadeddata off the FrameSink's
     // first sample callback. The FrameSink lives on the first video track's
     // CaptureSource (post-refactor — tracks own the source, not the stream).
     if let frameSink = videoTrack?.source?.frameSink {
@@ -272,7 +272,7 @@ internal final class VideoView: ExpoView {
       }
     }
 
-    // @ref LLP 0004#srcobject-play-pause — Start the session if not running
+    // @ref LLP 0005#srcobject-play-pause — Start the session if not running
     if !session.isRunning {
       MediaStream.sessionQueue.async {
         session.startRunning()
@@ -280,7 +280,7 @@ internal final class VideoView: ExpoView {
     }
   }
 
-  // @ref LLP 0005#preview-orientation-and-mirroring — Use Apple's rotation
+  // @ref LLP 0006#preview-orientation-and-mirroring — Use Apple's rotation
   // coordinator on iOS 17+ instead of a hard-coded portrait angle, and keep
   // that angle available so mirror changes can reapply it afterward.
   private func configurePreviewOrientation(
@@ -352,7 +352,7 @@ internal final class VideoView: ExpoView {
     }
   }
 
-  // @ref LLP 0004#srcobject-play-pause — pause() stops the session
+  // @ref LLP 0005#srcobject-play-pause — pause() stops the session
   func pause() {
     guard let session = srcObject?.captureSession else { return }
     MediaStream.sessionQueue.async { [weak self] in

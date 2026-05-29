@@ -1,23 +1,23 @@
-# LLP 0010: WebGPU camera demos
+# LLP 0012: WebGPU camera demos
 
 **Type:** Plan
 **Status:** Active
 **Systems:** standard-camera, demo
 **Author:** James Ide
 **Date:** 2026-05-23
-**Related:** 0000, 0001, 0002, 0003, 0004, 0011
+**Related:** 0000, 0002, 0003, 0004, 0005, 0008, 0009
 
 ## Summary
 
 This LLP plans a small catalog of visceral, W3C-pure demos that sit on top of the standard-camera module and make the project's spec-compliance thesis concrete. The thesis is that "if our camera surface matches the W3C `MediaStream` / `getUserMedia` shape, browser-shaped code can run on iOS through it." The demos in this plan are chosen so the only library code that does anything camera-specific is the standard-camera module itself — everything else (rendering, shading, compute) goes through other W3C-defined surfaces, primarily WebGPU and WGSL.
 
-Each demo is small, ships on its own, and uses only one custom bridge: a way to expose the camera's `CVPixelBuffer` to WebGPU's `importSharedTextureMemory`. That bridge is specified in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md) (to follow); this LLP catalogues what the demos do and the order to build them in.
+Each demo is small, ships on its own, and uses only one custom bridge: a way to expose the camera's `CVPixelBuffer` to WebGPU's `importSharedTextureMemory`. This LLP catalogues what the demos do and the order to build them in; the bridge itself remains an open follow-up captured under "Non-spec bridge" and "Build order" below.
 
 ## Goals
 
 - **Showcase W3C compliance viscerally.** The user sees the live camera being processed through standard browser APIs (WebGPU, WGSL) in real time. The "wait, that's the actual camera flowing through unmodified browser code" moment is the demo.
 - **Make the project's value clear in under 30 seconds.** A first-time viewer should understand the pitch ("browser code, on iOS, through our camera") without needing the README.
-- **Exercise the spec, not just decorate it.** Each demo uses the standard `MediaStream` / `MediaStreamTrack` / `<Video srcObject>` surface defined in [LLP 0002](./0002-getusermedia.spec.md), [LLP 0003](./0003-mediastream.spec.md), and [LLP 0004](./0004-htmlmediaelement-srcobject.spec.md) — discovering and exercising gaps where they exist.
+- **Exercise the spec, not just decorate it.** Each demo uses the standard `MediaStream` / `MediaStreamTrack` / `<Video srcObject>` surface defined in [LLP 0003](./0003-getusermedia.spec.md), [LLP 0004](./0004-mediastream.spec.md), and [LLP 0005](./0005-htmlmediaelement-srcobject.spec.md) — discovering and exercising gaps where they exist.
 
 ## Non-goals
 
@@ -32,6 +32,7 @@ Each demo is small, ships on its own, and uses only one custom bridge: a way to 
 | Rotating cube of cameras | A spinning cube, every face is the live camera, all in WGSL — a direct port of the [WebGPU samples' `videoUploading`](https://webgpu.github.io/webgpu-samples/?sample=videoUploading) demo. |
 | Shader playground | Live camera processed by a swappable fragment shader (kaleidoscope, edge-detect, posterize, sobel) — Snapchat-lens feel without a single line of native CV code. |
 | Tiny WebGPU classifier | A camera-fed classifier implemented directly in WGSL compute shaders — proves local AI inference without ONNX, Transformers.js, or WebAssembly. |
+| TensorFlow.js object lens | A TFJS WebGPU runtime probe loads a bundled COCO-SSD graph, detects objects in camera/probe tensors, and draws boxes without WASM or native ML. |
 | MNIST on the camera (stretch) | Point the phone at a hand-drawn digit, read the classification. ML inference in WGSL compute shaders, model weights downloaded as a `.safetensors`-class blob, all browser-shaped. |
 | LFM2-VL video captioning (research) | A live camera feed captioned by a Transformers.js vision-language model on WebGPU — compelling, but blocked in Expo until the WebGPU model runtime can run without WebAssembly. |
 
@@ -94,7 +95,7 @@ The demo render loops therefore store mirror state beside the currently bound
 camera texture, and update both only when a camera frame is successfully
 accepted from `ImageCapture.grabFrame()` for upload. The facing mode comes from
 that frame's track settings. On web, a missing `settings.facingMode` still
-follows LLP 0021's self-view convention; on native iOS, AVFoundation-backed
+follows LLP 0009's self-view convention; on native iOS, AVFoundation-backed
 tracks report the concrete front/back mode.
 
 On native iOS, the first frame from a newly selected camera can be a transient
@@ -126,9 +127,9 @@ Every demo in this plan exercises only standard W3C surfaces on the JS side. The
 
 | Surface | Source spec | Used for |
 |---|---|---|
-| `navigator.mediaDevices.getUserMedia` | [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/#dom-mediadevices-getusermedia) | Opening the camera. Already implemented; see [LLP 0002](./0002-getusermedia.spec.md). |
-| `MediaStream`, `MediaStreamTrack` | [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/#mediastream) | Carrying the camera feed; see [LLP 0003](./0003-mediastream.spec.md). |
-| `<Video srcObject>` | [HTML media srcObject](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject) | Showing the live preview; see [LLP 0004](./0004-htmlmediaelement-srcobject.spec.md). |
+| `navigator.mediaDevices.getUserMedia` | [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/#dom-mediadevices-getusermedia) | Opening the camera. Already implemented; see [LLP 0003](./0003-getusermedia.spec.md). |
+| `MediaStream`, `MediaStreamTrack` | [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/#mediastream) | Carrying the camera feed; see [LLP 0004](./0004-mediastream.spec.md). |
+| `<Video srcObject>` | [HTML media srcObject](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject) | Showing the live preview; see [LLP 0005](./0005-htmlmediaelement-srcobject.spec.md). |
 | `navigator.gpu`, `GPUAdapter`, `GPUDevice` | [WebGPU](https://www.w3.org/TR/webgpu/) | All rendering and compute. |
 | WGSL | [WebGPU Shading Language](https://www.w3.org/TR/WGSL/) | All shader code, byte-identical to the browser samples it's adapted from. |
 | `GPUCanvasContext` | [WebGPU](https://www.w3.org/TR/webgpu/#canvas-rendering) | Presenting to the screen via `react-native-wgpu`'s `Canvas`. |
@@ -142,12 +143,12 @@ Browser WebGPU imports video frames via `GPUDevice.importExternalTexture()`, whi
 The bridge work is therefore:
 
 1. The standard-camera module attaches an `AVCaptureVideoDataOutput` to the existing capture session and retains the latest `CVSampleBuffer` per video track.
-2. A JS-callable method on `MediaStreamTrack` (or a sibling API; exact shape TBD in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md)) returns a frame object whose `.handle` is the underlying `CVPixelBuffer` pointer and whose `.release()` returns ownership.
+2. A JS-callable method on `MediaStreamTrack` (or a sibling API; exact shape still open) returns a frame object whose `.handle` is the underlying `CVPixelBuffer` pointer and whose `.release()` returns ownership.
 3. The demo JS feeds that handle into `device.importSharedTextureMemory({ handle })`, gets a `GPUTexture`, and samples it from WGSL.
 
 The bridge is zero-copy: the `CVPixelBuffer` is `IOSurface`-backed, so Dawn imports it into a Metal texture without touching CPU memory. The pattern is exactly the one the official react-native-wgpu example uses for its built-in video player.
 
-This is the *only* non-spec surface in any demo. Every line of shader code, every render pipeline, every sampling call is exactly what would run in a browser. The W3C purity story holds with a single asterisk, which [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md) explains.
+This is the *only* non-spec surface in any demo. Every line of shader code, every render pipeline, every sampling call is exactly what would run in a browser. The W3C purity story holds with a single asterisk, which the "Non-spec bridge" section above explains.
 
 ## Demo catalog
 
@@ -216,11 +217,11 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 3. Back/front controls reuse the same camera constraint path as the other demos.
 4. On simulators with no camera, an animated synthetic texture keeps the inference path visible.
 
-**Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 16×16 grid from the `GPUTexture`, computes simple image features, and writes calibrated heuristic evidence scores into a storage buffer. A `MAP_READ` buffer copies back only a small fixed float vector: per-label scores plus feature readouts and secondary scene probes.
+**Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 24×18 grid from the `GPUTexture`, computes simple image features, and writes calibrated heuristic evidence scores into a storage buffer. A `MAP_READ` buffer copies back only a small fixed float vector: per-label scores plus feature readouts and secondary scene probes.
 
-**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. The classifier distinguishes exposure, color temperature, texture/detail, and a dedicated covered-lens/no-visible-scene state. It also surfaces secondary heuristic probes for outdoor-like color/light, palette, and texture. It is deliberately not a VLM and does not claim semantic understanding, people detection, or emotion recognition; it is a tiny no-WASM inference proof point.
+**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. The classifier distinguishes covered-lens/no-visible-scene, indoor, outdoor, mixed/window, exposure, color temperature, and texture/detail states. The indoor/outdoor path is still deliberately not a PlacesCNN-class semantic model: it is a layout-aware WGSL scorer over a 24×18 camera grid, combining top-of-frame sky evidence, lower-frame vegetation, horizon/openness, rectilinear structure, warm indoor lighting, and low-texture ceiling/window cues. It is more robust than average-color thresholds, but scenes without those visible cues still need a real trained scene classifier. It is deliberately not a VLM and does not claim semantic understanding, people detection, or emotion recognition; it is a tiny no-WASM inference proof point.
 
-**Next ML direction:** Do not add another "human cue" heuristic. A people/face signal needs a real detector before it is user-facing. The best fit for this repo's no-WASM constraint is a small WebGPU/WGSL face detector, likely a hand-ported BlazeFace-style model: downsample the camera texture to 128×128, run the model as WebGPU compute passes with weights stored in GPU buffers, decode face boxes/keypoints, and read back only the detection score and boxes. Browser ML runtimes that depend on WebAssembly remain out of scope for this demo path under Hermes V1.
+**Next ML direction:** Do not add another "human cue" heuristic. A people/face signal needs a real detector before it is user-facing. There are now two viable no-WASM branches to validate: a hand-ported WebGPU/WGSL detector for full control over camera texture flow, and a TensorFlow.js WebGPU branch for model-runtime leverage when the model accepts tensors directly. Browser ML runtimes that depend on a WebAssembly layer remain out of scope under Hermes V1.
 
 **Complexity:** Low. No model download, no tokenizer, no runtime dependency. The main risk is GPU buffer readback support in `react-native-wgpu`, which is validated by the route smoke test.
 
@@ -285,17 +286,54 @@ same Transformers.js WebGPU model path
 - The standard-camera BGRA frame bytes may need conversion before `RawImage` ingestion, depending on the Transformers.js image processor expectations.
 - Model startup time and memory footprint need physical-device validation; simulator results are not enough.
 
+### Demo 6: TensorFlow.js object lens
+
+**Pitch:** TensorFlow.js loads a bundled COCO-SSD model, runs the graph on WebGPU, and overlays object boxes plus a simple object-derived scene summary on camera frames.
+
+**Why this demo.** The WGSL classifier proves the lowest-level no-WASM path, but it is not a trained semantic model. TensorFlow.js is the most practical browser-shaped model runtime to spike because its WebGPU backend can run without the ONNX Runtime / Transformers.js WebAssembly layer that Hermes V1 does not provide. A whole-image ImageNet classifier was too brittle for the demo: the nature probe could become "daisy" because MobileNet had no "sunflower" scene label. COCO-SSD is still not Places365 scene recognition, but object detections with boxes are much easier for users to verify on live camera frames.
+
+**UX.**
+
+1. Open the demo from the catalog.
+2. The standard camera starts by default and the route shows the same Start/Stop affordance and stopped-camera placeholder as the other standard-camera demos.
+3. The route loads TFJS, initializes the WebGPU backend, loads the bundled COCO-SSD graph once, captures a low-cadence `ImageCapture.grabFrame()` tensor, and overlays object boxes and confidence bars.
+4. Switching to a static probe immediately shows the probe image, then animates in detections when the detector finishes. Switching probes reuses the loaded model and cached decoded probe tensors.
+5. For simulator smoke tests without a camera, `tfjs-scene-lens?source=workspace` opens directly on a deterministic probe while the normal route still defaults to camera.
+
+**Architecture.**
+
+```
+camera frame or bundled/static JPEG probe
+   ↓
+direct downsample to <=320px edge Int32 tensor
+   ↓
+@tensorflow/tfjs-converter loadGraphModel(tf.io.fromMemory)
+   ↓
+@tensorflow/tfjs-backend-webgpu
+   ↓
+bundled ssdlite_mobilenet_v2 COCO-SSD graph + local weight shards
+   ↓
+COCO object boxes + scores
+   ↓
+animated boxes/confidence bars + object-derived scene summary
+```
+
+**Status:** Prototype implemented as `tfjs-scene-lens` for route compatibility, but the UI labels it "TensorFlow object lens." The route defaults to camera, supports front/back constraints, retains static probes for deterministic testing, and exposes `globalThis.__TFJS_SCENE_SMOKE__` / `TFJS_SCENE_SMOKE ...` for existing smoke checks. The model JSON and five weight shards are vendored under `assets/models/coco-ssd-lite-mobilenet-v2`; Metro treats `.bin` files as assets, the `expo-asset` config plugin links the model directory into native builds, and the loader reads the shards through `expo-asset` / `expo-file-system` into `tf.io.fromMemory`. The model/runtime promises are module-level caches, probe tensors are cached per probe, route query `source=<probe>` supports no-camera simulator smoke tests, and inference runs about once per second so the live `<Video srcObject>` preview remains responsive.
+
+**Complexity:** Medium. The app now depends on TFJS, TFJS Converter, `expo-asset`, `jpeg-js`, and COCO-SSD's class metadata. COCO-SSD still performs post-processing / NMS on CPU, so this is not an all-GPU detector. The demo mitigates that by downsampling before tensor creation, using async tensor reads, spacing camera inference to roughly 1 Hz, and keeping camera preview on the native video view rather than redrawing it through JS.
+
 ## Build order
 
-1. **Foundation** — `react-native-wgpu` installed, hello-triangle verified. ✅ done (LLP 0010 milestone 0).
+1. **Foundation** — `react-native-wgpu` installed, hello-triangle verified. ✅ done (LLP 0012 milestone 0).
 2. **Demo catalog route.** Keep the existing cube demo and expose candidate demos from a chooser. ✅ done.
 3. **Demo 2: shader playground.** ✅ First version implemented: selectable WGSL effects on the live camera stream without WASM.
 4. **Demo 3: tiny WebGPU classifier.** ✅ First version implemented: no-WASM WGSL compute scores on the live camera texture.
-5. **LFM2-VL research.** Keep as research until a WebGPU VLM runtime runs under Hermes without WebAssembly.
-6. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
-7. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, document the API in [LLP 0011](./0011-cvpixelbuffer-webgpu-bridge.decision.md). One to two days. Task #17.
-8. **Demo 1: rotating cube of cameras.** One day. Task #18.
-9. **Demo 4: MNIST.** Stretch — schedule only after simpler demos land.
+5. **Demo 6: TensorFlow.js object lens.** Prototype implemented with bundled COCO-SSD on TFJS WebGPU; simulator and web smoke validation must stay attached to this route while the runtime is still a spike.
+6. **LFM2-VL research.** Keep as research until a WebGPU VLM runtime runs under Hermes without WebAssembly.
+7. **`SharedTextureMemory` spike with synthetic frames.** Port the official example, confirm `importSharedTextureMemory` → `createTexture` → `beginAccess` works on this iOS build with a fabricated `CVPixelBuffer`. Half day. Task #16.
+8. **CVPixelBuffer bridge in standard-camera.** Add `AVCaptureVideoDataOutput`, expose handle, and decide the API shape in a follow-up LLP at that time. One to two days. Task #17.
+9. **Demo 1: rotating cube of cameras.** One day. Task #18.
+10. **Demo 4: MNIST.** Stretch — schedule only after simpler demos land.
 
 Total wall-clock to Demo 1 shipping: roughly four days from milestone 0, assuming no surprises.
 
@@ -338,15 +376,15 @@ A demo is shipped when:
 
 1. It runs end to end on iOS 18+ simulator and on a physical device at ≥ 30 fps.
 2. It opens via a normal route (no deep-link gymnastics).
-3. It has an `@ref LLP 0010#<demo-anchor>` comment in its entry file pointing at this LLP.
+3. It has an `@ref LLP 0012#<demo-anchor>` comment in its entry file pointing at this LLP.
 4. There is at least one ported WPT-style test (or, where no WPT analogue exists, a project-local test in `modules/standard-camera/src/testing/local/`) that exercises any new spec surface the demo introduces.
 5. There is a screenshot in the README so the demo is discoverable without running the app.
 
 ## Out of scope (for now)
 
 - **Three.js WebGPU mode** on react-native-wgpu — feasible (`react-native-webgpu-worklets` exposes the path) but adds an indirection that obscures the W3C purity story. Worth revisiting only if there is a specific three.js demo we want unmodified.
-- **Multi-track / picture-in-picture** demos (e.g., front + back camera composited in the same WebGPU scene). Cool, but blocked on multi-track `getUserMedia` support which is not in the current spec subset; see [LLP 0001](./0001-spec-subset-scope.spec.md).
-- **Audio reactive demos.** Audio capture is deferred to v2 of the camera module; see [LLP 0009](./0009-audio-ios-mapping.decision.md). Once audio lands, a "camera + Web Audio analyser → WGSL visualization" demo would be a natural addition.
+- **Multi-track / picture-in-picture** demos (e.g., front + back camera composited in the same WebGPU scene). Cool, but blocked on multi-track `getUserMedia` support which is not in the current spec subset; see [LLP 0002](./0002-spec-subset-scope.spec.md).
+- **Audio reactive demos.** Audio capture now lands in v1 ([LLP 0008](./0008-audio-ios-mapping.decision.md)), so a "camera + Web Audio analyser → WGSL visualization" demo would be a natural addition.
 - **WebGPU compute boids fed by camera pixels.** Tagged as a possible v3 demo; mentioned for posterity.
 
 ## Risks

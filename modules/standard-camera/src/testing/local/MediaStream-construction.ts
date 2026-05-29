@@ -1,4 +1,4 @@
-// @ref LLP 0007 — Port of MediaStream constructor / addTrack / removeTrack /
+// @ref LLP 0010 — Port of MediaStream constructor / addTrack / removeTrack /
 // getTrackById invariants. Combines what upstream WPT splits across
 // MediaStream-gettrackid.https.html, MediaStream-finished-add.https.html,
 // MediaStream-removetrack.https.html, plus IDL-driven constructor cases that
@@ -21,7 +21,7 @@ import {
 
 wptSource(null);
 
-// @ref LLP 0008#mediastream-constructor — 0-arg, sequence, and copy forms
+// @ref LLP 0001#mediastream-constructor — 0-arg, sequence, and copy forms
 test(() => {
   const empty = new MediaStream();
   assert_equals(empty.getTracks().length, 0, 'new MediaStream() has zero tracks');
@@ -34,7 +34,7 @@ test(() => {
   assert_not_equals(a.id, b.id, 'distinct streams have distinct ids');
 }, 'Distinct MediaStream constructions yield distinct ids');
 
-// @ref LLP 0008#mediastream-constructor — copy constructor: tracks are shared,
+// @ref LLP 0001#mediastream-constructor — copy constructor: tracks are shared,
 // not cloned (compare with new MediaStream(stream.clone()) for true cloning).
 promise_test(async () => {
   const original = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -47,7 +47,7 @@ promise_test(async () => {
   for (const t of original.getTracks()) t.stop();
 }, 'new MediaStream(stream) shares tracks with the source stream');
 
-// @ref LLP 0008#mediastream-constructor — sequence form
+// @ref LLP 0001#mediastream-constructor — sequence form
 promise_test(async () => {
   const src = await navigator.mediaDevices.getUserMedia({ video: true });
   const track = src.getVideoTracks()[0];
@@ -57,7 +57,7 @@ promise_test(async () => {
   for (const t of src.getTracks()) t.stop();
 }, 'new MediaStream(tracks) builds a stream from a sequence');
 
-// @ref LLP 0008#mediastream-constructor — duplicate entries in the sequence are deduped
+// @ref LLP 0001#mediastream-constructor — duplicate entries in the sequence are deduped
 promise_test(async () => {
   const src = await navigator.mediaDevices.getUserMedia({ video: true });
   const track = src.getVideoTracks()[0];
@@ -66,7 +66,7 @@ promise_test(async () => {
   for (const t of src.getTracks()) t.stop();
 }, 'new MediaStream(tracks) dedupes a repeated MediaStreamTrack');
 
-// @ref LLP 0008#mediastream-constructor — sequence with a non-track throws TypeError
+// @ref LLP 0001#mediastream-constructor — sequence with a non-track throws TypeError
 test(() => {
   assert_throws_dom(
     'TypeError',
@@ -78,7 +78,7 @@ test(() => {
   );
 }, 'new MediaStream([non-track]) throws TypeError');
 
-// @ref LLP 0003#stream-getTrackById — getTrackById returns the matching track or null
+// @ref LLP 0004#stream-getTrackById — getTrackById returns the matching track or null
 // Port of MediaStream-gettrackid.https.html
 promise_test(async () => {
   const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -88,7 +88,7 @@ promise_test(async () => {
   for (const t of stream.getTracks()) t.stop();
 }, 'MediaStream.getTrackById returns the track or null');
 
-// @ref LLP 0003#stream-addtrack — addTrack on a previously inactive stream
+// @ref LLP 0004#stream-addtrack — addTrack on a previously inactive stream
 // Port of MediaStream-finished-add.https.html (adapted to video-only)
 promise_test(async () => {
   // We get two video streams. Stop one, then move the other's track into it.
@@ -109,7 +109,7 @@ promise_test(async () => {
   bTrack.stop();
 }, 'Adding a track to an inactive MediaStream is allowed');
 
-// @ref LLP 0003#stream-removetrack — script-initiated removeTrack does not fire onremovetrack
+// @ref LLP 0004#stream-removetrack — script-initiated removeTrack does not fire onremovetrack
 // Port of MediaStream-removetrack.https.html (adapted to video-only)
 promise_test(async () => {
   const a = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -133,7 +133,7 @@ promise_test(async () => {
   for (const t of tracks) t.stop();
 }, 'MediaStream.removeTrack works and does not fire onremovetrack');
 
-// @ref LLP 0003#stream-addtrack — script-initiated addTrack does not fire onaddtrack
+// @ref LLP 0004#stream-addtrack — script-initiated addTrack does not fire onaddtrack
 promise_test(async () => {
   const src = await navigator.mediaDevices.getUserMedia({ video: true });
   const stream = new MediaStream();

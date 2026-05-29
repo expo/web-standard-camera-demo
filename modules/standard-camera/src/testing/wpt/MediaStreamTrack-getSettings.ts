@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/MediaStreamTrack-getSettings.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/MediaStreamTrack-getSettings.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStreamTrack-getSettings.https.html
 
 import { wptSource, test, assert_between_inclusive, assert_equals, assert_greater_than, assert_greater_than_equal, assert_in_array, assert_not_equals, assert_true, promise_test, setMediaPermission } from '../testharness';

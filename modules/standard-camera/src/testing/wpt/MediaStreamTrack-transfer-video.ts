@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/MediaStreamTrack-transfer-video.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/MediaStreamTrack-transfer-video.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStreamTrack-transfer-video.https.html
 
 import { wptSource, test, promise_test } from '../testharness';

@@ -1,4 +1,4 @@
-// @ref LLP 0002#mediadevices-enumeratedevices — Verifies that
+// @ref LLP 0001#dom-mediadevices-enumeratedevices — Verifies that
 // `enumerateDevices()` returns every built-in camera on the device, not just
 // the system default. On a modern iPhone this is at least one front and one
 // rear camera; on a Pro / Pro Max it is typically four or more (front

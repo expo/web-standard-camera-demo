@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/parallel-capture-requests.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/parallel-capture-requests.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/parallel-capture-requests.https.html
 
 import { wptSource, test, assert_equals, assert_greater_than_equal, assert_less_than_equal, promise_test } from '../testharness';

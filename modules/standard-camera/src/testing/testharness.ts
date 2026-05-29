@@ -1,4 +1,4 @@
-// @ref LLP 0007 — testharness.js subset
+// @ref LLP 0010 — testharness.js subset
 //
 // A port of the WPT testharness API. Tests register via test() /
 // promise_test() / async_test() and the runner executes them sequentially.
@@ -89,7 +89,7 @@ export function isApplicable(req: TestRequirement, env: TestEnvironment): boolea
   }
 }
 
-// @ref LLP 0007#the-simulator-does-not-have-a-camera-device — Source-file
+// @ref LLP 0010#the-simulator-does-not-have-a-camera-device — Source-file
 // categorization. The default (when a source isn't listed here) is `'camera'`,
 // since most ported WPT tests open a video stream. Listing only the
 // non-default cases keeps the table small and reviewable.
@@ -224,7 +224,7 @@ const TEST_NAME_REQUIREMENTS = new Map<
     'Tests that a media element with an assigned MediaStream does not start advancing currentTime until potentially playing',
     { requirement: 'out-of-scope', reason: 'out-of-scope: requires HTMLCanvasElement.captureStream' },
   ],
-  // @ref LLP 0008#video-properties — `'INVALID'` is not in the resizeMode
+  // @ref LLP 0001#video-properties — `'INVALID'` is not in the resizeMode
   // enum; gUM rejects it synchronously in `flattenVideo` (MediaDevices.ts)
   // before any AVCaptureDevice lookup, so the test runs on the simulator.
   [
@@ -387,7 +387,7 @@ const _harnessSetup: { [k: string]: unknown } = {};
 // queries the device, then `test(...)` for each discovered capability) fail
 // loudly instead of silently growing the suite mid-run. Every test must be
 // registered at module-load time so the UI can show the full list up front —
-// see LLP 0007#static-test-registration.
+// see LLP 0010#static-test-registration.
 let registrationLocked = false;
 
 function defaultName(): string {
@@ -408,7 +408,7 @@ function registerTest(
     throw new Error(
       `Test "${name}" tried to register during a run (source=${currentSourceFile ?? '<none>'}). ` +
         `All tests must register at module-load time so the in-app list reflects the full suite up front. ` +
-        `Move this registration out of a test body / helper — see LLP 0007#static-test-registration.`
+        `Move this registration out of a test body / helper — see LLP 0010#static-test-registration.`
     );
   }
   const { requirement, reason } = classifyTest(name, currentSourceFile);
@@ -445,7 +445,7 @@ export function async_test(fn: (t: TestHandle) => void, name?: string): void {
  *  kind to reject with `NotAllowedError`. We track the denial set here and
  *  the `MediaDevices` module consults it via `__getDeniedKindsForTesting`.
  *  Granting is the default — gUM proceeds against the simulator-granted
- *  privacy permission set up by `bun run test:ios` (LLP 0007#cli-flow). */
+ *  privacy permission set up by `bun run test:ios` (LLP 0010#cli-flow). */
 export async function setMediaPermission(
   state: 'granted' | 'denied' = 'granted',
   devices: string[] = ['camera']
@@ -712,7 +712,7 @@ export type TestResult = {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-// @ref LLP 0007#the-simulator-does-not-have-a-camera-device — Safety net for
+// @ref LLP 0010#the-simulator-does-not-have-a-camera-device — Safety net for
 // the camera-less environment. Tests we couldn't pre-skip (because their
 // `requirement` was misclassified, or because the runner was invoked with no
 // `environment` and we couldn't tell up front) still reach this path: if
@@ -1346,7 +1346,7 @@ export function nextEvent<T extends Event = Event>(
   });
 }
 
-// @ref LLP 0007#harness-surface — emit one line of CLI-parseable output
+// @ref LLP 0010#harness-surface — emit one line of CLI-parseable output
 // through both console.log (visible in Debug builds) and native NSLog (visible
 // in Release builds, where RN's console is not bridged to os_log).
 function emit(line: string): void {

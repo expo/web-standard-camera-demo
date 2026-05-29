@@ -1,4 +1,4 @@
-// @ref LLP 0002 — MediaDevices.getUserMedia subset
+// @ref LLP 0003 — MediaDevices.getUserMedia subset
 
 import { DOMException, rewrapNativeError } from './DOMException';
 import { MediaStream } from './MediaStream';
@@ -17,7 +17,7 @@ import type {
 // Per spec, `enumerateDevices()` exposes deviceId/label/groupId only after the
 // caller has successfully gotten a stream of the matching kind via gUM. These
 // flags mirror that — flipped on a successful getUserMedia of the matching kind.
-// @ref LLP 0002#gum-pick-device — pre-grant gating
+// @ref LLP 0003#gum-pick-device — pre-grant gating
 let hasGrantedVideo = false;
 let hasGrantedAudio = false;
 
@@ -31,7 +31,7 @@ const grantSubscribers = new Set<(name: 'camera' | 'microphone') => void>();
 // here so gUM rejects with `NotAllowedError` for the matching kind. In a
 // browser this would be wired through test_driver; in our Expo-app context
 // we play the UA's role, so a programmatic hook is the natural fit.
-// @ref LLP 0008#error-notallowederror
+// @ref LLP 0001#error-notallowederror
 let testDeniedCheck: (() => { camera: boolean; microphone: boolean }) | null = null;
 
 /** @internal Test-only hook: install a function the gUM path calls to check
@@ -76,22 +76,22 @@ export function __getCaptureGrantsForTesting(): { camera: boolean; microphone: b
   return { camera: hasGrantedVideo, microphone: hasGrantedAudio };
 }
 
-// @ref LLP 0008#dom-mediadevices — MediaDevices interface
+// @ref LLP 0001#dom-mediadevices — MediaDevices interface
 export class MediaDevices extends EventTarget {
-  // @ref LLP 0002 — getUserMedia
+  // @ref LLP 0003 — getUserMedia
   async getUserMedia(constraints?: MediaStreamConstraints): Promise<MediaStream> {
-    // @ref LLP 0002#gum-validate-constraints — normalize before sending to native
+    // @ref LLP 0003#gum-validate-constraints — normalize before sending to native
     const { video, audio } = normalizeConstraints(constraints);
 
     if (!video && !audio) {
-      // @ref LLP 0008#error-typeerror — Per spec, "neither audio nor video"
+      // @ref LLP 0001#error-typeerror — Per spec, "neither audio nor video"
       // is a JS `TypeError`, not a DOMException with name "TypeError". The
       // WPT `GUM-empty-option-param` test asserts `e instanceof TypeError`,
       // which requires a real `TypeError`.
       throw new TypeError('At least one of audio and video must be requested');
     }
 
-    // @ref LLP 0008#error-notallowederror — Synthetic denial set by
+    // @ref LLP 0001#error-notallowederror — Synthetic denial set by
     // `setMediaPermission('denied')` (WPT helper). We're the UA in this
     // context, so honoring the test-driver-style denial here is legitimate.
     const denied = testDeniedCheck?.();
@@ -113,11 +113,11 @@ export class MediaDevices extends EventTarget {
       hasGrantedAudio = true;
       notifyGrantsChanged('microphone');
     }
-    // @ref LLP 0003#stream-construction — internal native-handle path
+    // @ref LLP 0004#stream-construction — internal native-handle path
     return new MediaStream(nativeStream);
   }
 
-  // @ref LLP 0008#dom-mediadevices-enumeratedevices — Returns a list of
+  // @ref LLP 0001#dom-mediadevices-enumeratedevices — Returns a list of
   // `MediaDeviceInfo` (or its subclass `InputDeviceInfo` for input devices)
   // describing each device. Per spec, until the caller has successfully
   // captured a stream of the matching kind, `deviceId` / `label` / `groupId`
@@ -125,7 +125,7 @@ export class MediaDevices extends EventTarget {
   // a user across origins, so they're gated behind explicit user grant.
   async enumerateDevices(): Promise<MediaDeviceInfo[]> {
     let raw = await NativeModule.enumerateDevicesAsync();
-    // @ref LLP 0008#mediadevices-enumeratedevices — Per spec, if the document
+    // @ref LLP 0001#dom-mediadevices-enumeratedevices — Per spec, if the document
     // does not have permission to use a device of a kind, the UA MUST report
     // at most one device of that kind (and with empty deviceId/label/groupId).
     // Collapse each kind to a single representative pre-grant. WPT's
@@ -165,7 +165,7 @@ export class MediaDevices extends EventTarget {
       // Capabilities for the device itself (independent of whether the caller
       // has captured a stream yet). Mirrors the per-track getCapabilities()
       // shape so InputDeviceInfo.getCapabilities() is non-empty.
-      // @ref LLP 0009#audio-track-capabilities — audio device capabilities
+      // @ref LLP 0008#audio-track-capabilities — audio device capabilities
       const capabilities: Record<string, unknown> = d.kind === 'videoinput'
         ? {
             width: { min: 0, max: 1920 },
@@ -173,8 +173,8 @@ export class MediaDevices extends EventTarget {
             aspectRatio: { min: 0, max: 16 / 9 },
             frameRate: { min: 0, max: 60 },
             facingMode: ['environment'],
-            // @ref LLP 0008#video-properties — Both `resizeMode` values are
-            // in scope (see LLP 0001). Native track-level capabilities have
+            // @ref LLP 0001#video-properties — Both `resizeMode` values are
+            // in scope (see LLP 0002). Native track-level capabilities have
             // a matching entry — see `MediaStreamTrack.swift` videoCapabilities.
             resizeMode: ['none', 'crop-and-scale'],
             deviceId: granted ? d.deviceId : '',
@@ -212,12 +212,12 @@ export class MediaDevices extends EventTarget {
     });
   }
 
-  // @ref LLP 0001#mediadevices-getsupportedconstraints — stub
+  // @ref LLP 0001#dom-mediadevices-getsupportedconstraints — stub
   getSupportedConstraints(): Record<string, boolean> {
     return NativeModule.getSupportedConstraints();
   }
 
-  // @ref LLP 0001#mediadevices-getdisplaymedia — out of scope
+  // @ref LLP 0002#mediadevices-getdisplaymedia — out of scope
   async getDisplayMedia(_constraints?: MediaStreamConstraints): Promise<MediaStream> {
     throw new DOMException('getDisplayMedia is not supported', 'NotSupportedError');
   }
@@ -234,7 +234,7 @@ export class MediaDevices extends EventTarget {
 // Singleton (the spec's `navigator.mediaDevices`).
 export const mediaDevices = new MediaDevices();
 
-// @ref LLP 0002#gum-validate-constraints — flatten spec constraints to native shape
+// @ref LLP 0003#gum-validate-constraints — flatten spec constraints to native shape
 function normalizeConstraints(c: MediaStreamConstraints | undefined): {
   video: FlatVideoConstraints | undefined;
   audio: FlatAudioConstraints | undefined;
@@ -263,7 +263,7 @@ function normalizeConstraints(c: MediaStreamConstraints | undefined): {
   return { video, audio };
 }
 
-// @ref LLP 0002#gum-validate-constraints — Capability ranges for the
+// @ref LLP 0003#gum-validate-constraints — Capability ranges for the
 // builtInWideAngleCamera devices we target. Used to reject impossible
 // `min`/`max` constraints before the bridge call.
 const DEVICE_RANGES: Record<'width' | 'height' | 'frameRate' | 'aspectRatio', { min: number; max: number }> = {
@@ -273,7 +273,7 @@ const DEVICE_RANGES: Record<'width' | 'height' | 'frameRate' | 'aspectRatio', { 
   aspectRatio: { min: 0, max: 16 / 9 },
 };
 
-// @ref LLP 0002#gum-pick-device — We can only deliver `AVCaptureSession.Preset`
+// @ref LLP 0003#gum-pick-device — We can only deliver `AVCaptureSession.Preset`
 // resolutions; any `{exact}` value outside this discrete set is unsatisfiable.
 const DELIVERABLE_DIMENSIONS = {
   width: new Set([352, 640, 960, 1280, 1920, 3840]),
@@ -294,7 +294,7 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
     }
     if (v !== undefined) out.deviceId = v;
   }
-  // @ref LLP 0002#gum-pick-device — In v1 each `AVCaptureDevice.uniqueID` is
+  // @ref LLP 0003#gum-pick-device — In v1 each `AVCaptureDevice.uniqueID` is
   // used as both `deviceId` and `groupId`, so a `groupId: {exact}` constraint
   // resolves to the same device as the corresponding `deviceId: {exact}`.
   // Map it across when the caller specified only `groupId`, so the native
@@ -332,8 +332,8 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
     const v = pickNumber(c.aspectRatio);
     if (v !== undefined) out.aspectRatio = v;
   }
-  // @ref LLP 0008#video-properties — `resizeMode` ∈ {"none","crop-and-scale"}.
-  // Both values are in scope per LLP 0001. Reject `{exact: <anything else>}`
+  // @ref LLP 0001#video-properties — `resizeMode` ∈ {"none","crop-and-scale"}.
+  // Both values are in scope per LLP 0002. Reject `{exact: <anything else>}`
   // with `OverconstrainedError(resizeMode)` per spec; basic/ideal forms are
   // best-effort, and the actual value we ended up running is what
   // `getSettings().resizeMode` reports.
@@ -361,7 +361,7 @@ function flattenVideo(c: MediaTrackConstraints): FlatVideoConstraints {
   return out;
 }
 
-// @ref LLP 0009#audio-track-capabilities — Ranges supported by AVAudioSession
+// @ref LLP 0008#audio-track-capabilities — Ranges supported by AVAudioSession
 // for audio capture. Used to reject impossible `min`/`max` constraints before
 // the bridge call.
 const AUDIO_DEVICE_RANGES: Record<'sampleRate' | 'sampleSize' | 'channelCount' | 'latency', { min: number; max: number }> = {
@@ -406,7 +406,7 @@ function flattenAudio(c: MediaTrackConstraints): FlatAudioConstraints {
     const v = pickNumber(c.latency);
     if (v !== undefined) out.latency = v;
   }
-  // @ref LLP 0008#echocancellationmode — boolean | "all" | "remote-only"
+  // @ref LLP 0001#echocancellationmode — boolean | "all" | "remote-only"
   // Split into two scalar fields at the bridge: `echoCancellation` carries
   // the boolean form, `echoCancellationMode` carries the enum string. Native
   // sees only one of them set (or neither, if the caller omitted the field).
@@ -433,7 +433,7 @@ function flattenAudio(c: MediaTrackConstraints): FlatAudioConstraints {
   return out;
 }
 
-// @ref LLP 0008#error-overconstrainederror — Reject audio `min`/`max` /
+// @ref LLP 0001#error-overconstrainederror — Reject audio `min`/`max` /
 // `exact` ranges that can't be satisfied by any AVAudioSession we'd produce.
 function validateAudioNumericConstraint(
   name: 'sampleRate' | 'sampleSize' | 'channelCount' | 'latency',
@@ -459,7 +459,7 @@ function validateAudioNumericConstraint(
   }
 }
 
-// @ref LLP 0008#error-overconstrainederror — Reject `min`/`max` ranges that
+// @ref LLP 0001#error-overconstrainederror — Reject `min`/`max` ranges that
 // can't be satisfied by any AVCaptureDevice we'd return.
 function validateNumericConstraint(
   name: 'width' | 'height' | 'frameRate' | 'aspectRatio',
@@ -534,7 +534,7 @@ function pickString(c: ConstrainDOMString): string | undefined {
   return undefined;
 }
 
-// @ref LLP 0008#video-properties — Collapse a `ConstrainULong` / `ConstrainDouble`
+// @ref LLP 0001#video-properties — Collapse a `ConstrainULong` / `ConstrainDouble`
 // into a single scalar the native side can act on. The flat shape doesn't
 // distinguish `exact` / `ideal` / `min` / `max`; `flattenVideo` already
 // validates `{exact: X}` upstream where the spec requires hard rejection on
@@ -565,7 +565,7 @@ function pickBoolean(c: unknown): boolean | undefined {
   return undefined;
 }
 
-// @ref LLP 0008#echocancellationmode — boolean | "all" | "remote-only"
+// @ref LLP 0001#echocancellationmode — boolean | "all" | "remote-only"
 // The original input shape (including the enum string) is preserved through
 // the bridge so getSettings() can report it back verbatim.
 function pickBooleanOrEchoCancellationMode(

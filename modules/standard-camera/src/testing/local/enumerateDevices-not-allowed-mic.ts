@@ -1,4 +1,4 @@
-// @ref LLP 0008#mediadevices-enumeratedevices — Audio-side analog of
+// @ref LLP 0001#dom-mediadevices-enumeratedevices — Audio-side analog of
 // `enumerateDevices-not-allowed-camera`. Upstream's
 // `MediaDevices-enumerateDevices-not-allowed-mic` blocks the microphone
 // via a cross-origin Permissions-Policy header (out of scope for us);

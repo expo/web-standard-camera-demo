@@ -1,5 +1,5 @@
-// @ref LLP 0008#dom-mediastreamtrack — Upstream spec text
-// @ref LLP 0003#track-* — MediaStreamTrack subset
+// @ref LLP 0001#dom-mediastreamtrack — Upstream spec text
+// @ref LLP 0004#track-* — MediaStreamTrack subset
 
 import type { EventSubscription } from 'expo-modules-core';
 
@@ -23,7 +23,7 @@ export class MediaStreamTrack extends EventTarget {
     super();
     this._native = native;
 
-    // @ref LLP 0003#track-events — Forward native events to DOM-style events.
+    // @ref LLP 0004#track-events — Forward native events to DOM-style events.
     this.#nativeSubscriptions.push(
       native.addListener('ended', () => {
         this.dispatchEvent(new Event('ended'));
@@ -34,25 +34,25 @@ export class MediaStreamTrack extends EventTarget {
     );
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-id — spec attribute
-  // @ref LLP 0003#track-id
+  // @ref LLP 0001#dom-mediastreamtrack-id — spec attribute
+  // @ref LLP 0004#track-id
   get id(): string { return this._native.id; }
 
-  // @ref LLP 0008#dom-mediastreamtrack-kind — spec attribute
-  // @ref LLP 0003#track-kind
+  // @ref LLP 0001#dom-mediastreamtrack-kind — spec attribute
+  // @ref LLP 0004#track-kind
   get kind(): MediaStreamTrackKind { return this._native.kind; }
 
-  // @ref LLP 0003#track-label
+  // @ref LLP 0004#track-label
   get label(): string { return this._native.label; }
 
-  // @ref LLP 0003#track-enabled
+  // @ref LLP 0004#track-enabled
   get enabled(): boolean { return this._native.enabled; }
   set enabled(value: boolean) { this._native.enabled = value; }
 
-  // @ref LLP 0003#track-muted
+  // @ref LLP 0004#track-muted
   get muted(): boolean { return this._native.muted; }
 
-  // @ref LLP 0003#track-readyState
+  // @ref LLP 0004#track-readyState
   get readyState(): MediaStreamTrackState { return this._native.readyState; }
 
   // Spec compatibility — we don't honor these meaningfully, but the DOM type requires them.
@@ -60,8 +60,8 @@ export class MediaStreamTrack extends EventTarget {
   contentHint: string = '';
   readonly isolated: boolean = false;
 
-  // @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
-  // @ref LLP 0003#track-stop
+  // @ref LLP 0001#dom-mediastreamtrack-stop — spec algorithm
+  // @ref LLP 0004#track-stop
   stop(): void {
     const wasLive = this.readyState !== 'ended';
     this._native.stop();
@@ -70,26 +70,26 @@ export class MediaStreamTrack extends EventTarget {
     }
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-getsettings — spec algorithm
-  // @ref LLP 0003#track-getSettings
+  // @ref LLP 0001#dom-mediastreamtrack-getsettings — spec algorithm
+  // @ref LLP 0004#track-getSettings
   getSettings(): MediaTrackSettings { return this._native.getSettings(); }
 
-  // @ref LLP 0008#dom-mediastreamtrack-getconstraints — spec algorithm
-  // @ref LLP 0003#track-getConstraints
+  // @ref LLP 0001#dom-mediastreamtrack-getconstraints — spec algorithm
+  // @ref LLP 0004#track-getConstraints
   getConstraints(): Record<string, unknown> { return this._native.getConstraints(); }
 
-  // @ref LLP 0003#track-getCapabilities — Empty in v1; spec allows an empty MediaTrackCapabilities.
+  // @ref LLP 0004#track-getCapabilities — Empty in v1; spec allows an empty MediaTrackCapabilities.
   getCapabilities(): MediaTrackCapabilities { return this._native.getCapabilities(); }
 
-  // @ref LLP 0008#dom-mediastreamtrack-clone — spec algorithm
-  // @ref LLP 0003#track-clone — Shares the underlying CaptureSource so the
+  // @ref LLP 0001#dom-mediastreamtrack-clone — spec algorithm
+  // @ref LLP 0004#track-clone — Shares the underlying CaptureSource so the
   // camera stays live as long as any clone references it.
   clone(): MediaStreamTrack {
     return new MediaStreamTrack(this._native.clone());
   }
 
-  // @ref LLP 0008#dom-mediastreamtrack-applyconstraints — spec algorithm
-  // @ref LLP 0003#track-applyConstraints
+  // @ref LLP 0001#dom-mediastreamtrack-applyconstraints — spec algorithm
+  // @ref LLP 0004#track-applyConstraints
   //
   // We don't reconfigure the AVCaptureSession at runtime, so applyConstraints
   // is effectively a no-op: accept any "ideal" or basic-form constraints
@@ -182,7 +182,7 @@ export class MediaStreamTrack extends EventTarget {
     if (handler) this.addEventListener('unmute', handler);
   }
 
-  // @ref LLP 0004#srcobject-ended — HTMLMediaElement must notice that a
+  // @ref LLP 0005#srcobject-ended — HTMLMediaElement must notice that a
   // MediaStream became inactive after stop(), but MediaStreamTrack.stop()
   // must not fire the public "ended" event. Use a prefixed internal event.
   #dispatchInternalTrackEnded(): void {

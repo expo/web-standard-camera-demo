@@ -35,7 +35,7 @@ export function DemoChoiceCard({
       <Button
         modifiers={[buttonStyle('plain')]}
         onPress={() => {
-          // @ref LLP 0010#demo-catalog-route — Navigate imperatively so the
+          // @ref LLP 0012#demo-catalog-route — Navigate imperatively so the
           // entire card sits inside a SwiftUI Button label, giving the row a
           // native press animation instead of the JS Pressable's opacity dip.
           // Match Expo Router's default Link semantics: catalog entries are

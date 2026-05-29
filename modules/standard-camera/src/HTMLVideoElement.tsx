@@ -1,4 +1,4 @@
-// @ref LLP 0004 — <Video> component + HTMLMediaElement-shaped ref attribute mirror
+// @ref LLP 0005 — <Video> component + HTMLMediaElement-shaped ref attribute mirror
 
 import { requireNativeView } from 'expo';
 import * as React from 'react';
@@ -10,7 +10,7 @@ import { INTERNAL_TRACK_ENDED_EVENT } from './internalEvents';
 // ported from a browser type-checks 1:1 against `navigator.mediaDevices`.
 type Stream = globalThis.MediaStream;
 
-// @ref LLP 0005#sharedobject-view-prop — Canonical helper from
+// @ref LLP 0006#sharedobject-view-prop — Canonical helper from
 // https://github.com/expo/expo/pull/46054. Expo's view-prop marshaller can't
 // resolve a SharedObject proxy passed directly; the JS side forwards the
 // proxy's id (a number) and the native Prop converter — typed normally as the
@@ -40,14 +40,14 @@ const NativeView = requireNativeView('StandardCamera') as unknown as React.Forwa
   NativeVideoViewProps & React.RefAttributes<NativeVideoViewRef>
 >;
 
-// @ref LLP 0004#readystate-constants
+// @ref LLP 0005#readystate-constants
 const HAVE_NOTHING = 0;
 const HAVE_METADATA = 1;
 const HAVE_CURRENT_DATA = 2;
 const HAVE_FUTURE_DATA = 3;
 const HAVE_ENOUGH_DATA = 4;
 
-// @ref LLP 0004#srcobject-seekable / buffered — empty TimeRanges
+// @ref LLP 0005#srcobject-seekable / buffered — empty TimeRanges
 const EMPTY_TIME_RANGES = {
   length: 0,
   start(_index: number): never {
@@ -59,10 +59,10 @@ const EMPTY_TIME_RANGES = {
 };
 
 export interface HTMLVideoElement extends EventTarget {
-  // @ref LLP 0004#srcObject
+  // @ref LLP 0005#srcObject
   srcObject: Stream | null;
 
-  // @ref LLP 0004#readystate
+  // @ref LLP 0005#readystate
   readonly readyState: 0 | 1 | 2 | 3 | 4;
   readonly HAVE_NOTHING: 0;
   readonly HAVE_METADATA: 1;
@@ -70,25 +70,25 @@ export interface HTMLVideoElement extends EventTarget {
   readonly HAVE_FUTURE_DATA: 3;
   readonly HAVE_ENOUGH_DATA: 4;
 
-  // @ref LLP 0004#duration
+  // @ref LLP 0005#duration
   readonly duration: number;
 
-  // @ref LLP 0008#video-properties — Intrinsic dimensions of the displayed
+  // @ref LLP 0001#video-properties — Intrinsic dimensions of the displayed
   // video. For a MediaStream, these track the first video track's
   // settings — including the cropped dimensions when `resizeMode:
   // 'crop-and-scale'` is active. 0 before metadata is loaded.
   readonly videoWidth: number;
   readonly videoHeight: number;
 
-  // @ref LLP 0004#currentTime
+  // @ref LLP 0005#currentTime
   currentTime: number;
 
-  // @ref LLP 0004#seekable
+  // @ref LLP 0005#seekable
   readonly seekable: typeof EMPTY_TIME_RANGES;
   readonly buffered: typeof EMPTY_TIME_RANGES;
   readonly seeking: false;
 
-  // @ref LLP 0004#playback
+  // @ref LLP 0005#playback
   paused: boolean;
   ended: boolean;
   playbackRate: number;
@@ -134,7 +134,7 @@ export const Video = React.forwardRef<HTMLVideoElement, VideoProps>(function Vid
 
   React.useImperativeHandle(ref, () => el, [el]);
 
-  // @ref LLP 0004#prop-vs-ref — Prop changes win until the user sets srcObject on the ref.
+  // @ref LLP 0005#prop-vs-ref — Prop changes win until the user sets srcObject on the ref.
   React.useEffect(() => {
     if (props.srcObject !== undefined) {
       el.srcObject = props.srcObject ?? null;
@@ -165,7 +165,7 @@ export const Video = React.forwardRef<HTMLVideoElement, VideoProps>(function Vid
   );
 });
 
-// @ref LLP 0004 — concrete HTMLVideoElement implementation
+// @ref LLP 0005 — concrete HTMLVideoElement implementation
 class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   readonly HAVE_NOTHING = HAVE_NOTHING;
   readonly HAVE_METADATA = HAVE_METADATA;
@@ -177,7 +177,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   readonly buffered = EMPTY_TIME_RANGES;
   readonly seeking = false as const;
 
-  // @ref LLP 0004#played — Per HTML, a media element's played TimeRanges grows
+  // @ref LLP 0005#played — Per HTML, a media element's played TimeRanges grows
   // as the element advances its currentTime. For a MediaStream source this is
   // always a single range [0, currentTime] once play() has happened, and empty
   // before. The end of the range tracks our current accumulated playback time.
@@ -227,7 +227,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__notifyReact = notifyReact;
   }
 
-  // @ref LLP 0004#srcObject
+  // @ref LLP 0005#srcObject
   get srcObject(): Stream | null { return this.__srcObject; }
   set srcObject(value: Stream | null) {
     if (value === this.__srcObject) return;
@@ -269,10 +269,10 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__notifyReact(value);
   }
 
-  // @ref LLP 0004#readystate
+  // @ref LLP 0005#readystate
   get readyState(): 0 | 1 | 2 | 3 | 4 { return this.__readyState; }
 
-  // @ref LLP 0008#video-properties — `HTMLVideoElement.videoWidth` /
+  // @ref LLP 0001#video-properties — `HTMLVideoElement.videoWidth` /
   // `videoHeight` report the *intrinsic* dimensions of the displayed video.
   // For a MediaStream source those are the settings of the first video
   // track (which already accounts for `resizeMode: 'crop-and-scale'`
@@ -298,17 +298,17 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     return typeof v === 'number' ? v : 0;
   }
 
-  // @ref LLP 0004#duration
+  // @ref LLP 0005#duration
   get duration(): number { return this.__duration; }
 
-  // @ref LLP 0004#currentTime — Reads elapsed-since-play wall clock while
+  // @ref LLP 0005#currentTime — Reads elapsed-since-play wall clock while
   // playing, freezes at the accumulated value while paused.
   get currentTime(): number {
     if (this.__playStartMs === 0) return this.__accumulatedSeconds;
     return this.__accumulatedSeconds + (Date.now() - this.__playStartMs) / 1000;
   }
   set currentTime(_value: number) {
-    // @ref LLP 0004#srcobject-currentTime — UA MUST ignore attempts to set
+    // @ref LLP 0005#srcobject-currentTime — UA MUST ignore attempts to set
   }
 
   get paused(): boolean { return this.__paused; }
@@ -317,7 +317,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   get ended(): boolean { return this.__ended; }
   set ended(_value: boolean) { /* read-only */ }
 
-  // @ref LLP 0004#playbackRate — while srcObject is a MediaStream the spec
+  // @ref LLP 0005#playbackRate — while srcObject is a MediaStream the spec
   // forces this to 1 and ignores setters. Once srcObject is cleared, the
   // value returns to whatever the caller assigned beforehand.
   get playbackRate(): number {
@@ -328,7 +328,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__userPlaybackRate = value;
   }
 
-  // @ref LLP 0004#defaultPlaybackRate — same save/restore semantics.
+  // @ref LLP 0005#defaultPlaybackRate — same save/restore semantics.
   get defaultPlaybackRate(): number {
     return this.__srcObject ? 1 : this.__userDefaultPlaybackRate;
   }
@@ -337,7 +337,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__userDefaultPlaybackRate = value;
   }
 
-  // @ref LLP 0004#preload — same save/restore semantics.
+  // @ref LLP 0005#preload — same save/restore semantics.
   get preload(): 'none' | 'metadata' | 'auto' {
     return this.__srcObject ? 'none' : this.__userPreload;
   }
@@ -350,7 +350,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
 
   async play(): Promise<void> {
     await this.__native?.playAsync();
-    // @ref LLP 0008#video-properties — Wait for `loadeddata` (which fires
+    // @ref LLP 0001#video-properties — Wait for `loadeddata` (which fires
     // off the FrameSink's first sample callback, see VideoView.swift) so
     // `videoWidth` / `videoHeight` are non-zero by the time `await play()`
     // resolves. Browsers do this implicitly; the WPT
@@ -382,7 +382,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__stopTimeUpdates();
   }
 
-  // @ref LLP 0004 — `timeupdate` fires at ~4Hz (matching upstream browser
+  // @ref LLP 0005 — `timeupdate` fires at ~4Hz (matching upstream browser
   // cadence) while play() is active and pause()'s when it isn't. Several WPT
   // tests await `vid.ontimeupdate` to checkpoint playback progress.
   private __startTimeUpdates(): void {
@@ -548,7 +548,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.dispatchEvent(new Event('pause'));
   }
 
-  // @ref LLP 0004#srcobject-ended — fire when the stream becomes inactive
+  // @ref LLP 0005#srcobject-ended — fire when the stream becomes inactive
   // (no live tracks). MediaStreamTrack.stop() does not fire the public
   // `ended` event, so tracks emit a prefixed internal notification for media
   // element bookkeeping. The notification is queued as a task for stop(), so
@@ -571,7 +571,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__trackEndedSubscriptions = [];
   }
 
-  // @ref LLP 0004#srcobject-ended — `removeTrack` is script-initiated and the
+  // @ref LLP 0005#srcobject-ended — `removeTrack` is script-initiated and the
   // spec's `removetrack` event does not fire; but the HTML spec still requires
   // the media element to fire `ended` when its assigned MediaStream becomes
   // inactive (no live tracks). Our JS `MediaStream` emits an internal
@@ -609,7 +609,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     const hasLive = tracks.some((t) => t.readyState === 'live');
     if (!hasLive) {
       this.__ended = true;
-      // @ref LLP 0004#srcobject-ended — Per the HTML spec, when a media element's
+      // @ref LLP 0005#srcobject-ended — Per the HTML spec, when a media element's
       // MediaStream provider becomes inactive the element's duration is set to
       // the official playback position (currentTime) and a `durationchange`
       // event fires before the `ended` event.

@@ -4,7 +4,7 @@ import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { DemoChoiceCard } from '@/components/demo-choice-card';
 import { useTheme } from '@/hooks/use-theme';
 
-// @ref LLP 0010#demo-catalog-route — The Demo tab opens to a chooser so
+// @ref LLP 0012#demo-catalog-route — The Demo tab opens to a chooser so
 // shipped demos and candidate ports can coexist without replacing each other.
 export default function DemoCatalogScreen(): React.JSX.Element {
   const theme = useTheme();

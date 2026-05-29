@@ -21,7 +21,7 @@ import {
   type WebXRSession,
 } from '../../../../modules/standard-camera';
 
-// @ref LLP 0013#application-shape - This route is the WebXR-shaped variant of
+// @ref LLP 0014#application-shape - This route is the WebXR-shaped variant of
 // the LiDAR demo: app code talks to `navigator.xr`, receives XR frames, and
 // uploads CPU-visible camera/depth buffers into WebGPU.
 
@@ -496,7 +496,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
           depthSensing: {
             usagePreference: ['cpu-optimized'],
             dataFormatPreference: ['float32'],
-            // @ref LLP 0012#webxr-surface-for-this-demo-only - This viewer
+            // @ref LLP 0013#webxr-surface-for-this-demo-only - This viewer
             // prioritizes inspection over reconstruction, so it keeps
             // ARKit's low-confidence positive depth values visible.
             depthTypeRequest: ['smooth', 'raw'],
@@ -797,11 +797,10 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
               return;
             }
 
-            // @ref LLP 0012#depth-payload-before-camera - Pull the small depth
+            // @ref LLP 0013#depth-payload-before-camera - Pull the small depth
             // payload before the 1080p camera payload so native snapshot
             // retention does not expire the XRFrame's depth bytes.
-            // @ref LLP 0013#xr-depth-information
-            // @ref LLP 0016#depth-interpretation
+            // @ref LLP 0014#xr-depth-information
             const depth = frame.getDepthInformation(view);
             if (!depth) {
               reportFrameMiss('depth-miss');
@@ -819,9 +818,10 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
               throw e;
             }
 
-            // @ref LLP 0013#xr-camera-image
-            // @ref LLP 0017#xr-webgl-get-camera-image — Use the repo-local CPU
-            // binding analog because this demo uploads camera bytes to WebGPU.
+            // @ref LLP 0014#xr-camera-image — Use the repo-local CPU binding
+            // analog (XRCPUCameraBinding) because this demo uploads camera
+            // bytes to WebGPU; the upstream Raw Camera Access draft returns a
+            // WebGLTexture which we cannot use here.
             const xrCamera = view.camera;
             const camera = xrCamera ? cameraBinding.getCameraImage(xrCamera) : null;
             if (!camera) {
@@ -947,7 +947,7 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const transitioning = status === 'requesting XR session' || status === 'ending';
   const unsupported = status === 'unsupported' || support === 'WebXR LiDAR depth unsupported here';
 
-  // @ref LLP 0013#xr-request-session - WebXR session start must come from an
+  // @ref LLP 0014#xr-request-session - WebXR session start must come from an
   // explicit user tap. Use the patched native-stack header item here too so
   // this route starts from the same place as the custom LiDAR demo.
   const xrHeaderRightItems = React.useCallback(

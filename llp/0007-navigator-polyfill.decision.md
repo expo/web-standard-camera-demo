@@ -1,11 +1,11 @@
-# LLP 0006: `navigator.mediaDevices` polyfill
+# LLP 0007: `navigator.mediaDevices` polyfill
 
 **Type:** Decision
 **Status:** Active
 **Systems:** standard-camera, demo-app
 **Author:** James Ide
 **Date:** 2026-05-19
-**Related:** 0000, 0002
+**Related:** 0000, 0003
 
 ## Context
 

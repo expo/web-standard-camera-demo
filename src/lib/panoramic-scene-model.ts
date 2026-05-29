@@ -204,7 +204,7 @@ export function derivePanoramicCaptureControls({
   const transitioning = status === 'requesting' || status === 'building-model' || status === 'ending';
   const enoughKeyframesToCapture = acceptedKeyframes >= MIN_CAPTURE_KEYFRAMES;
   return {
-    // @ref LLP 0020#building-model - Capture seals a scan, not just the first
+    // @ref LLP 0015#building-model - Capture seals a scan, not just the first
     // live preview keyframe, so a one-frame model remains preview-only.
     canCapture: status === 'scanning' && liveSurfelCount > 0 && enoughKeyframesToCapture,
     canPreview: status === 'scanning' && liveSurfelCount > 0 && !transitioning,
@@ -502,7 +502,7 @@ function meshCandidateStrideSkip(
   sampleStride: number,
   remainingCandidates: number
 ): number {
-  // @ref LLP 0020#v2-arkit-mesh-snapshot - Dense WebXR mesh supplements are
+  // @ref LLP 0015#v2-arkit-mesh-snapshot - Dense WebXR mesh supplements are
   // sampled by stride; skipped stride candidates should not do per-triangle
   // centroid, projection, color, or fusion work on the JS scan path.
   if (sampleStride <= 1 || remainingCandidates <= 0) {
@@ -764,7 +764,7 @@ export function shouldAcceptPanoramicKeyframe({
   if (time - last.time < minIntervalMs) {
     return { accepted: false, reason: 'too-soon', ...motion };
   }
-  // @ref LLP 0020#keyframe-policy - Fast camera motion increases pose/depth
+  // @ref LLP 0015#keyframe-policy - Fast camera motion increases pose/depth
   // mismatch and motion blur. Drop those frames before asking WebXR for CPU
   // depth/camera bytes, instead of fusing noisy surfels into the model.
   if (translationSpeedMPerSec > maxTranslationMPerSecond || rotationSpeedDegPerSec > maxRotationDegPerSecond) {
@@ -784,7 +784,7 @@ export function shouldSkipCoveredPanoramicSector({
   scanForwardSum,
   translationM,
 }: CoveredSectorPrecheckInput): boolean {
-  // @ref LLP 0020#keyframe-policy - A deliberate 180-degree scan should spend
+  // @ref LLP 0015#keyframe-policy - A deliberate 180-degree scan should spend
   // CPU depth work on new sectors or translated parallax, not rotation-only
   // revisits of a sector that already has an accepted keyframe.
   if (keyframes <= 0 || coverageSectors.size <= 0) return false;
@@ -804,7 +804,7 @@ export function panoramicCoverageKey(
   }: PanoramicCoverageOptions = {}
 ): string {
   const direction = normalize(forward);
-  // @ref LLP 0020#model-view - Coverage for the 180-degree scan is relative
+  // @ref LLP 0015#model-view - Coverage for the 180-degree scan is relative
   // to the accepted scan arc, not to an arbitrary AR world yaw.
   const center = centerForward ? normalizeOrDefault(centerForward, [0, 0, -1]) : [0, 0, -1] as Vec3;
   const yaw = signedYawDelta(horizontalYaw(center), horizontalYaw(direction));
@@ -1354,7 +1354,7 @@ export function preflightMeshSurfelsForFusion<TMesh extends PanoramicMeshGeometr
 }
 
 function meshPreflightTargetsReached(result: MeshSurfelPreflightResult): boolean {
-  // @ref LLP 0020#v2-arkit-mesh-snapshot - Mesh rescue preflight only needs
+  // @ref LLP 0015#v2-arkit-mesh-snapshot - Mesh rescue preflight only needs
   // enough appendable mesh surfels and new voxels to decide the current gate.
   if (result.stopAtSurfels <= 0 && result.stopAtNewVoxels <= 0) {
     return false;
@@ -1484,7 +1484,7 @@ function appendDepthSurfelsWithConsumer(
   consume: ConsumeSurfelSample | null
 ): AppendDepthSurfelsResult {
   const appendStart = performanceNow();
-  // @ref LLP 0020#reconstruction-pipeline - Sparse keyframes phase their
+  // @ref LLP 0015#reconstruction-pipeline - Sparse keyframes phase their
   // subcell sample locations so a fixed per-frame budget still covers
   // different WebXR depth pixels across the scan.
   const sampleOffsetX = sampleGridOffsetForPhase(samplePhase, 0.6180339887498949);
@@ -1526,7 +1526,7 @@ function appendDepthSurfelsWithConsumer(
     depthGridScratch
   );
   if (profile) profile.depthGridSampleMode = depthCache.depthGridSampleMode;
-  // @ref LLP 0020#performance-constraints - Accepted keyframes transform many
+  // @ref LLP 0015#performance-constraints - Accepted keyframes transform many
   // surfels and normal vectors through the same XRView camera-to-world matrix.
   // Cache the rigid transform axes once so the hot loop avoids repeated matrix
   // indexing and generic helper dispatch while still consuming WebXR geometry.
@@ -1700,7 +1700,7 @@ function appendDepthSurfelsWithConsumer(
       const timeSample = detailedTiming && profiledSampleCount % timingSampleStride === 0;
       profiledSampleCount += detailedTiming ? 1 : 0;
       if (timeSample) timedSampleCount += 1;
-      // @ref LLP 0020#reconstruction-pipeline - WebXR depth samples are read
+      // @ref LLP 0015#reconstruction-pipeline - WebXR depth samples are read
       // through normDepthBufferFromNormView, then unprojected with the
       // associated XRViewGeometry projection matrix.
       timingStart = timeSample ? performanceNow() : 0;
@@ -1722,10 +1722,10 @@ function appendDepthSurfelsWithConsumer(
       if (!Number.isFinite(world[0]) || !Number.isFinite(world[1]) || !Number.isFinite(world[2])) {
         continue;
       }
-      // @ref LLP 0020#reconstruction-pipeline - Mature camera-colored voxels
+      // @ref LLP 0015#reconstruction-pipeline - Mature camera-colored voxels
       // already carry enough overlap for preview quality. Skip later duplicate
       // depth samples before normal/color work to reduce smear and scan cost.
-      // @ref LLP 0020#performance-constraints - Reuse this voxel key and map
+      // @ref LLP 0015#performance-constraints - Reuse this voxel key and map
       // lookup when the sample is fused below; accepted keyframes visit this
       // path for every valid WebXR depth sample.
       let fusionKey: SurfelVoxelKey | null = null;
@@ -1834,7 +1834,7 @@ function appendDepthSurfelsWithConsumer(
     profile.matureVoxelSkips = matureVoxelSkips;
     profile.planeProjectedSamples = planeProjectedSamples;
     if (detailedTiming) {
-      // @ref LLP 0020#performance-constraints - Detailed keyframe profiling
+      // @ref LLP 0015#performance-constraints - Detailed keyframe profiling
       // samples timing probes instead of calling `performance.now()` several
       // times for every surfel on device. Report scaled totals so the log still
       // identifies the hot phase without making detailed frames much slower.
@@ -1873,12 +1873,12 @@ function countNewVoxelDepthSurfels(
   let updatedVoxelCount = 0;
   const minNewVoxels = Math.max(0, Math.floor(stopAtNewVoxels));
   const minSurfels = Math.max(0, Math.floor(stopAtSurfels));
-  // @ref LLP 0020#performance-constraints - Same-sector contribution preflight
+  // @ref LLP 0015#performance-constraints - Same-sector contribution preflight
   // runs on redundant frames; reuse the accumulator's scratch key set instead
   // of allocating one per rejected XR frame.
   const candidateNewVoxelKeys = fusion.preflightVoxelKeysScratch;
   candidateNewVoxelKeys.clear();
-  // @ref LLP 0020#performance-constraints - Redundant-frame preflight can run
+  // @ref LLP 0015#performance-constraints - Redundant-frame preflight can run
   // many times between accepted keyframes, so keep transient vectors on the
   // accumulator instead of allocating them for every rejected frame.
   const cameraPoint = fusion.preflightCameraPointScratch;
@@ -1966,7 +1966,7 @@ function meshTriangleNormalInto(
   }
   if (normals) {
     const normalCount = Math.floor(normals.length / 3);
-    // @ref LLP 0020#v2-arkit-mesh-snapshot - ARKit `ARMeshGeometry.normals`
+    // @ref LLP 0015#v2-arkit-mesh-snapshot - ARKit `ARMeshGeometry.normals`
     // describes outside-facing normals for faces, while some WebXR-shaped
     // mesh test doubles use vertex normals. Select the indexing mode from the
     // buffer shape instead of assuming native normals share vertex indices.
@@ -2057,7 +2057,7 @@ function appendMeshSurfel(
   if (!hasCameraColor) {
     depthPaletteInto(colorScratch, fallbackDepthMeters);
   }
-  // @ref LLP 0020#v2-arkit-mesh-snapshot - Mesh triangles arrive through
+  // @ref LLP 0015#v2-arkit-mesh-snapshot - Mesh triangles arrive through
   // WebXR `XRFrame.detectedMeshes`. Their anchor-local coordinates are already
   // geometry in `meshSpace`, so offscreen triangles can still improve the
   // captured scene shape; projection is needed only for current camera color.
@@ -2317,13 +2317,13 @@ function createDepthSampleGridCache(
   for (let gy = 0; gy < SAMPLE_GRID_Y; gy += 1) {
     viewYs[gy] = (gy + sampleOffsetY) / SAMPLE_GRID_Y;
   }
-  // @ref LLP 0020#performance-constraints - The sparse grid is fixed for an
+  // @ref LLP 0015#performance-constraints - The sparse grid is fixed for an
   // accepted keyframe, so normal estimation can reuse precomputed neighbor
   // indices and forward/backward signs in the hot loop.
   precomputeNormalNeighborAxis(viewXs, SAMPLE_GRID_X, normalNeighborGXs, normalXSigns);
   precomputeNormalNeighborAxis(viewYs, SAMPLE_GRID_Y, normalNeighborGYs, normalYSigns);
   if (unprojector.mode === 'intrinsics-projection') {
-    // @ref LLP 0020#performance-constraints - The native ARKit bridge exposes
+    // @ref LLP 0015#performance-constraints - The native ARKit bridge exposes
     // intrinsics through a standard WebXR projection matrix. Precompute the
     // per-axis pinhole ray coefficients once per accepted keyframe so surfel
     // and normal-neighbor unprojection only multiplies by depth in the hot loop.
@@ -2346,7 +2346,7 @@ function createDepthSampleGridCache(
     ? 'precomputed-identity'
     : 'normalized-transform';
   if (depthGridSampleMode === 'precomputed-identity') {
-    // @ref LLP 0020#performance-constraints - View-aligned WebXR depth buffers
+    // @ref LLP 0015#performance-constraints - View-aligned WebXR depth buffers
     // can reuse per-axis bilinear pixel weights for every sparse grid lookup in
     // this accepted keyframe.
     precomputeDepthGridAxis(viewXs, depth.width, depthX0s, depthX1s, depthWX0s, depthWX1s);
@@ -2560,7 +2560,7 @@ function sampleCachedGridCameraPointInto(
     return false;
   }
 
-  // @ref LLP 0020#performance-constraints - The common native ARKit bridge
+  // @ref LLP 0015#performance-constraints - The common native ARKit bridge
   // exposes intrinsics as a standard WebXR projection matrix. Keep cached
   // grid-point unprojection on that fast WebXR geometry path.
   if (unprojector.mode === 'intrinsics-projection') {
@@ -2658,7 +2658,7 @@ function sampleDepthMetersAtNormalizedDepthPoint(
   const fx = pixelX - x0;
   const fy = pixelY - y0;
 
-  // @ref LLP 0020#reconstruction-pipeline - Subpixel depth sampling is
+  // @ref LLP 0015#reconstruction-pipeline - Subpixel depth sampling is
   // edge-aware: interpolate continuous neighborhoods, but reject footprints
   // that cross invalid samples or likely foreground/background boundaries.
   return interpolateDepthMeters(
@@ -2671,7 +2671,7 @@ function sampleDepthMetersAtNormalizedDepthPoint(
 
 function normalizedDepthCoordinateToPixel(value: number, size: number): number {
   if (!Number.isFinite(value) || size <= 0) return Number.NaN;
-  // @ref LLP 0020#reconstruction-pipeline - WebXR CPU depth coordinates treat
+  // @ref LLP 0015#reconstruction-pipeline - WebXR CPU depth coordinates treat
   // (column + 0.5) / width as the center of a depth pixel. Bilinear
   // reconstruction therefore samples in pixel-center space instead of shifting
   // every surfel footprint half a pixel down/right.
@@ -2691,7 +2691,7 @@ function normalizedDepthTransformMode(matrix: Float32Array): NormalizedDepthTran
     nearlyZero(matrix[12] ?? 0) &&
     nearlyZero(matrix[13] ?? 0)
   ) {
-    // @ref LLP 0020#reconstruction-pipeline - Native scene-depth frames are
+    // @ref LLP 0015#reconstruction-pipeline - Native scene-depth frames are
     // already view-aligned in the current WebXR profile. Keep that common path
     // out of the general projective transform math in the scan hot loop.
     return 'identity';
@@ -2823,7 +2823,7 @@ function estimateWorldNormalInto(
   scratch.normalCamera[0] *= invNormalCameraLength;
   scratch.normalCamera[1] *= invNormalCameraLength;
   scratch.normalCamera[2] *= invNormalCameraLength;
-  // @ref LLP 0020#webxr-depth-geometry-unprojection - XRView.transform is a
+  // @ref LLP 0015#webxr-depth-geometry-unprojection - XRView.transform is a
   // rigid camera-to-world transform, so a unit camera normal stays unit after
   // rotation. Re-normalize only if a non-rigid test matrix slips through.
   transformCameraDirectionToWorldInto(out, cameraToWorld, scratch.normalCamera);
@@ -2858,18 +2858,18 @@ export function surfelSampleWeight(
   // Distant ARKit depth samples cover more world area and tend to be noisier;
   // keep them useful for coverage without letting them dominate fused voxels.
   const depthWeight = clamp(1.35 / Math.max(depthMeters * depthMeters, 0.5), 0.14, 1.8);
-  // @ref LLP 0020#reconstruction-pipeline - Samples whose local depth
+  // @ref LLP 0015#reconstruction-pipeline - Samples whose local depth
   // neighborhood could not support an estimated normal are less reliable for
   // fusion, but still useful for sparse coverage.
   const qualityWeight = 0.45 + 0.55 * clamp(normalConfidence, 0, 1);
-  // @ref LLP 0020#reconstruction-pipeline - Grazing-angle observations are more
+  // @ref LLP 0015#reconstruction-pipeline - Grazing-angle observations are more
   // sensitive to small depth or pose errors, so they should contribute less to a
   // fused voxel than near-fronto-parallel observations.
   const incidenceWeight = 0.35 + 0.65 * smoothstep(0.2, 0.85, clamp(surfaceViewAlignment, 0, 1));
   return depthWeight * qualityWeight * incidenceWeight;
 }
 
-// @ref LLP 0020#reconstruction-pipeline - Repeated observations of the same
+// @ref LLP 0015#reconstruction-pipeline - Repeated observations of the same
 // world-space cell are fused into one weighted surfel instead of appended as
 // duplicate points.
 export function fuseSurfels(points: number[]): SurfelVoxelAccumulator[] {
@@ -3033,7 +3033,7 @@ function appendFiniteSurfelToFusion(
   let fusedZ = z;
   let planeProjected = false;
   if (voxel.weight > 0 && voxel.normalWeight > 0 && voxel.normalEstimatedWeight > 0 && normalConfidence > 0.5) {
-    // @ref LLP 0020#reconstruction-pipeline — Same-voxel observations with
+    // @ref LLP 0015#reconstruction-pipeline — Same-voxel observations with
     // agreeing reliable normals should not pull a flat surface along the depth
     // noise axis; project them onto the accumulated local surfel plane first.
     const centerX = voxel.x / voxel.weight;
@@ -3111,7 +3111,7 @@ function voxelKey(x: number, y: number, z: number): SurfelVoxelKey {
     iy >= -VOXEL_KEY_AXIS_OFFSET && iy < VOXEL_KEY_AXIS_OFFSET &&
     iz >= -VOXEL_KEY_AXIS_OFFSET && iz < VOXEL_KEY_AXIS_OFFSET
   ) {
-    // @ref LLP 0020#performance-constraints - Typical room-scale scans fit
+    // @ref LLP 0015#performance-constraints - Typical room-scale scans fit
     // inside this packed-key range, avoiding a string allocation per sample on
     // the WebXR frame path while preserving exact voxel identity.
     return (
@@ -3147,7 +3147,7 @@ export function buildModelFromFusion(fusion: SurfelFusionAccumulator, keyframes:
   const surfelCount = fusion.voxels.size;
   if (surfelCount <= 0) return null;
   const requiredFloats = surfelCount * SURFEL_STRIDE_FLOATS;
-  // @ref LLP 0020#performance-constraints - Live preview repeatedly
+  // @ref LLP 0015#performance-constraints - Live preview repeatedly
   // materializes the same growing fusion map; retain CPU backing storage and
   // return exact-length views to reduce GC churn without changing GPU upload
   // size or app-facing model layout.
@@ -3161,7 +3161,7 @@ export function buildModelFromFusion(fusion: SurfelFusionAccumulator, keyframes:
   let fusedCameraColoredSurfels = 0;
   let multiObservedSurfels = 0;
   let normalEstimatedSurfels = 0;
-  // @ref LLP 0020#model-view - Partial 180-degree scans frame around the
+  // @ref LLP 0015#model-view - Partial 180-degree scans frame around the
   // weighted surface cluster rather than the bounds midpoint.
   let centerWeight = 0;
   const center: Vec3 = [0, 0, 0];
@@ -3466,7 +3466,7 @@ function createCameraColorSampler(
     ? 'precomputed-axis'
     : 'normalized-transform';
   if (sampleMode === 'precomputed-axis' && depthCache) {
-    // @ref LLP 0020#performance-constraints - Native panorama camera previews
+    // @ref LLP 0015#performance-constraints - Native panorama camera previews
     // expose an axis-aligned normalized WebXR image transform, so sparse grid
     // color sampling can reuse per-axis bilinear pixel weights.
     precomputeCameraGridAxis(
@@ -3665,7 +3665,7 @@ function sampleCameraColorAtPixelsInto(
   w01: number,
   w11: number
 ): boolean {
-  // @ref LLP 0020#reconstruction-pipeline - Camera colors are sampled through
+  // @ref LLP 0015#reconstruction-pipeline - Camera colors are sampled through
   // the WebXR normalized image transform and interpolated at subpixel
   // locations, avoiding nearest-pixel shimmer in the live surfel preview.
   const bytes = sampler.bytes;
@@ -3763,7 +3763,7 @@ function unprojectViewSampleInto(
 }
 
 function createViewSampleUnprojector(projectionMatrix: Float32Array): ViewSampleUnprojector | null {
-  // @ref LLP 0020#reconstruction-pipeline - ARKit intrinsics are exposed to
+  // @ref LLP 0015#reconstruction-pipeline - ARKit intrinsics are exposed to
   // app code only as WebXR projection geometry; this fast path consumes that
   // standard matrix and applies the same pinhole-camera unprojection used by
   // Apple's scene-depth point-cloud guidance.
@@ -3913,7 +3913,7 @@ export function makeModelViewProjectionInto(
   if (!model) {
     return perspectiveLookAtInto(out, Math.PI / 3.1, aspect, 0.01, 100, 0, 0.4, 3.4, 0, 0, 0);
   }
-  // @ref LLP 0020#model-view - Use the weighted surfel center so asymmetric
+  // @ref LLP 0015#model-view - Use the weighted surfel center so asymmetric
   // partial scans and low-weight outliers do not pull the orbit target away
   // from the scanned surfaces.
   const centerX = model.center[0];
@@ -3956,7 +3956,7 @@ export function makeModelViewProjectionInto(
   const panX = rightX * panScaleX + upX * panScaleY;
   const panY = rightY * panScaleX + upY * panScaleY;
   const panZ = rightZ * panScaleX + upZ * panScaleY;
-  // @ref LLP 0020#model-view - Gesture rotation renders every touch frame, so
+  // @ref LLP 0015#model-view - Gesture rotation renders every touch frame, so
   // write the model-view-projection directly into the caller's reusable uniform
   // buffer instead of allocating temporary vectors and matrices per frame.
   return perspectiveLookAtInto(

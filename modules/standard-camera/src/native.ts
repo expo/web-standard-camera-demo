@@ -1,4 +1,4 @@
-// @ref LLP 0005 — Platform backend contract for the web-shaped camera API.
+// @ref LLP 0006 — Platform backend contract for the web-shaped camera API.
 // iOS implements this contract in native.ios.ts via the StandardCamera Expo
 // module. Web builds should use the browser's own APIs and avoid this backend.
 
@@ -13,7 +13,7 @@ import type {
   MediaStreamTrackState,
 } from './types';
 
-// @ref LLP 0009#audio-track-events — Audio interruption notifications come
+// @ref LLP 0008#audio-track-events — Audio interruption notifications come
 // from AVAudioSession in addition to AVCaptureSession. The native module
 // emits the same mute/unmute/ended events for both.
 
@@ -27,7 +27,7 @@ export interface NativeMediaStreamTrack {
   readonly readyState: MediaStreamTrackState;
 
   stop(): void;
-  // @ref LLP 0008#dom-mediastreamtrack-clone
+  // @ref LLP 0001#dom-mediastreamtrack-clone
   clone(): NativeMediaStreamTrack;
   getSettings(): MediaTrackSettings;
   getConstraints(): Record<string, unknown>;
@@ -117,11 +117,11 @@ export interface NativeMediaStream {
   getVideoTracks(): NativeMediaStreamTrack[];
   getAudioTracks(): NativeMediaStreamTrack[];
   getTrackById(id: string): NativeMediaStreamTrack | null;
-  // @ref LLP 0008#dom-mediastream-addtrack
+  // @ref LLP 0001#dom-mediastream-addtrack
   addTrack(track: NativeMediaStreamTrack): void;
-  // @ref LLP 0008#dom-mediastream-removetrack
+  // @ref LLP 0001#dom-mediastream-removetrack
   removeTrack(track: NativeMediaStreamTrack): void;
-  // @ref LLP 0008#dom-mediastream-clone
+  // @ref LLP 0001#dom-mediastream-clone
   clone(): NativeMediaStream;
 
   /**
@@ -143,7 +143,7 @@ export interface NativeStandardCameraModule {
   getUserMediaAsync(constraints: FlatGetUserMediaConstraints): Promise<NativeMediaStream>;
   enumerateDevicesAsync(): Promise<MediaDeviceInfo[]>;
   getSupportedConstraints(): Record<string, boolean>;
-  // @ref LLP 0008#mediastream-constructor
+  // @ref LLP 0001#mediastream-constructor
   createMediaStream(tracks: NativeMediaStreamTrack[]): NativeMediaStream;
   /** @internal Test-only: forward a message to NSLog so it reaches `simctl log stream` regardless of build config. */
   __systemLogForTesting(message: string): void;
@@ -151,7 +151,7 @@ export interface NativeStandardCameraModule {
   getDiagnostics(): NativeDiagnostics;
   /**
    * @internal Demo-only LiDAR extension. This is intentionally not part of the
-   * W3C Media Capture surface; see LLP 0012.
+   * W3C Media Capture surface; see LLP 0013.
    */
   getLiDARDepthCapabilities(): NativeLiDARDepthCapabilities;
   startLiDARDepthAsync(): Promise<NativeLiDARDepthCapabilities>;

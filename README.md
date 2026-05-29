@@ -1,66 +1,71 @@
-# Welcome to your Expo app 👋
+# standard-camera-app
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A demo Expo app and a local Expo module (`standard-camera`) that implement a small, deliberately spec-shaped subset of the W3C [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/) specification on iOS. The hypothesis being tested is that if a browser API is small enough and well-shaped, you can port it 1:1 to React Native and let DOM-first code run unchanged:
 
-## Get started
+```js
+const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+videoRef.srcObject = stream;
+```
 
-1. Install dependencies
+That is the exact code you would write in a browser, and it works on iOS in this app.
 
-   ```bash
-   npm install
-   ```
+This is a learning exercise, not a production library. See [`llp/0000-standard-camera.explainer.md`](./llp/0000-standard-camera.explainer.md) for the full motivation and architecture.
 
-2. Start the app
+## Scope
 
-   ```bash
-   npx expo start
-   ```
+The module ships `navigator.mediaDevices.getUserMedia()`, `MediaStream`, `MediaStreamTrack`, and a `<Video>` component whose `srcObject` setter binds an `AVCaptureSession` to an `AVCaptureVideoPreviewLayer`. Both `{ video: true }` and `{ audio: true }` (and the combined form) work. The clause-by-clause inventory of what is in and out lives in [`llp/0002-spec-subset-scope.spec.md`](./llp/0002-spec-subset-scope.spec.md).
 
-In the output, you'll find options to open the app in a
+Out of scope for v1: Android, `getDisplayMedia`, `MediaRecorder`, depth tracks, and WebXR. The repo does contain research-only WebXR-shaped LiDAR demos (see LLPs 0013–0015), but those are not part of the polyfilled surface.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Repo layout
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+- `src/app/` — Expo Router screens for the demo app, including the camera preview, in-app WPT runner, and the WebGPU, LiDAR, panorama, and neural-lens demos.
+- `modules/standard-camera/` — the local Expo module. TypeScript polyfill in `src/`, Swift implementation in `ios/`.
+- `llp/` — Linked Literate Programming documents. Start at LLP 0000. Design decisions, spec slices, and demo plans live here.
+- `scripts/` — `test-ios.ts`, `test-web.ts`, and the panorama validation runner.
 
-## Test Expo Web
+## Quick start
+
+This repo uses Bun:
+
+```bash
+bun install
+bun run ios       # build and run on an iOS simulator
+bun run web       # start the Expo Web bundler
+```
+
+For physical-device builds and the install-retry workflow, see [`AGENTS.md`](./AGENTS.md). The app requires iOS 16.4 or newer and has `NSCameraUsageDescription` and `NSMicrophoneUsageDescription` set in `app.json`.
+
+## Testing
+
+The in-app WPT-style runner is the source of truth for spec compliance. To run it end to end on a simulator:
+
+```bash
+bun run test:ios
+```
+
+This boots iOS 26, installs the app, deep-links to the test runner, parses results from the simulator log, and shuts the simulator down. A spec change is not "done" until the runner is green. See [`llp/0010-in-app-wpt-runner.guide.md`](./llp/0010-in-app-wpt-runner.guide.md).
+
+For an Expo Web smoke test that exercises the app shell, bundler, and browser console without emulating the iOS backend:
 
 ```bash
 bun run test:web
 ```
 
-This starts Expo Web, opens the app with `agent-browser`, and reports Expo dev
-server logs plus browser console/page errors. The default smoke test does not
-request camera permission.
+The default web smoke test does not request camera permission. See [`llp/0011-expo-web-testing-flow.guide.md`](./llp/0011-expo-web-testing-flow.guide.md).
 
-## Get a fresh project
+## Demos
 
-When you're ready, run:
+The `(demo)` tab in the app collects a few things built on top of the polyfilled camera stream:
 
-```bash
-npm run reset-project
-```
+- A plain `<Video srcObject={stream} />` preview that mirrors the browser API.
+- WebGPU shader-lens demos that sample camera frames as textures (LLP 0012).
+- A LiDAR depth demo behind a research-only WebXR-shaped API (LLPs 0013–0014).
+- A panoramic scene-capture demo (LLP 0015).
+- TFJS- and MobileNet-based on-device scene classification.
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Contributing
 
-### Other setup steps
+Read the LLP for the area you are touching before changing code, and update the LLP in the same change. Every load-bearing implementation detail that exists because a spec clause says so should carry an `@ref LLP NNNN#anchor` comment. Run the `ref-check` skill before requesting review.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Agent and contributor guidance lives in [`AGENTS.md`](./AGENTS.md).

@@ -1,11 +1,11 @@
-# LLP 0020: Panoramic WebXR scene capture
+# LLP 0015: Panoramic WebXR scene capture
 
 **Type:** Plan
 **Status:** Active
 **Systems:** demo, webxr-lidar-api, standard-camera-native-extension
 **Author:** Codex
 **Date:** 2026-05-26
-**Related:** 0000, 0001, 0012, 0013, 0014, 0015, 0016, 0017
+**Related:** 0000, 0002, 0013, 0014
 
 ## Summary
 
@@ -16,7 +16,7 @@ rendered with WebGPU.
 The right first version is a camera-colored surfel/point-cloud model, not a
 full textured triangle mesh. ARKit already gives this repo camera pixels,
 LiDAR scene depth, and camera pose through the WebXR-shaped profile in
-[LLP 0013](./0013-webxr-lidar-depth-api.spec.md). The implemented first
+[LLP 0014](./0014-webxr-lidar-depth-api.spec.md). The implemented first
 milestone uses WebXR `"depth-sensing"` and `"camera-access"` to accumulate
 sparse RGB-D keyframes and renders the frozen surfel model with WebGPU. A
 proper textured mesh needs more: mesh anchors or depth fusion, texture keyframe
@@ -1195,6 +1195,7 @@ Suggested first caps:
 - 128 MB temporary keyframe/scratch budget before model build
 - capture/build time target under 2 seconds on iPhone 15 Pro-class hardware
 
+<a id="render-telemetry"></a>
 ## Testing and validation
 
 This demo is not WPT-backed. Validation should combine small deterministic
@@ -1397,7 +1398,7 @@ summary are covered by
 because the phone is locked, unlock the iPhone and rerun the same validator
 command.
 
-Also run the `ref-check` skill so any `@ref LLP 0020#...` annotations added in
+Also run the `ref-check` skill so any `@ref LLP 0015#...` annotations added in
 code point to real anchors.
 
 ## Implementation plan

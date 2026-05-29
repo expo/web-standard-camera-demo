@@ -1,4 +1,4 @@
-// @ref LLP 0019#browser-tests-tab — Browser globals for running the shared
+// @ref LLP 0011#browser-tests-tab — Browser globals for running the shared
 // WPT-style suite on Expo Web without installing the iOS native backend.
 
 import {
@@ -9,7 +9,7 @@ import {
 // Expo Web still uses the browser's real capture APIs. This file only
 // normalizes test-harness observable behavior where browser engines expose
 // historical aliases or lag the MediaStream/srcObject WPT slice.
-// @ref LLP 0004#srcObject
+// @ref LLP 0005#srcObject
 
 const MEDIA_HANDLER_NAMES = [
   'onloadstart', 'onloadedmetadata', 'onloadeddata', 'oncanplay', 'oncanplaythrough',
@@ -160,7 +160,7 @@ function hideHistoricalProperty(target: object, property: string): void {
 }
 
 function installHistoricalCleanup(): void {
-  // @ref LLP 0007 — WPT historical.https.html asserts that these
+  // @ref LLP 0010 — WPT historical.https.html asserts that these
   // prefixed/pre-standard names are absent from the modern capture surface.
   hideHistoricalProperty(globalThis, 'webkitMediaStream');
   hideHistoricalProperty(navigator, 'getUserMedia');
@@ -486,7 +486,7 @@ class HarnessMediaElement extends EventTarget {
   get seeking(): false { return false; }
   get currentTime(): number { return this.#currentTime; }
   set currentTime(_value: number) {
-    // @ref LLP 0004#srcobject-currentTime — ignored for MediaStream sources.
+    // @ref LLP 0005#srcobject-currentTime — ignored for MediaStream sources.
   }
   get loop(): boolean { return this.#loop; }
   set loop(value: boolean) { this.#loop = Boolean(value); }

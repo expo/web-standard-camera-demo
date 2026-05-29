@@ -1,10 +1,10 @@
-// @ref LLP 0002#gum-pick-device — Verifies that `getUserMedia` with a
+// @ref LLP 0003#gum-pick-device — Verifies that `getUserMedia` with a
 // `deviceId: {exact: …}` constraint picks the requested camera and that
 // `track.getSettings().deviceId` round-trips back to the same value.
 //
 // Upstream WPT cannot rely on this because browsers may decline to surface
 // `deviceId` until the user has granted persistent permission. On iOS we
-// surface it after the first successful gUM (LLP 0002).
+// surface it after the first successful gUM (LLP 0003).
 
 import {
   assert_equals,

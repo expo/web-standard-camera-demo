@@ -6,10 +6,10 @@ import Metal
 import UIKit
 
 private let lidarDepthErrorDomain = "StandardCameraLiDARDepth"
-// @ref LLP 0013#arkit-mapping — The WebXR research profile exposes standard
+// @ref LLP 0014#arkit-mapping — The WebXR research profile exposes standard
 // projection matrices and normalized image transforms; raw ARKit intrinsics
 // remain native implementation details.
-// @ref LLP 0013#xr-camera-resolution — The returned WebXR CPU camera image is
+// @ref LLP 0014#xr-camera-resolution — The returned WebXR CPU camera image is
 // an internal implementation detail, tuned for 1080p LiDAR/surface demo color.
 private let webXRCameraPreviewWidth = 1920
 private let webXRCameraPreviewHeight = 1080
@@ -20,8 +20,8 @@ private let lidarStartupTimeoutSeconds: TimeInterval = 5
 private let webXRFrameSnapshotRetentionCount: UInt64 = 3
 private let webXRMeshGeometrySignatureSampleCount = 17
 private let webXRMeshPayloadMaxTrianglesPerAnchor = 900
-// @ref LLP 0013#xr-depth-information
-// @ref LLP 0013#xr-depth-confidence
+// @ref LLP 0014#xr-depth-information
+// @ref LLP 0014#xr-depth-confidence
 // ARKit confidence stays inside the WebXR runtime; raw depth for panorama
 // fusion favors high-confidence current LiDAR samples, while smoothed depth may
 // keep medium-or-better samples. Visual inspection routes may opt into
@@ -138,7 +138,7 @@ private func webXRProjectionMatrix(
   zNear: Float = webXRProjectionNear,
   zFar: Float = webXRProjectionFar
 ) -> simd_float4x4 {
-  // @ref LLP 0013#arkit-mapping — ARKit's point-cloud guidance positions
+  // @ref LLP 0014#arkit-mapping — ARKit's point-cloud guidance positions
   // scene-depth samples from camera intrinsics. Convert those intrinsics into a
   // WebXR/OpenGL-style projection matrix so JS still consumes XRViewGeometry
   // instead of raw ARKit intrinsics.
@@ -249,7 +249,7 @@ private func selectedDepthType(
   return smoothedSceneDepth ? .smooth : (sceneDepth ? .raw : nil)
 }
 
-// @ref LLP 0013#xr-viewer-pose — JS maps non-normal ARKit tracking to
+// @ref LLP 0014#xr-viewer-pose — JS maps non-normal ARKit tracking to
 // WebXR's null viewer-pose result instead of exposing app-facing ARKit state.
 private func webXRTrackingState(_ trackingState: ARCamera.TrackingState) -> String {
   switch trackingState {
@@ -292,7 +292,7 @@ private func webXRApplicationLifecycleState(_ state: UIApplication.State) -> Str
   }
 }
 
-// @ref LLP 0012#native-extension-shape — Demo-only ARKit depth source. This is
+// @ref LLP 0013#native-extension-shape — Demo-only ARKit depth source. This is
 // intentionally not part of the W3C MediaStream surface; it exposes native
 // LiDAR data so WebGPU can render it.
 final class LiDARDepthSource: NSObject, ARSessionDelegate {
@@ -443,12 +443,12 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     }
 
     let configuration = ARWorldTrackingConfiguration()
-    // @ref LLP 0013#xr-request-session — `depthType` is observable, so the
+    // @ref LLP 0014#xr-request-session — `depthType` is observable, so the
     // ARKit frame semantic must match the selected WebXR depth type.
     configuration.frameSemantics = depthType == .smooth ? [.smoothedSceneDepth] : [.sceneDepth]
     configuration.worldAlignment = .gravity
     if enableMeshDetection {
-      // @ref LLP 0013#xr-mesh-detection — Mesh detection is requested through
+      // @ref LLP 0014#xr-mesh-detection — Mesh detection is requested through
       // WebXR, then backed by ARKit scene reconstruction without exposing
       // ARMeshAnchor or ARPlaneAnchor APIs to application code.
       configuration.sceneReconstruction = .mesh
@@ -612,7 +612,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       if alternateDepthAvailable {
         requestedDepthMissesWithAlternateDepth &+= 1
       }
-      // @ref LLP 0020#testing-and-validation — Preserve whether the requested
+      // @ref LLP 0015#testing-and-validation — Preserve whether the requested
       // ARKit depth semantic was missing while the alternate raw/smoothed
       // semantic was present, so one-frame scans can be diagnosed from logs.
       latestARFrameRawDepthAvailable = rawDepthAvailable
@@ -624,12 +624,12 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       return
     }
 
-    // @ref LLP 0013#xr-viewer-pose
-    // @ref LLP 0013#xr-depth-information — Feed XRViewGeometry from the
+    // @ref LLP 0014#xr-viewer-pose
+    // @ref LLP 0014#xr-depth-information — Feed XRViewGeometry from the
     // ARKit depth/camera plane so WebXR unprojection uses the full scene-depth
     // buffer instead of a display-cropped portrait viewport.
     let projectionMatrix = webXRProjectionMatrix(camera: frame.camera, depthMap: depth.depthMap)
-    // @ref LLP 0013#xr-camera-image — Scene-depth normalized coordinates are
+    // @ref LLP 0014#xr-camera-image — Scene-depth normalized coordinates are
     // aligned with the captured-image plane; the returned CPU camera preview
     // composes this identity with its native crop/scale.
     let cameraImageFromView = CGAffineTransform.identity
@@ -660,7 +660,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let worldMappingStatus = webXRWorldMappingStatus(frame.worldMappingStatus)
     let frameMeshAnchors = activeMeshDetection ? Array(meshAnchors.values) : []
     let frameMeshAnchorChangedTimes = activeMeshDetection ? meshAnchorChangedTimes : [:]
-    // @ref LLP 0013#xr-frame-loop — JS converts ARFrame.timestamp into the
+    // @ref LLP 0014#xr-frame-loop — JS converts ARFrame.timestamp into the
     // DOMHighResTimeStamp timeline for XR animation-frame callbacks.
     latestTimestamp = frame.timestamp
     latestDepthType = requestedDepthType
@@ -668,7 +668,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     latestViewTransform = viewTransformArray
     latestNormDepthBufferFromNormView = normDepthBufferFromNormViewArray
     latestNormCapturedImageFromNormView = cameraImageFromView
-    // @ref LLP 0013#xr-frame-loop — Keep a tiny frame-scoped native cache so
+    // @ref LLP 0014#xr-frame-loop — Keep a tiny frame-scoped native cache so
     // WebXR accessors can lazily fetch bytes for this XRFrame without copying
     // depth/camera payloads for frames rejected by JS keyframe policy.
     frameSnapshots[n] = LiDARDepthFrameSnapshot(
@@ -688,7 +688,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       meshAnchors: frameMeshAnchors,
       meshAnchorChangedTimes: frameMeshAnchorChangedTimes
     )
-    // @ref LLP 0020#performance-constraints — WebXR frame metadata is cheap,
+    // @ref LLP 0015#performance-constraints — WebXR frame metadata is cheap,
     // but depth/camera payloads are fetched lazily after JS pose and keyframe
     // gates. Keep only a tiny exact-count ring so a slow callback can still
     // resolve its standard payloads without retaining enough ARKit camera/depth
@@ -802,7 +802,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
 
     guard let snapshot else {
       if arFrameNumber > 0 || depthMissCount > 0 || currentConsecutiveDepthMisses > 0 {
-        // @ref LLP 0020#testing-and-validation — Before the first scene-depth
+        // @ref LLP 0015#testing-and-validation — Before the first scene-depth
         // snapshot exists, WebXR must not deliver an XRFrame. Still return a
         // non-deliverable frame-number-zero diagnostic so JS logs can distinguish
         // "ARKit is not producing frames" from "ARKit frames have no scene depth".
@@ -885,11 +885,10 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     if let cameraImage = snapshot.cameraImage {
       let capturedImageWidth = CVPixelBufferGetWidth(cameraImage)
       let capturedImageHeight = CVPixelBufferGetHeight(cameraImage)
-      // @ref LLP 0013#xr-camera-image
-      // @ref LLP 0017#native-camera-alignment — `normCameraImageFromNormView`
-      // must describe the returned `XRCamera` image. The first transform maps
-      // XR view coordinates into the captured-image/depth plane; compose it
-      // with the preview crop/scale used by the CPU-visible camera frame.
+      // @ref LLP 0014#xr-camera-image — `normCameraImageFromNormView` must
+      // describe the returned `XRCamera` image. The first transform maps XR
+      // view coordinates into the captured-image/depth plane; compose it with
+      // the preview crop/scale used by the CPU-visible camera frame.
       let previewFromCapturedImage = normalizedPreviewFromCapturedImageTransform(
         sourceWidth: capturedImageWidth,
         sourceHeight: capturedImageHeight,
@@ -973,7 +972,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
             confidenceMap: snapshot.confidenceMap,
             confidenceThreshold: UInt8(ARConfidenceLevel.low.rawValue)
           ) {
-        // @ref LLP 0013#xr-depth-information — Keep confidence maps internal,
+        // @ref LLP 0014#xr-depth-information — Keep confidence maps internal,
         // but avoid starving WebXR scene-depth consumers when ARKit labels a
         // frame as mostly low confidence while still providing positive metric
         // depth values. Sparse nonzero high/medium-confidence islands are not
@@ -1042,7 +1041,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
   }
 
   func latestWebXRFrame() -> [String: Any]? {
-    // @ref LLP 0013#xr-camera-resolution — The WebXR research profile owns its
+    // @ref LLP 0014#xr-camera-resolution — The WebXR research profile owns its
     // CPU-visible camera preview size as a private native detail.
     latestFrame(
       cameraPreviewWidth: webXRCameraPreviewWidth,
@@ -1127,7 +1126,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
           .advanced(by: y * confidenceRowBytes)
           .assumingMemoryBound(to: UInt8.self)
         for x in 0..<width {
-          // @ref LLP 0013#xr-depth-confidence — WebXR encodes invalid depth
+          // @ref LLP 0014#xr-depth-confidence — WebXR encodes invalid depth
           // as 0; ARKit confidence filtering is applied internally according
           // to the session's requested confidence preference.
           let confidence = confidenceValues?[x]
@@ -1187,7 +1186,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
     let cached = meshPayloadCache[meshAnchor.identifier]
     lock.unlock()
     if let cached, cached.lastChangedTime == lastChangedTime {
-      // @ref LLP 0013#xr-mesh-detection — Native mesh buffers may be reused
+      // @ref LLP 0014#xr-mesh-detection — Native mesh buffers may be reused
       // while `lastChangedTime` is unchanged; the returned meshSpace pose still
       // comes from the current XRFrame snapshot.
       return meshPayloadDictionary(
@@ -1298,7 +1297,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       return nil
     }
 
-    // @ref LLP 0013#xr-mesh-detection — WebXR exposes UA-provided mesh
+    // @ref LLP 0014#xr-mesh-detection — WebXR exposes UA-provided mesh
     // geometry, so the native runtime may choose a lower-detail mesh payload
     // for dense ARKit anchors while preserving standard XRMesh vertices,
     // normals, indices, meshSpace pose, and lastChangedTime.
@@ -1559,7 +1558,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       return nil
     }
 
-    // @ref LLP 0013#xr-camera-image — Keep the returned WebXR CPU camera image
+    // @ref LLP 0014#xr-camera-image — Keep the returned WebXR CPU camera image
     // as tight BGRA bytes. The scalar converter is reserved for small previews
     // or CoreImage fallback so 1080p frames do not run this loop every pixel.
     let scale = max(
@@ -1813,7 +1812,7 @@ final class LiDARDepthSource: NSObject, ARSessionDelegate {
       let geometrySignature = makeMeshGeometrySignature(from: meshAnchor.geometry)
       let previousGeometrySignature = meshAnchorGeometrySignatures[meshAnchor.identifier]
       meshAnchors[meshAnchor.identifier] = meshAnchor
-      // @ref LLP 0013#xr-mesh-detection — `XRMesh.lastChangedTime` tracks
+      // @ref LLP 0014#xr-mesh-detection — `XRMesh.lastChangedTime` tracks
       // mesh geometry changes, not current-frame pose changes. Keep the latest
       // ARMeshAnchor for `meshSpace` pose, but preserve cached vertex/index
       // buffers when ARKit only updates the anchor transform.

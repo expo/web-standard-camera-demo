@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/hooks/use-theme';
 import { notifyTestRunStart } from '@/lib/camera-run-events';
 
-// @ref LLP 0007 — In-app WPT-style test runner screen.
+// @ref LLP 0010 — In-app WPT-style test runner screen.
 // Pre-renders the full registered test list so users can see what's about to
 // run, then transitions each row from pending → running → result as the suite
 // executes. Output: WPT_RESULT / WPT_DONE lines emitted to console for the CLI driver.

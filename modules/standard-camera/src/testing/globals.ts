@@ -1,4 +1,4 @@
-// @ref LLP 0007 — DOM-style globals for 1:1 WPT ports.
+// @ref LLP 0010 — DOM-style globals for 1:1 WPT ports.
 //
 // WPT tests rely on the HTML id-as-global pattern: `<video id="video">` makes
 // `video` available as a global. To keep our ported tests byte-identical to
@@ -16,7 +16,7 @@ import { __getDeniedKindsForTesting, __resetDeniedPermissionsForTesting } from '
 __installTestDeniedCheck(__getDeniedKindsForTesting);
 import type { HTMLVideoElement } from '../HTMLVideoElement';
 
-// @ref LLP 0004 — Stub HTMLAudioElement. The stub exists to satisfy WPT
+// @ref LLP 0005 — Stub HTMLAudioElement. The stub exists to satisfy WPT
 // tests that do `audio.srcObject = stream` without observing playback
 // behavior. Beyond storing srcObject, the stub emits the small set of
 // HTMLMediaElement events that WPT tests await on:

@@ -1,9 +1,9 @@
-// @ref LLP 0003#track-enabled — A disabled MediaStreamTrack should render
+// @ref LLP 0004#track-enabled — A disabled MediaStreamTrack should render
 // "as if it were producing solid black frames". Upstream WPT
 // (`MediaStreamTrack-MediaElement-disabled-video-is-black`) verifies this by
 // rendering the <video> into a <canvas> via `drawImage()` and reading back
 // pixels. We can't run that test (canvas/2d frame inspection is out of scope
-// per LLP 0001), so this project-local test asserts the equivalent at two
+// per LLP 0002), so this project-local test asserts the equivalent at two
 // observable points:
 //
 //   1. The source end — `__getLatestFrame()`'s `frameNumber` stops

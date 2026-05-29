@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/GUM-deny.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/GUM-deny.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/GUM-deny.https.html
 
 import { wptSource, test, assert_false, assert_throws_dom, assert_unreached, promise_test, setMediaPermission } from '../testharness';

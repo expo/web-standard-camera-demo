@@ -1,20 +1,20 @@
-# LLP 0008: W3C "Media Capture and Streams" — spec text
+# LLP 0001: W3C "Media Capture and Streams" — spec text
 
 **Type:** Spec
 **Status:** Active
 **Systems:** standard-camera
 **Author:** James Ide
 **Date:** 2026-05-21 (audio added 2026-05-22)
-**Related:** 0001, 0002, 0003, 0004, 0009
+**Related:** 0002, 0003, 0004, 0005, 0008
 
 ## Purpose
 
 This LLP is the in-repo copy of the W3C ["Media Capture and Streams"](https://www.w3.org/TR/mediacapture-streams/) spec text for the surfaces we implement. It exists so `@ref` annotations can point at the spec source-of-truth without leaving the repo, and so future agents working in this codebase have the normative language available locally.
 
-LLPs 0001–0004 remain our **subset scope and decisions** (what we implement and why); LLP 0008 is the **upstream text** those scopes are derived from. When in doubt, the W3C URL on each section heading is authoritative — this document may drift over time, and the spec is an Editor's Draft / Recommendation that evolves.
+LLPs 0001–0004 remain our **subset scope and decisions** (what we implement and why); LLP 0001 is the **upstream text** those scopes are derived from. When in doubt, the W3C URL on each section heading is authoritative — this document may drift over time, and the spec is an Editor's Draft / Recommendation that evolves.
 
 Conventions:
-- Section headings carry the spec's anchor ID in brackets — e.g. `## getUserMedia [dom-mediadevices-getusermedia]`. Code annotations cite these with `@ref LLP 0008#dom-mediadevices-getusermedia`.
+- Section headings carry the spec's anchor ID in brackets — e.g. `## getUserMedia [dom-mediadevices-getusermedia]`. Code annotations cite these with `@ref LLP 0001#dom-mediadevices-getusermedia`.
 - Normative MUST / SHOULD / MAY language is preserved verbatim where the WebFetch quote was clean. Where the spec defers to other documents (HTML Standard for `srcObject` behavior in HTMLMediaElement), we link out rather than re-quote.
 
 ---
@@ -362,7 +362,7 @@ When `echoCancellation` is set to a boolean, `true` is equivalent to `"all"` and
 
 # HTMLMediaElement extensions
 
-The mediacapture-streams spec [§6 MediaStreams in Media Elements](https://www.w3.org/TR/mediacapture-streams/#mediastreams-as-media-elements) describes how a `MediaStream` interacts with an `HTMLMediaElement` via the `srcObject` attribute, but most of the normative element behavior is defined in the HTML Standard. The key MUSTs for our subset are summarized in [LLP 0004](./0004-htmlmediaelement-srcobject.spec.md); upstream references are:
+The mediacapture-streams spec [§6 MediaStreams in Media Elements](https://www.w3.org/TR/mediacapture-streams/#mediastreams-as-media-elements) describes how a `MediaStream` interacts with an `HTMLMediaElement` via the `srcObject` attribute, but most of the normative element behavior is defined in the HTML Standard. The key MUSTs for our subset are summarized in [LLP 0005](./0005-htmlmediaelement-srcobject.spec.md); upstream references are:
 
 - HTML Standard, [`HTMLMediaElement.srcObject`](https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject)
 - HTML Standard, [Media element: load algorithm with MediaProvider](https://html.spec.whatwg.org/multipage/media.html#concept-media-load-resource)
@@ -383,14 +383,14 @@ Specifically (as constraints for our `<Video srcObject>` implementation, paraphr
 
 # How `@ref` annotations should cite this LLP
 
-- For a spec-mandated algorithm step or attribute behavior, prefer `@ref LLP 0008#<anchor>` (e.g. `@ref LLP 0008#dom-mediastreamtrack-stop`).
-- For our **scoping decision** about a clause (e.g. why something is stubbed), keep the existing `@ref LLP 0001#…` pointing into the spec-subset index.
-- For our **iOS mapping rationale** (which AVFoundation primitive backs which spec clause), keep `@ref LLP 0005#…`.
+- For a spec-mandated algorithm step or attribute behavior, prefer `@ref LLP 0001#<anchor>` (e.g. `@ref LLP 0001#dom-mediastreamtrack-stop`).
+- For our **scoping decision** about a clause (e.g. why something is stubbed), keep the existing `@ref LLP 0002#…` pointing into the spec-subset index.
+- For our **iOS mapping rationale** (which AVFoundation primitive backs which spec clause), keep `@ref LLP 0006#…`.
 
 A single line can carry both, e.g.:
 
 ```swift
-// @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
-// @ref LLP 0001#mediastreamtrack-stop      — our subset notes
+// @ref LLP 0001#dom-mediastreamtrack-stop — spec algorithm
+// @ref LLP 0002#mediastreamtrack            — our subset notes
 func stop() { … }
 ```

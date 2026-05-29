@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// @ref LLP 0020#testing-and-validation — Physical-device validation for the
+// @ref LLP 0015#testing-and-validation — Physical-device validation for the
 // panoramic WebXR capture flow. The script launches the dev-client app, streams
 // the app console, and succeeds only after a manual scan/capture/render/save run
 // emits the required panorama telemetry.
@@ -197,7 +197,7 @@ async function main(): Promise<number> {
     }
     if (!options.noLaunch) {
       const payloadUrl = buildDevelopmentClientUrl(options.metroUrl);
-      // @ref LLP 0020#testing-and-validation - React Native console.log telemetry
+      // @ref LLP 0015#testing-and-validation - React Native console.log telemetry
       // appears on the app console stream in physical dev-client runs. Attaching
       // here avoids relying on idevicesyslog, which can miss Metro/JS logs and
       // produce empty WebXR profile reports.
@@ -666,7 +666,7 @@ function applyMetricScanBoundary(seen: SeenMetrics, metric: Record<string, unkno
     return false;
   }
   if (scanId === currentScanId) return true;
-  // @ref LLP 0020#testing-and-validation — CAMERA_CTX provider lines are not
+  // @ref LLP 0015#testing-and-validation — CAMERA_CTX provider lines are not
   // scan-scoped, but they often precede the first current-scan PANORAMIC metric.
   // Preserve them across scan-id resets so ownership races remain diagnosable.
   const cameraContext = seen.CAMERA_CONTEXT_PROFILE;
@@ -733,7 +733,7 @@ function parseCameraContextMetricLine(line: string): Record<string, unknown> | n
   if (/CAMERA_CTX start skipped in-flight/.test(line)) {
     return { skippedDuplicateStarts: 1 };
   }
-  // @ref LLP 0012#camera-ownership-handoff
+  // @ref LLP 0013#camera-ownership-handoff
   const externalLockEngaged = line.match(/CAMERA_CTX external-lock engaged\s+(\{.*\})/);
   if (externalLockEngaged) {
     const detail = safeParseMetric(externalLockEngaged[1] ?? '{}');

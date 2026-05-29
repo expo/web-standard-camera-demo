@@ -1,11 +1,11 @@
-# LLP 0005: iOS native mapping (AVFoundation, SharedObject)
+# LLP 0006: iOS native mapping (AVFoundation, SharedObject)
 
 **Type:** Decision
 **Status:** Active
 **Systems:** standard-camera, ios
 **Author:** James Ide
 **Date:** 2026-05-19
-**Related:** 0002, 0003, 0004
+**Related:** 0003, 0004, 0005
 
 ## Context
 
@@ -97,6 +97,7 @@ Ordering matters: whenever mirroring changes, the view reapplies the current
 preview rotation afterward. This prevents AVFoundation mirror changes from
 leaving a stale effective rotation on the preview connection.
 
+<a id="sharedobject-view-prop"></a>
 ## Passing SharedObjects to view props (the big landmine)
 
 Expo views (under either architecture, as of SDK 56) **cannot accept SharedObject references as view props directly.** A prop declared on the Swift side as `(view, stream: MediaStream?)` *will silently receive `nil`* if JS passes the SharedObject's JS-side handle. You have to pass the shared-object id (an integer stored on the JS proxy as `__expo_shared_object_id__`), and the prop converter resolves it back to the Swift instance.

@@ -1,9 +1,9 @@
-// @ref LLP 0003#track-enabled — A disabled MediaStreamTrack should render
+// @ref LLP 0004#track-enabled — A disabled MediaStreamTrack should render
 // audio "as if it were producing silence". Upstream WPT
 // (`MediaStreamTrack-MediaElement-disabled-audio-is-silence`) verifies this
 // by attaching the stream to a media element, wiring an AudioContext
 // analyser, and asserting the analyser's frame is silent. We can't run that
-// test (Web Audio is out of scope per LLP 0001), so this project-local test
+// test (Web Audio is out of scope per LLP 0002), so this project-local test
 // asserts the equivalent observation at the *sink* end: while the track is
 // disabled, the AVCaptureConnection between the device input and `AudioSink`
 // is gated off (see `MediaStreamTrack.swift:36-37`), so

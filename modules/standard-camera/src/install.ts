@@ -1,4 +1,4 @@
-// @ref LLP 0006 — Install navigator.mediaDevices polyfill onto globalThis
+// @ref LLP 0007 — Install navigator.mediaDevices polyfill onto globalThis
 
 // Hermes V1 (RN 0.85) doesn't ship globalThis.EventTarget / Event. Pull them
 // in before any of our classes (which extend EventTarget) are evaluated.
@@ -42,7 +42,7 @@ export function installNavigatorMediaDevices(): void {
   }
 
   // Expose constructors for instanceof checks in ported WPT tests.
-  // @ref LLP 0006 — global classes for `instanceof`
+  // @ref LLP 0007 — global classes for `instanceof`
   if (!g.MediaStream) g.MediaStream = MediaStream;
   if (!g.MediaStreamTrack) g.MediaStreamTrack = MediaStreamTrack;
   if (!g.MediaDevices) g.MediaDevices = MediaDevices;

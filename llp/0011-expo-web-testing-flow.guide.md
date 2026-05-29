@@ -1,11 +1,11 @@
-# LLP 0019: Expo Web testing flow
+# LLP 0011: Expo Web testing flow
 
 **Type:** Guide
 **Status:** Active
 **Systems:** demo-app, testing
 **Author:** James Ide
 **Date:** 2026-05-26
-**Related:** 0000, 0007
+**Related:** 0000, 0010
 
 ## Summary
 
@@ -68,7 +68,7 @@ Media Capture and Streams / `srcObject` cases that can run against browser
 APIs. It intentionally does not register:
 
 - Browser Capture / Element Capture tests (`cropTo`, `restrictTo`) because
-  they require `getDisplayMedia()`, which LLP 0001 marks out of scope.
+  they require `getDisplayMedia()`, which LLP 0002 marks out of scope.
 - Cross-origin iframe, Permissions Policy header, and SecureContext
   infrastructure tests because the app shell does not own those browser-hosted
   conditions.
@@ -77,7 +77,7 @@ APIs. It intentionally does not register:
   enumeration, and AVFoundation format-selection checks.
 
 Those files may stay on disk for provenance, but they are not part of the
-active compliance suite unless LLP 0001 brings the corresponding API into
+active compliance suite unless LLP 0002 brings the corresponding API into
 scope first.
 
 ## Platform boundary

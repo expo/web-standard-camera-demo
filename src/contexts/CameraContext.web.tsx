@@ -109,7 +109,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const probeEnvironmentFacingMode = React.useCallback(
     async (mediaDevices: MediaDevices, requestId: number): Promise<void> => {
       if (environmentFacingAvailability !== 'unknown') return;
-      // @ref LLP 0021#decision — Once a camera grant exists, exact
+      // @ref LLP 0009#decision — Once a camera grant exists, exact
       // `environment` is the browser-backed probe for whether a Back camera is
       // actually available. Stop the probe stream immediately so the visible
       // app stream keeps owning the UI.

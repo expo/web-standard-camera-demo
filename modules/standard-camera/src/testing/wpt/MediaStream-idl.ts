@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/MediaStream-idl.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/MediaStream-idl.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStream-idl.https.html
 
 import { wptSource, test, assert_equals, assert_false, assert_not_equals, promise_test, setMediaPermission } from '../testharness';

@@ -1,11 +1,11 @@
-# LLP 0021: Web facing-mode camera selection
+# LLP 0009: Web facing-mode camera selection
 
 **Type:** Decision
 **Status:** Active
 **Systems:** demo-app, web
 **Author:** James Ide
 **Date:** 2026-05-26
-**Related:** 0000, 0002, 0019
+**Related:** 0000, 0003, 0011
 
 ## Context
 
@@ -64,7 +64,7 @@ purposes. This is an app UX convention, not a claim that the browser reported
 7. **Mirroring follows display-facing mode.** The preview mirrors when the
    display-facing mode is `"user"`, including the missing-mode web convention.
 
-The iOS native path keeps its stricter behavior from LLP 0002: AVFoundation
+The iOS native path keeps its stricter behavior from LLP 0003: AVFoundation
 exposes `.front` and `.back`, and our native implementation treats an explicit
 `facingMode` request as exact.
 

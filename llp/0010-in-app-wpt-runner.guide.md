@@ -1,11 +1,11 @@
-# LLP 0007: In-app WPT-style test runner
+# LLP 0010: In-app WPT-style test runner
 
 **Type:** Guide
 **Status:** Active
 **Systems:** standard-camera, demo-app
 **Author:** James Ide
 **Date:** 2026-05-19
-**Related:** 0001, 0002, 0003, 0004
+**Related:** 0002, 0003, 0004, 0005
 
 ## Summary
 
@@ -111,7 +111,7 @@ Both use `console.log`, so they end up in the simulator log stream the CLI is pa
 
 The harness assumes a few DOM globals. We polyfill the minimum:
 
-- `document.createElement("video")` returns a transient `<Video>` React component instance mounted off-screen, exposing the same ref-shape from LLP 0004. Implemented by rendering it into a hidden portal in the test screen.
+- `document.createElement("video")` returns a transient `<Video>` React component instance mounted off-screen, exposing the same ref-shape from LLP 0005. Implemented by rendering it into a hidden portal in the test screen.
 - `queueTask(fn)` and `setTimeout` exist in JS already.
 - `assert_throws_dom` matches `error.name` against the expected DOMException name; we don't strictly require `instanceof DOMException` because RN doesn't provide it.
 
@@ -122,8 +122,8 @@ The `createElement("video")` polyfill is the only complex piece. It returns a th
 Located in `modules/standard-camera/src/testing/wpt/`:
 
 - `MediaDevices-getUserMedia.ts` — adapted from [`wpt/mediacapture-streams/MediaDevices-getUserMedia.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaDevices-getUserMedia.https.html). Asserts API presence and that the returned stream contains exactly one live video track with reasonable settings.
-- `MediaStream-MediaElement-srcObject.ts` — adapted from [`wpt/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html). Verifies the LLP 0004 invariants.
-- `MediaStreamTrack-mute.ts` — covers `track.muted`, `mute` / `unmute` events, the empty-label-after-stop invariant, and the stop-stops-session step from LLP 0003. The mute/unmute path is exercised via a test-only native hook (`stream._native.__simulateInterruptionForTesting`) that posts a synthetic `AVCaptureSession.wasInterruptedNotification`.
+- `MediaStream-MediaElement-srcObject.ts` — adapted from [`wpt/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html`](https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaStream-MediaElement-srcObject.https.html). Verifies the LLP 0005 invariants.
+- `MediaStreamTrack-mute.ts` — covers `track.muted`, `mute` / `unmute` events, the empty-label-after-stop invariant, and the stop-stops-session step from LLP 0004. The mute/unmute path is exercised via a test-only native hook (`stream._native.__simulateInterruptionForTesting`) that posts a synthetic `AVCaptureSession.wasInterruptedNotification`.
 
 Adding a new test: drop a file under `testing/wpt/`, import it from `testing/index.ts`, and add a one-line entry in this LLP.
 
@@ -204,6 +204,7 @@ The current CLI boots a simulator, which means it can't validate anything that n
 
 As of 2026-05-22 the canonical green-test claim is "49/49 on iPhone 15 Pro / iOS 26" (with skip handling, simulator runs are also green: 13 pass + 36 skip + 0 fail + 0 timeout).
 
+<a id="cli-flow"></a>
 ## CLI flow (`bun run test:ios`)
 
 `scripts/test-ios.ts`:

@@ -1,4 +1,4 @@
-// @ref LLP 0003 — MediaStream subset
+// @ref LLP 0004 — MediaStream subset
 
 import { DOMException } from './DOMException';
 import { MediaStreamTrack } from './MediaStreamTrack';
@@ -13,7 +13,7 @@ import type { NativeMediaStream, NativeMediaStreamTrack } from './native';
 // `getSharedObjectId(obj)` helper (https://github.com/expo/expo/pull/46054)
 // works on a MediaStream wrapper directly when forwarding it as a view prop.
 
-// @ref LLP 0008#mediastream-constructor — Constructor arguments shape.
+// @ref LLP 0001#mediastream-constructor — Constructor arguments shape.
 type MediaStreamArg = MediaStream | MediaStreamTrack[] | NativeMediaStream;
 
 export class MediaStream extends EventTarget {
@@ -31,7 +31,7 @@ export class MediaStream extends EventTarget {
   constructor(arg?: MediaStreamArg) {
     super();
 
-    // @ref LLP 0003#stream-construction — Internal path: a getUserMedia or
+    // @ref LLP 0004#stream-construction — Internal path: a getUserMedia or
     // clone native handle. Distinguished from public-IDL args by the
     // SharedObject discriminant.
     if (isNativeStreamHandle(arg)) {
@@ -40,7 +40,7 @@ export class MediaStream extends EventTarget {
       return;
     }
 
-    // @ref LLP 0008#mediastream-constructor — Spec constructor: 0-arg,
+    // @ref LLP 0001#mediastream-constructor — Spec constructor: 0-arg,
     // sequence, or copy of an existing MediaStream.
     let initialTracks: MediaStreamTrack[];
     if (arg == null) {
@@ -75,42 +75,42 @@ export class MediaStream extends EventTarget {
     this.#tracks = [...initialTracks];
   }
 
-  // @ref LLP 0005#sharedobject-view-prop — Expose the underlying SharedObject's id
+  // @ref LLP 0006#sharedobject-view-prop — Expose the underlying SharedObject's id
   // so the canonical `getSharedObjectId(obj)` helper works on the wrapper directly.
   // See https://github.com/expo/expo/pull/46054.
   get __expo_shared_object_id__(): number | undefined {
     return (this._native as unknown as { __expo_shared_object_id__?: number }).__expo_shared_object_id__;
   }
 
-  // @ref LLP 0008#dom-mediastream-id — spec attribute
-  // @ref LLP 0003#stream-id
+  // @ref LLP 0001#dom-mediastream-id — spec attribute
+  // @ref LLP 0004#stream-id
   get id(): string { return this._native.id; }
 
-  // @ref LLP 0003#stream-active
+  // @ref LLP 0004#stream-active
   get active(): boolean {
     return this.#tracks.some((t) => t.readyState === 'live');
   }
 
-  // @ref LLP 0003#stream-getTracks — Snapshot per spec
+  // @ref LLP 0004#stream-getTracks — Snapshot per spec
   getTracks(): MediaStreamTrack[] { return [...this.#tracks]; }
 
-  // @ref LLP 0003#stream-getVideoTracks
+  // @ref LLP 0004#stream-getVideoTracks
   getVideoTracks(): MediaStreamTrack[] {
     return this.#tracks.filter((t) => t.kind === 'video');
   }
 
-  // @ref LLP 0003#stream-getAudioTracks
+  // @ref LLP 0004#stream-getAudioTracks
   getAudioTracks(): MediaStreamTrack[] {
     return this.#tracks.filter((t) => t.kind === 'audio');
   }
 
-  // @ref LLP 0003#stream-getTrackById
+  // @ref LLP 0004#stream-getTrackById
   getTrackById(id: string): MediaStreamTrack | null {
     return this.#tracks.find((t) => t.id === id) ?? null;
   }
 
-  // @ref LLP 0008#dom-mediastream-addtrack — script-initiated; no spec event fires.
-  // @ref LLP 0003#stream-addtrack
+  // @ref LLP 0001#dom-mediastream-addtrack — script-initiated; no spec event fires.
+  // @ref LLP 0004#stream-addtrack
   addTrack(track: MediaStreamTrack): void {
     if (!(track instanceof MediaStreamTrack)) {
       throw new DOMException('addTrack argument must be a MediaStreamTrack', 'TypeError');
@@ -123,8 +123,8 @@ export class MediaStream extends EventTarget {
     this.#dispatchInternalTrackSetChanged();
   }
 
-  // @ref LLP 0008#dom-mediastream-removetrack — script-initiated; no spec event fires.
-  // @ref LLP 0003#stream-removetrack
+  // @ref LLP 0001#dom-mediastream-removetrack — script-initiated; no spec event fires.
+  // @ref LLP 0004#stream-removetrack
   removeTrack(track: MediaStreamTrack): void {
     if (!(track instanceof MediaStreamTrack)) {
       throw new DOMException('removeTrack argument must be a MediaStreamTrack', 'TypeError');
@@ -144,13 +144,13 @@ export class MediaStream extends EventTarget {
   // becomes inactive — including via `removeTrack`. The TS-side `<Video>` element
   // listens for this to re-evaluate `ended`. The event name uses our internal
   // prefix so it can't collide with anything from a WPT body.
-  // @ref LLP 0004#srcobject-ended
+  // @ref LLP 0005#srcobject-ended
   #dispatchInternalTrackSetChanged(): void {
     this.dispatchEvent(new Event('__standardcamera_tracksetchange'));
   }
 
-  // @ref LLP 0008#dom-mediastream-clone
-  // @ref LLP 0003#stream-clone
+  // @ref LLP 0001#dom-mediastream-clone
+  // @ref LLP 0004#stream-clone
   clone(): MediaStream {
     // Build a JS-only clone whose tracks are clones of ours; the spec is
     // explicit that each contained track is cloned. The new native handle
@@ -160,7 +160,7 @@ export class MediaStream extends EventTarget {
     return new MediaStream(clonedTracks);
   }
 
-  // @ref LLP 0008#event-mediastream-addtrack — IDL handler attribute. Per spec
+  // @ref LLP 0001#event-mediastream-addtrack — IDL handler attribute. Per spec
   // the `addtrack` event is UA-initiated only; our subset never adds tracks
   // outside of script, so addEventListener wires up but listeners never fire.
   get onaddtrack(): ((ev: Event) => void) | null { return this.#onaddtrack; }
@@ -170,7 +170,7 @@ export class MediaStream extends EventTarget {
     if (handler) this.addEventListener('addtrack', handler);
   }
 
-  // @ref LLP 0008#event-mediastream-removetrack — IDL handler attribute. Same
+  // @ref LLP 0001#event-mediastream-removetrack — IDL handler attribute. Same
   // UA-initiated-only semantics as `addtrack`; our script-initiated
   // `removeTrack` is silent per spec.
   get onremovetrack(): ((ev: Event) => void) | null { return this.#onremovetrack; }

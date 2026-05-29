@@ -1,4 +1,4 @@
-// @ref LLP 0013#conformance-model - Repo-local WebXR-shaped research profile.
+// @ref LLP 0014#conformance-model - Repo-local WebXR-shaped research profile.
 // This is not a browser-compatible WebXR runtime; it implements only the
 // camera/depth subset needed by the LiDAR WebGPU demo.
 
@@ -153,7 +153,7 @@ function nativeFrameFor(frame: object): NativeLiDARDepthFrame {
   return nativeFrame;
 }
 
-// @ref LLP 0013#xr-viewer-pose — `getViewerPose()` returns null when the
+// @ref LLP 0014#xr-viewer-pose — `getViewerPose()` returns null when the
 // native tracking system cannot provide an ARKit camera pose. Startup frames
 // can still carry usable scene depth while ARKit reports limited tracking or
 // non-mapped world mapping, so those states remain internal diagnostics rather
@@ -169,7 +169,7 @@ function logViewerPoseUnavailable(nativeFrame: NativeLiDARDepthFrame): void {
     return;
   }
   lastViewerPoseProfileLoggedAtMs = current;
-  // @ref LLP 0013#xr-viewer-pose - Tracking and mapping state remain internal
+  // @ref LLP 0014#xr-viewer-pose - Tracking and mapping state remain internal
   // WebXR runtime details, but physical-device profiling needs to know why
   // getViewerPose() is returning null during a slow or empty panorama scan.
   console.log('PANORAMIC_XR_POSE_PROFILE', JSON.stringify({
@@ -193,7 +193,7 @@ function logViewerPoseDegraded(nativeFrame: NativeLiDARDepthFrame): void {
     return;
   }
   lastViewerPoseDegradedProfileLoggedAtMs = current;
-  // @ref LLP 0013#xr-viewer-pose - Keep native pose-quality buckets internal
+  // @ref LLP 0014#xr-viewer-pose - Keep native pose-quality buckets internal
   // while giving physical-device profiling enough signal to distinguish
   // startup-quality poses from complete pose misses.
   console.log('PANORAMIC_XR_POSE_PROFILE', JSON.stringify({
@@ -273,7 +273,7 @@ function transformNormalizedPoint(
   x: number,
   y: number
 ): { x: number; y: number } {
-  // @ref LLP 0013#xr-depth-information — `getDepthInMeters()` samples after
+  // @ref LLP 0014#xr-depth-information — `getDepthInMeters()` samples after
   // applying the native normalized-view to normalized-depth transform.
   const m = transform.matrix;
   const tx = m[0] * x + m[4] * y + m[12];
@@ -404,7 +404,7 @@ function bgraToRgba(src: Uint8Array): Uint8Array {
   return dst;
 }
 
-// @ref LLP 0013#xr-request-session - `requestSession()` must stop/suspend any
+// @ref LLP 0014#xr-request-session - `requestSession()` must stop/suspend any
 // active `getUserMedia` stream through the same external-lock mechanism used
 // by the LiDAR native sidecar.
 export function setWebXRDepthCameraLockHandlers(handlers: CameraLockHandlers | null): void {
@@ -418,7 +418,7 @@ export function setWebXRDepthCameraLockHandlers(handlers: CameraLockHandlers | n
   }
 }
 
-// @ref LLP 0020#testing-and-validation - Panorama profiling scopes native
+// @ref LLP 0015#testing-and-validation - Panorama profiling scopes native
 // WebXR diagnostics by scan attempt so pasted multi-run logs do not merge an
 // older native frame pump profile into a later one-frame scan.
 export function setWebXRDepthProfileTelemetryContext(context: WebXRDepthProfileTelemetryContext | null): void {
@@ -427,7 +427,7 @@ export function setWebXRDepthProfileTelemetryContext(context: WebXRDepthProfileT
 
 // React Native has no browser `navigator.userActivation`, so the demo's press
 // handler wraps the `requestSession()` call in this transient activation token.
-// @ref LLP 0013#xr-request-session
+// @ref LLP 0014#xr-request-session
 export function runWithWebXRUserActivation<T>(callback: () => T): T {
   setTransientActivation();
   return callback();
@@ -449,8 +449,7 @@ function waitForCameraLockHandlers(): Promise<CameraLockHandlers> {
   });
 }
 
-// @ref LLP 0013#xr-install
-// @ref LLP 0014#xr-system
+// @ref LLP 0014#xr-install
 export function installWebXRDepthProfile(): void {
   const g = globalThis as unknown as Record<string | symbol, unknown>;
   if (g[INSTALLED_SYMBOL]) return;
@@ -479,8 +478,7 @@ export function installWebXRDepthProfile(): void {
 }
 
 export class WebXRSystem extends EventTarget {
-  // @ref LLP 0013#xr-is-session-supported
-  // @ref LLP 0014#xr-session-mode
+  // @ref LLP 0014#xr-is-session-supported
   async isSessionSupported(mode: string): Promise<boolean> {
     if (mode !== 'immersive-ar') {
       return false;
@@ -489,8 +487,7 @@ export class WebXRSystem extends EventTarget {
     return caps.supported === true;
   }
 
-  // @ref LLP 0013#xr-request-session
-  // @ref LLP 0015#ar-compositor-privacy
+  // @ref LLP 0014#xr-request-session
   async requestSession(mode: string, options: WebXRSessionInit = {}): Promise<WebXRSession> {
     if (mode !== 'immersive-ar') {
       throw unsupported('Only immersive-ar sessions are supported');
@@ -527,10 +524,10 @@ export class WebXRSystem extends EventTarget {
       throw unsupported('This profile requires depth-sensing, camera-access, or mesh-detection');
     }
 
-    // @ref LLP 0013#xr-request-session — Pick one supported observable
+    // @ref LLP 0014#xr-request-session — Pick one supported observable
     // depth type before starting ARKit so native semantics and session.depthType match.
     const depthType = wantsDepth ? selectedDepthType(caps, options.depthSensing?.depthTypeRequest) : null;
-    // @ref LLP 0013#xr-depth-confidence — Visual inspection sessions may
+    // @ref LLP 0014#xr-depth-confidence — Visual inspection sessions may
     // preserve low-confidence positive depth without exposing confidence maps.
     const lowConfidenceDepthEnabled = wantsDepth && options.depthSensing?.confidencePreference === 'low';
     if (wantsDepth && !depthType) {
@@ -541,7 +538,7 @@ export class WebXRSystem extends EventTarget {
     let lockHandlers: CameraLockHandlers | null = null;
     let started: NativeLiDARDepthCapabilities | null = null;
     try {
-      // @ref LLP 0013#xr-request-session - Cold-start autorun can reach a
+      // @ref LLP 0014#xr-request-session - Cold-start autorun can reach a
       // child route's WebXR session effect before CameraProvider's passive
       // effect installs the shared AVFoundation handoff. Wait briefly rather
       // than starting ARKit without owning the camera lock.
@@ -599,7 +596,6 @@ type NativePayloadRequestProfile = {
   requestMs: number;
 };
 
-// @ref LLP 0013#xr-session
 // @ref LLP 0014#xr-session
 export class WebXRSession extends EventTarget {
   #cameraAccessEnabled: boolean;
@@ -716,7 +712,7 @@ export class WebXRSession extends EventTarget {
   }
 
   frameTime(nativeFrame: NativeLiDARDepthFrame, fallback: DOMHighResTimeStamp): DOMHighResTimeStamp {
-    // @ref LLP 0013#xr-frame-loop — The callback time follows the native AR
+    // @ref LLP 0014#xr-frame-loop — The callback time follows the native AR
     // frame timestamp, shifted into the JS performance timeline.
     const nativeTimestampMs = typeof nativeFrame.timestamp === 'number' && Number.isFinite(nativeFrame.timestamp)
       ? nativeFrame.timestamp * 1000
@@ -749,7 +745,6 @@ export class WebXRSession extends EventTarget {
     }
   }
 
-  // @ref LLP 0013#xr-reference-space
   // @ref LLP 0014#xr-reference-space
   async requestReferenceSpace(type: string): Promise<WebXRReferenceSpace> {
     if (this.#ended) {
@@ -761,7 +756,6 @@ export class WebXRSession extends EventTarget {
     return new WebXRReferenceSpace(this, type);
   }
 
-  // @ref LLP 0013#xr-frame-loop
   // @ref LLP 0014#xr-frame-loop
   requestAnimationFrame(callback: WebXRFrameRequestCallback): number {
     if (this.#ended) {
@@ -779,13 +773,13 @@ export class WebXRSession extends EventTarget {
         this.#callbacks.delete(handle);
         return;
       }
-      // @ref LLP 0013#xr-camera-resolution - The WebXR profile owns this
+      // @ref LLP 0014#xr-camera-resolution - The WebXR profile owns this
       // CPU-visible camera image size as a private implementation detail.
       let nativeFrame: NativeLiDARDepthFrame | null = null;
       try {
         nativeFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame();
       } catch (e) {
-        // @ref LLP 0020#testing-and-validation - A native bridge/frame-fetch
+        // @ref LLP 0015#testing-and-validation - A native bridge/frame-fetch
         // exception happens before the app's XR frame callback, so route-level
         // scan-loop diagnostics cannot see it. Keep polling and log the failure.
         this.#nativeFrameErrorPolls += 1;
@@ -847,7 +841,7 @@ export class WebXRSession extends EventTarget {
       errorMessage: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
       errorName: error instanceof Error ? error.name : error === undefined ? undefined : 'Error',
       lastDeliveredFrameNumber: this.#lastDeliveredFrameNumber,
-      // @ref LLP 0020#testing-and-validation - If ARKit frames continue while
+      // @ref LLP 0015#testing-and-validation - If ARKit frames continue while
       // requested scene-depth snapshots stall, carry native raw/smoothed
       // availability through the JS frame-pump log for physical diagnosis.
       latestDepthMissRawDepthAvailable: nativeFrame?.latestDepthMissRawDepthAvailable,
@@ -906,7 +900,7 @@ export class WebXRSession extends EventTarget {
   async end(): Promise<void> {
     if (!this.#beginEnd()) return;
     try {
-      // @ref LLP 0012#camera-ownership-handoff — Keep the external camera
+      // @ref LLP 0013#camera-ownership-handoff — Keep the external camera
       // lock until native ARKit pause has resolved. Clearing it earlier lets
       // focused standard-camera routes reopen AVFoundation while ARKit is
       // still winding down, which can starve the next WebXR frame pump.
@@ -1137,7 +1131,7 @@ function trackedMeshSetFromNative(
     const payload = includesPayload ? nativeMesh as NativeWebXRMesh : null;
     let mesh = cache.get(nativeMesh.id);
     if (mesh) {
-      // @ref LLP 0013#xr-mesh-detection — WebXR Mesh Detection tracks native
+      // @ref LLP 0014#xr-mesh-detection — WebXR Mesh Detection tracks native
       // mesh identity across frames. Reuse the XRMesh object and its SameObject
       // meshSpace while refreshing the current-frame pose and geometry snapshot.
       mesh.updateFromNativeFrame(frame, nativeMesh, payload);
@@ -1155,7 +1149,7 @@ function trackedMeshSetFromNative(
   return WebXRMeshSet.fromTrackedMeshes(meshes);
 }
 
-// @ref LLP 0014#xr-rigid-transform
+// @ref LLP 0014#idl-surface — XRRigidTransform from the IDL surface
 export class WebXRRigidTransform {
   readonly matrix: Float32Array;
   readonly inverse: WebXRRigidTransform;
@@ -1171,8 +1165,7 @@ export class WebXRRigidTransform {
   }
 }
 
-// @ref LLP 0013#xr-frame-loop
-// @ref LLP 0014#xr-frame
+// @ref LLP 0014#xr-frame-loop
 export class WebXRFrame {
   readonly session: WebXRSession;
   readonly predictedDisplayTime: DOMHighResTimeStamp;
@@ -1204,7 +1197,7 @@ export class WebXRFrame {
     this.assertActive();
     if (this.#depthData) return this.#depthData;
     const nativeFrame = nativeFrameFor(this);
-    // @ref LLP 0013#xr-depth-confidence — The native bridge keeps ARKit's
+    // @ref LLP 0014#xr-depth-confidence — The native bridge keeps ARKit's
     // confidence map internal while honoring the session confidence preference.
     const payload = requestNativeFramePayload(nativeFrame, {
       includeCameraImage: false,
@@ -1274,7 +1267,6 @@ export class WebXRFrame {
     return this.#nativeMeshPayloads;
   }
 
-  // @ref LLP 0013#xr-viewer-pose
   // @ref LLP 0014#xr-viewer-pose
   getViewerPose(referenceSpace: WebXRReferenceSpace): WebXRViewerPose | null {
     this.assertActive();
@@ -1292,8 +1284,7 @@ export class WebXRFrame {
     return new WebXRViewerPose([new WebXRView(this, referenceSpace)]);
   }
 
-  // @ref LLP 0013#xr-depth-information
-  // @ref LLP 0016#cpu-depth-information
+  // @ref LLP 0014#xr-depth-information
   getDepthInformation(view: WebXRView): WebXRCPUDepthInformation | null {
     this.assertActive();
     if (!this.session.hasDepthAccess()) {
@@ -1313,7 +1304,7 @@ export class WebXRFrame {
     return depthInformation;
   }
 
-  // @ref LLP 0013#xr-mesh-detection — Real-world mesh access follows the
+  // @ref LLP 0014#xr-mesh-detection — Real-world mesh access follows the
   // WebXR Mesh Detection draft's `XRFrame.detectedMeshes` shape. Native ARKit
   // mesh anchors remain hidden behind XRMesh objects and mesh spaces.
   get detectedMeshes(): WebXRMeshSet {
@@ -1322,7 +1313,7 @@ export class WebXRFrame {
       return WebXRMeshSet.empty();
     }
     if (!this.#detectedMeshes) {
-      // @ref LLP 0013#xr-mesh-detection — `detectedMeshes` can be observed
+      // @ref LLP 0014#xr-mesh-detection — `detectedMeshes` can be observed
       // through lightweight native mesh summaries. Full vertex/index buffers
       // are fetched only if app code reads standard XRMesh geometry fields.
       const nativeMeshSummaries = nativeFrameFor(this).detectedMeshes;
@@ -1333,7 +1324,7 @@ export class WebXRFrame {
     return this.#detectedMeshes;
   }
 
-  // @ref LLP 0013#xr-mesh-detection — Mesh poses are exposed through the
+  // @ref LLP 0014#xr-mesh-detection — Mesh poses are exposed through the
   // standard `getPose(space, baseSpace)` pattern instead of app-facing ARKit
   // anchor transforms.
   getPose(space: WebXRMeshSpace, baseSpace: WebXRReferenceSpace): WebXRPose | null {
@@ -1603,15 +1594,14 @@ export class WebXRViewerPose {
 
   constructor(views: readonly WebXRView[]) {
     this.views = views;
-    // @ref LLP 0013#xr-viewer-pose — XRViewerPose is an XRPose for the
+    // @ref LLP 0014#xr-viewer-pose — XRViewerPose is an XRPose for the
     // viewer. In this monocular phone profile, the single XRView carries the
     // same camera-to-reference-space transform.
     this.transform = views[0]?.transform ?? identityTransform();
   }
 }
 
-// @ref LLP 0013#xr-viewer-pose
-// @ref LLP 0014#xr-view
+// @ref LLP 0014#xr-viewer-pose — single XRView, eye === "none"
 export class WebXRView {
   readonly eye = 'none';
   readonly index = 0;
@@ -1626,7 +1616,7 @@ export class WebXRView {
     this.frame = frame;
     this.referenceSpace = referenceSpace;
     const nativeFrame = nativeFrameFor(frame);
-    // @ref LLP 0013#xr-viewer-pose — `local` exposes ARKit camera-to-world as
+    // @ref LLP 0014#xr-viewer-pose — `local` exposes ARKit camera-to-world as
     // the viewer pose; `viewer` is the viewer-relative reference space.
     this.transform = referenceSpace.type === 'viewer'
       ? identityTransform()
@@ -1634,8 +1624,7 @@ export class WebXRView {
     this.projectionMatrix = matrixFromNative(nativeFrame.projectionMatrix);
   }
 
-  // @ref LLP 0013#xr-camera-image
-  // @ref LLP 0017#xr-view-camera
+  // @ref LLP 0014#xr-camera-image
   get camera(): WebXRCamera | null {
     this.frame.assertActive();
     if (this.#camera !== undefined) {
@@ -1691,7 +1680,7 @@ export class WebXRDepthInformation {
     const nativeFrame = nativeFrameFor(frame);
     this.width = nativeFrame.width;
     this.height = nativeFrame.height;
-    // @ref LLP 0013#xr-depth-information — The WebXR Depth Sensing spec mixes
+    // @ref LLP 0014#xr-depth-information — The WebXR Depth Sensing spec mixes
     // XRViewGeometry into XRDepthInformation; for matchDepthView=true these
     // geometry fields match the associated XRView.
     this.projectionMatrix = new Float32Array(view.projectionMatrix);
@@ -1771,7 +1760,7 @@ export class WebXRCPUCameraImage {
   }
 }
 
-// @ref LLP 0013#xr-camera-image — Repo-local CPU analog of
+// @ref LLP 0014#xr-camera-image — Repo-local CPU analog of
 // XRWebGLBinding.getCameraImage(camera). The standard draft returns WebGLTexture;
 // this profile returns CPU bytes for the WebGPU demo upload path.
 export class WebXRCPUCameraBinding {

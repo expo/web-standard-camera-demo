@@ -1,4 +1,4 @@
-// @ref LLP 0004#srcobject-ended — Internal notification used by media elements
+// @ref LLP 0005#srcobject-ended — Internal notification used by media elements
 // to observe a track readyState transition, including stop(), without exposing
 // a public MediaStreamTrack "ended" event for explicit stop().
 

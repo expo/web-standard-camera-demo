@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/MediaDevices-enumerateDevices.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/MediaDevices-enumerateDevices.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/MediaDevices-enumerateDevices.https.html
 
 import { wptSource, test, assert_equals, assert_greater_than, assert_greater_than_equal, assert_in_array, assert_less_than_equal, assert_not_equals, assert_true, assert_unreached, promise_test, setMediaPermission } from '../testharness';

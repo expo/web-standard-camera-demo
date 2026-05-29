@@ -1,4 +1,4 @@
-// @ref LLP 0002#gum-build-session — Regression coverage for two bugs in the
+// @ref LLP 0003#gum-build-session — Regression coverage for two bugs in the
 // AVCaptureSession configuration path:
 //
 //   1. AVCaptureSession.Preset caps most iPhone formats at 30 fps. Requesting
@@ -19,7 +19,7 @@
 // the UA is free to deliver any reasonable rate. iOS is concrete, so we
 // assert the round-trip ourselves. The simulator has no AVCaptureDevice, so
 // these tests skip with `environment-skip` there and only run on a physical
-// device (see LLP 0007#the-simulator-does-not-have-a-camera-device).
+// device (see LLP 0010#the-simulator-does-not-have-a-camera-device).
 
 import {
   assert_equals,

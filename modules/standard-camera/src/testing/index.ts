@@ -1,4 +1,4 @@
-// @ref LLP 0007 — In-scope WPT tests are registered as a side-effect of these imports.
+// @ref LLP 0010 — In-scope WPT tests are registered as a side-effect of these imports.
 //
 // `wpt/*.ts` files are verbatim 1:1 ports of the upstream
 // web-platform-tests/wpt/mediacapture-streams suite. `local/*.ts` files are
@@ -6,7 +6,7 @@
 // our AVCaptureSession interruption-driven mute/unmute path).
 //
 // Within each group we keep the upstream alphabetical ordering. WPT files
-// whose required APIs are outside LLP 0001 (`getDisplayMedia`, Browser Capture
+// whose required APIs are outside LLP 0002 (`getDisplayMedia`, Browser Capture
 // crop/restrict, cross-origin iframe transfer, Permissions Policy headers,
 // SecureContext-only behavior, canvas/WebAudio frame inspection) are kept on
 // disk for provenance but are not imported into the active compliance suite.

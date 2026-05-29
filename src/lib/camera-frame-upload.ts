@@ -1,4 +1,4 @@
-// @ref LLP 0010#universal-demo-routes — Demo routes stay shared while this
+// @ref LLP 0012#universal-demo-routes — Demo routes stay shared while this
 // helper adapts the host's ImageBitmap/frame representation to WebGPU upload.
 
 export interface CameraFrameUploadSource {

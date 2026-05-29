@@ -1,5 +1,5 @@
 // @ts-nocheck
-// @ref LLP 0007 — Verbatim port of wpt/mediacapture-streams/GUM-api.https.html
+// @ref LLP 0010 — Verbatim port of wpt/mediacapture-streams/GUM-api.https.html
 // Original: https://github.com/web-platform-tests/wpt/blob/master/mediacapture-streams/GUM-api.https.html
 
 import { wptSource, test, assert_true } from '../testharness';

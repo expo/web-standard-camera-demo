@@ -1,4 +1,4 @@
-// @ref LLP 0007 — Minimal DOM shim so 1:1 WPT ports can be evaluated.
+// @ref LLP 0010 — Minimal DOM shim so 1:1 WPT ports can be evaluated.
 //
 // The upstream WPT files run in a browser where `document`, `window`,
 // `test_driver`, and friends are present. To let our verbatim ports load
@@ -150,7 +150,7 @@ class StubElement extends EventTarget {
 // we return a stub that supports the spec-shaped surface. Tests that need a
 // real preview should use the globally-installed `video` element instead.
 //
-// @ref LLP 0008#video-properties — On `srcObject = stream`, derive
+// @ref LLP 0001#video-properties — On `srcObject = stream`, derive
 // `videoWidth` / `videoHeight` from the first video track's settings (which
 // already accounts for `resizeMode: "crop-and-scale"` delivering cropped
 // dimensions, per `MediaDevices.swift`'s videoSettings) and queue the
@@ -642,7 +642,7 @@ export function installDomShim(): void {
     g.MediaStreamTrackEvent = MediaStreamTrackEvent;
   }
   // `URL.createObjectURL` is provided by Expo/RN and its behavior isn't in
-  // this project's scope (LLP 0001 covers getUserMedia, MediaStream,
+  // this project's scope (LLP 0002 covers getUserMedia, MediaStream,
   // MediaStreamTrack, and HTMLMediaElement.srcObject — not the URL / File
   // API). The lone WPT test that probed it ("Passing MediaStream to
   // URL.createObjectURL() should throw") is marked out-of-scope in

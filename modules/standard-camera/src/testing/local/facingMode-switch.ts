@@ -1,4 +1,4 @@
-// @ref LLP 0002#gum-pick-device — Verifies that `getUserMedia` with
+// @ref LLP 0003#gum-pick-device — Verifies that `getUserMedia` with
 // `facingMode: 'user'` and `facingMode: 'environment'` return tracks backed by
 // genuinely different `AVCaptureDevice`s. Upstream WPT does not assert this
 // because browsers can't guarantee both cameras exist; on iOS we can (every

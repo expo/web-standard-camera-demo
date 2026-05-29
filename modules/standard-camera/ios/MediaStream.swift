@@ -1,8 +1,8 @@
 import AVFoundation
 import ExpoModulesCore
 
-// @ref LLP 0008#dom-mediastream — Upstream spec text
-// @ref LLP 0003#stream-* — MediaStream subset (native handle)
+// @ref LLP 0001#dom-mediastream — Upstream spec text
+// @ref LLP 0004#stream-* — MediaStream subset (native handle)
 //
 // The native MediaStream is a thin container that JS-side code wraps. The
 // AVCaptureSession used to live here; it now lives on a CaptureSource that
@@ -14,7 +14,7 @@ internal final class MediaStream: SharedObject {
   let id: String
   private(set) var tracks: [MediaStreamTrack]
 
-  // @ref LLP 0005#concurrency — Session mutation is serialized on this queue.
+  // @ref LLP 0006#concurrency — Session mutation is serialized on this queue.
   static let sessionQueue = DispatchQueue(
     label: "dev.ide.standardcamera.session",
     qos: .userInitiated
@@ -26,34 +26,34 @@ internal final class MediaStream: SharedObject {
     super.init()
   }
 
-  // @ref LLP 0008#dom-mediastream-active — spec attribute
-  // @ref LLP 0003#stream-active — At least one track is "live"
+  // @ref LLP 0001#dom-mediastream-active — spec attribute
+  // @ref LLP 0004#stream-active — At least one track is "live"
   var active: Bool {
     return tracks.contains { $0.readyState == "live" }
   }
 
-  // @ref LLP 0008#dom-mediastream-gettracks
+  // @ref LLP 0001#dom-mediastream-gettracks
   func getTracks() -> [MediaStreamTrack] {
     return tracks
   }
 
-  // @ref LLP 0008#dom-mediastream-getvideotracks
+  // @ref LLP 0001#dom-mediastream-getvideotracks
   func getVideoTracks() -> [MediaStreamTrack] {
     return tracks.filter { $0.kind == "video" }
   }
 
-  // @ref LLP 0008#dom-mediastream-getaudiotracks
+  // @ref LLP 0001#dom-mediastream-getaudiotracks
   func getAudioTracks() -> [MediaStreamTrack] {
     return tracks.filter { $0.kind == "audio" }
   }
 
-  // @ref LLP 0008#dom-mediastream-gettrackbyid
+  // @ref LLP 0001#dom-mediastream-gettrackbyid
   func getTrackById(_ trackId: String) -> MediaStreamTrack? {
     return tracks.first { $0.id == trackId }
   }
 
-  // @ref LLP 0008#dom-mediastream-addtrack — script-initiated; no event fires
-  // @ref LLP 0003#stream-addtrack — adds to the JS-side set if not present.
+  // @ref LLP 0001#dom-mediastream-addtrack — script-initiated; no event fires
+  // @ref LLP 0004#stream-addtrack — adds to the JS-side set if not present.
   // The TS wrapper is the source of truth for the JS-visible track set; this
   // path is here for IDL conformance and for clone() construction.
   func addTrack(_ track: MediaStreamTrack) {
@@ -61,20 +61,20 @@ internal final class MediaStream: SharedObject {
     tracks.append(track)
   }
 
-  // @ref LLP 0008#dom-mediastream-removetrack — script-initiated; no event fires
-  // @ref LLP 0003#stream-removetrack
+  // @ref LLP 0001#dom-mediastream-removetrack — script-initiated; no event fires
+  // @ref LLP 0004#stream-removetrack
   func removeTrack(_ track: MediaStreamTrack) {
     tracks.removeAll { $0 === track }
   }
 
-  // @ref LLP 0008#dom-mediastream-clone — spec algorithm
-  // @ref LLP 0003#stream-clone — Clone every track; new id.
+  // @ref LLP 0001#dom-mediastream-clone — spec algorithm
+  // @ref LLP 0004#stream-clone — Clone every track; new id.
   func clone() -> MediaStream {
     let clonedTracks = tracks.map { $0.cloneTrack() }
     return MediaStream(id: UUID().uuidString, tracks: clonedTracks)
   }
 
-  // @ref LLP 0012#native-extension-shape — Demo-only ownership handoff helper.
+  // @ref LLP 0013#native-extension-shape — Demo-only ownership handoff helper.
   // It preserves MediaStreamTrack.stop()'s synchronous readyState transition,
   // then resolves only after the underlying CaptureSource has passed through
   // the serialized AVFoundation stop point.
@@ -129,7 +129,7 @@ internal final class MediaStream: SharedObject {
   // <Video> view's preview layer should attach to. Returns nil if there are
   // no native-backed video tracks (i.e., a script-constructed MediaStream
   // with no getUserMedia tracks).
-  // @ref LLP 0003#stream-construction
+  // @ref LLP 0004#stream-construction
   var captureSession: AVCaptureSession? {
     return tracks.first(where: { $0.kind == "video" })?.source?.session
   }
@@ -138,7 +138,7 @@ internal final class MediaStream: SharedObject {
   // verify the mute/unmute path without needing real thermal pressure. The
   // event fans out from the CaptureSource observers to every track that
   // references the source.
-  // @ref LLP 0007#testing-overheating
+  // @ref LLP 0010#testing-overheating
   func simulateInterruption(reasonCode: Int, ended: Bool) {
     tracks.first(where: { $0.kind == "video" })?.source?.simulateInterruption(reasonCode: reasonCode, ended: ended)
   }

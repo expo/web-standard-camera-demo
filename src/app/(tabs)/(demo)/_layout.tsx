@@ -36,7 +36,7 @@ export default function DemoStackLayout(): React.JSX.Element {
   const standardTransitioning =
     status === 'requesting' || status === 'starting' || status === 'stopping';
 
-  // @ref LLP 0010#global-camera-controls — The stack owns demo header buttons
+  // @ref LLP 0012#global-camera-controls — The stack owns demo header buttons
   // so the route push starts with a populated Start/Stop control instead of
   // waiting for each screen body to mount and call Stack.Screen options.
   const standardHeaderRightItems = React.useCallback(

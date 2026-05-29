@@ -209,7 +209,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     }
     const live = streamRef.current;
     const pendingMedia = getUserMediaInFlightRef.current;
-    // @ref LLP 0012#camera-ownership-handoff — Pasted device logs need to
+    // @ref LLP 0013#camera-ownership-handoff — Pasted device logs need to
     // prove whether WebXR actually acquired the external camera lock before a
     // standard getUserMedia start could steal AVFoundation from ARKit.
     console.log(`CAMERA_CTX external-lock engaged ${JSON.stringify({
@@ -241,7 +241,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   }, [cameraOwnershipGate]);
 
   const unlockExternal = React.useCallback((): void => {
-    // @ref LLP 0012#camera-ownership-handoff
+    // @ref LLP 0013#camera-ownership-handoff
     console.log('CAMERA_CTX external-lock released');
     cameraOwnershipGate.unlockExternal();
     if (mountedRef.current) {
@@ -250,7 +250,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   }, [cameraOwnershipGate]);
 
   React.useEffect(() => {
-    // @ref LLP 0013#xr-request-session — WebXR research sessions use the same
+    // @ref LLP 0014#xr-request-session — WebXR research sessions use the same
     // camera handoff path as the native LiDAR sidecar before ARKit starts.
     setWebXRDepthCameraLockHandlers({ lockExternal, unlockExternal });
     return () => {
@@ -291,7 +291,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       }
       const requestId = startRequestRef.current + 1;
       startRequestRef.current = requestId;
-      // @ref LLP 0012#camera-ownership-handoff — Provider auto-start and
+      // @ref LLP 0013#camera-ownership-handoff — Provider auto-start and
       // screen-level start-on-mount can fire before React commits `requesting`.
       // Coalesce duplicate default starts so a WebXR/LiDAR handoff does not
       // immediately queue two AVFoundation getUserMedia requests. The gate is
@@ -415,7 +415,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       'onLiDARDepthSessionState',
       (event: NativeLiDARDepthSessionEvent) => {
         if (!mountedRef.current) return;
-        // @ref LLP 0012#camera-ownership-handoff — Terminal events from a
+        // @ref LLP 0013#camera-ownership-handoff — Terminal events from a
         // previous ARKit session can arrive after a new WebXR request has
         // taken the synchronous external lock. Do not clear that lock until a
         // matching native session has established ownership and then stops.

@@ -1,11 +1,11 @@
-# LLP 0012: LiDAR WebGPU depth demo
+# LLP 0013: LiDAR WebGPU depth demo
 
 **Type:** Plan
 **Status:** Active
 **Systems:** demo, standard-camera-native-extension
 **Author:** James Ide
 **Date:** 2026-05-24
-**Related:** 0000, 0001, 0010, 0013, 0014, 0015, 0016, 0017, 0018
+**Related:** 0000, 0002, 0012, 0014
 
 ## Summary
 
@@ -14,7 +14,7 @@ mobile capability with browser-shaped rendering code: ARKit provides paired
 camera and LiDAR scene-depth frames, and WebGPU/WGSL turns those frames into a
 live camera/depth comparison visualization.
 
-The point is different from LLP 0010. The WebGPU camera demos prove that a
+The point is different from LLP 0012. The WebGPU camera demos prove that a
 small W3C camera surface can make browser-shaped code run on iOS. This demo
 shows the complementary story: native mobile sensors can expose data the web
 does not standardize today, while the visualization, animation, and GPU
@@ -58,9 +58,6 @@ The draft also showed requesting a color stream and a depth stream from the same
 `groupId` so authors could pair the two. This was an evolution from the older
 2015 working-draft shape that had `depth: true` constraints and
 `stream.getDepthTracks()`.
-
-The scoped source slices for the final discontinued draft live in
-[LLP 0018](./0018-mediacapture-depth-spec-slices.spec.md).
 
 Primary sources:
 
@@ -153,8 +150,9 @@ If we ignore general WebXR ambitions and evaluate only the current LiDAR Depth
 Studio demo, the demo needs a much smaller functional surface:
 
 The full proposed WebXR-shaped API surface is specified in
-[LLP 0013](./0013-webxr-lidar-depth-api.spec.md). This section is the short
-evaluation summary for the current demo.
+[LLP 0014](./0014-webxr-lidar-depth-api.spec.md). That document also inlines the
+upstream W3C WebXR / AR / Depth Sensing / Raw Camera Access excerpts it draws
+from. This section is the short evaluation summary for the current demo.
 
 1. A user-triggered start/stop for an exclusive AR camera session.
 2. A support check that distinguishes simulator, non-LiDAR devices, and LiDAR
@@ -250,11 +248,6 @@ Additional primary source:
 - WebXR Raw Camera Access Module:
   https://immersive-web.github.io/raw-camera-access/
 
-The scoped WebXR source slices live in [LLP 0014](./0014-webxr-device-api-spec-slices.spec.md),
-[LLP 0015](./0015-webxr-ar-module-spec-slices.spec.md),
-[LLP 0016](./0016-webxr-depth-sensing-spec-slices.spec.md), and
-[LLP 0017](./0017-webxr-raw-camera-access-spec-slices.spec.md).
-
 Implementation files:
 
 - `modules/standard-camera/src/WebXRDepthProfile.ts` implements the
@@ -291,7 +284,7 @@ not a silent expansion of the standard-camera v1 scope.
 - **Keep the bridge narrow.** Native code owns ARKit session setup and exposes
   only compact depth-frame data plus diagnostics. WebGPU owns rendering.
 - **Keep W3C scope clean.** The LiDAR API is not added to
-  `navigator.mediaDevices`, `MediaStreamTrack`, or the spec subset in LLP 0001.
+  `navigator.mediaDevices`, `MediaStreamTrack`, or the spec subset in LLP 0002.
   It is an explicit demo extension on the native module.
 
 ## Non-goals
@@ -347,7 +340,7 @@ GPUCanvasContext.present()
 
 The route targets 30 fps uploads and renders every animation frame with the
 latest uploaded ARKit frame. In development builds it emits
-`WEBGPU_DEMO_PROFILE` records through the same system-log path as the LLP 0010
+`WEBGPU_DEMO_PROFILE` records through the same system-log path as the LLP 0012
 camera demos, including WebXR frame callbacks, pose/depth/camera misses,
 depth/color upload preparation, `writeTexture()`, and render submit/present
 timings. The WebXR render callback must catch per-frame depth/camera/upload
@@ -410,7 +403,7 @@ device treated `target` as reserved, which failed shader parsing and presented a
 the demo's magenta error color. Use names such as `targetMask` or
 `targetLineMask` for target-distance masks.
 
-Like the LLP 0010 routes, the WebGPU render loop is route-focus scoped with
+Like the LLP 0012 routes, the WebGPU render loop is route-focus scoped with
 Expo Router's `useFocusEffect` so a previous hidden demo screen cannot continue
 submitting GPU work behind the active route. The LiDAR session itself is also
 stopped on route blur because Expo Router may keep the screen component mounted

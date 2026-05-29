@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// @ref LLP 0007 — CLI: run WPT tests on an iOS 26 simulator or a connected
+// @ref LLP 0010 — CLI: run WPT tests on an iOS 26 simulator or a connected
 // physical iPhone, then clean up.
 //
 // Usage:
@@ -118,9 +118,9 @@ async function runOnSimulator(only?: string): Promise<number> {
 
     metroServer = await ensureMetroRunning();
 
-    // @ref LLP 0007#cli-flow — grant camera + microphone so
+    // @ref LLP 0010#cli-flow — grant camera + microphone so
     // AVCaptureDevice.requestAccess returns true for both kinds.
-    // @ref LLP 0009#audio-permission
+    // @ref LLP 0008#audio-permission
     await sh(['xcrun', 'simctl', 'privacy', udid, 'grant', 'camera', APP_BUNDLE_ID]).catch(
       () => console.warn('Could not grant camera permission (may already be granted)')
     );
@@ -182,12 +182,12 @@ async function runOnDevice(requested: string | undefined, only?: string): Promis
 
   await ensureAppInstalledOnDevice(device.identifier);
 
-  // @ref LLP 0007#cli-flow — Launch with --console to stream the app's
+  // @ref LLP 0010#cli-flow — Launch with --console to stream the app's
   // stdout/stderr. The app's `emit()` writes WPT_RESULT/WPT_DONE lines via
   // `console.log` (which RN bridges to stdout in dev builds) AND `NSLog`
   // (visible in os_log). For physical devices we rely on console.log; the
   // dev build hosts a Metro bundle whose console.log surfaces here.
-  // @ref LLP 0007#cli-flow — Hand the deep link via `--payload-url` so the
+  // @ref LLP 0010#cli-flow — Hand the deep link via `--payload-url` so the
   // app's `useLinkingURL()` sees `?autorun=1` at cold-start and the runner
   // auto-fires.
   const payloadUrl = buildTestRunnerUrl(only);
@@ -571,7 +571,7 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
   const start = Date.now();
 
   while (Date.now() - start < LOG_TIMEOUT_MS) {
-    // @ref LLP 0007#cli-flow — Keep exactly one read pending on the simulator
+    // @ref LLP 0010#cli-flow — Keep exactly one read pending on the simulator
     // log stream. Dropping a timed-out read can lose the WPT_DONE chunk when
     // the app is still bundling from Metro.
     pendingRead ??= reader.read();
