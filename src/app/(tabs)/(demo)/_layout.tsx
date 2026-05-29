@@ -96,7 +96,15 @@ export default function DemoStackLayout(): React.JSX.Element {
         }}
       />
       <Stack.Screen
-        name="neural-lens"
+        name="signals"
+        options={{
+          title: 'Scene Signals',
+          ...DARK_DEMO_HEADER_OPTIONS,
+          unstable_headerRightItems: standardHeaderRightItems,
+        }}
+      />
+      <Stack.Screen
+        name="neural"
         options={{
           title: 'Neural Lens',
           ...DARK_DEMO_HEADER_OPTIONS,

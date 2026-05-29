@@ -24,6 +24,12 @@ import {
   uploadCameraFrameToTexture,
 } from '@/lib/camera-frame-upload';
 import { cameraFrameFacingMode, displayFacingMode, reportedFacingMode } from '@/lib/camera-facing';
+import {
+  makeSceneSignalPrediction,
+  SCENE_SIGNAL_LABELS as LABELS,
+  SCENE_SIGNAL_SCORE_FLOATS as SCORE_FLOATS,
+  type SceneSignalPrediction,
+} from '@/lib/scene-signal-classifier';
 import { configureWebGpuCanvas } from '@/lib/webgpu-canvas';
 import { createWebGpuPerfProbe, nowMs } from '@/lib/webgpu-perf';
 import { ImageCapture } from '../../../../modules/standard-camera';
@@ -96,7 +102,7 @@ struct ComputeUniforms {
 
 @group(0) @binding(0) var<uniform> u: ComputeUniforms;
 @group(0) @binding(1) var srcTex: texture_2d<f32>;
-@group(0) @binding(2) var<storage, read_write> outScores: array<f32, 14>;
+@group(0) @binding(2) var<storage, read_write> outScores: array<f32, 25>;
 
 fn luma(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
@@ -121,21 +127,52 @@ fn classify() {
   var cool = 0.0;
   var saturation = 0.0;
   var edge = 0.0;
+  var structureAccum = 0.0;
+  var skyAccum = 0.0;
+  var vegetationAccum = 0.0;
+  var topSmoothAccum = 0.0;
+  var topLuma = 0.0;
+  var bottomLuma = 0.0;
   var topBlue = 0.0;
   var lowerGreen = 0.0;
 
-  for (var y = 0; y < 16; y = y + 1) {
-    for (var x = 0; x < 16; x = x + 1) {
-      let px = i32((f32(x) + 0.5) / 16.0 * u.width);
-      let py = i32((f32(y) + 0.5) / 16.0 * u.height);
+  let stepX = max(i32(u.width / 96.0), 2);
+  let stepY = max(i32(u.height / 72.0), 2);
+
+  for (var y = 0; y < 18; y = y + 1) {
+    for (var x = 0; x < 24; x = x + 1) {
+      let px = i32((f32(x) + 0.5) / 24.0 * u.width);
+      let py = i32((f32(y) + 0.5) / 18.0 * u.height);
       let c = samplePixel(px, py);
       let y0 = luma(c);
-      let cx = luma(samplePixel(px + 3, py));
-      let cy = luma(samplePixel(px, py + 3));
+      let cx = luma(samplePixel(px + stepX, py));
+      let cy = luma(samplePixel(px, py + stepY));
+      let gx = abs(cx - y0);
+      let gy = abs(cy - y0);
       let maxChannel = max(max(c.r, c.g), c.b);
       let minChannel = min(min(c.r, c.g), c.b);
       let colorSpread = maxChannel - minChannel;
-      let sampleEdge = abs(cx - y0) + abs(cy - y0);
+      let sampleEdge = gx + gy;
+      let axisDominance = abs(gx - gy) / (sampleEdge + 0.008);
+      let sampleTexture = smoothstep(0.025, 0.12, sampleEdge);
+      let smoothPatch = 1.0 - sampleTexture;
+      let topMask = select(0.0, 1.0, y < 6);
+      let lowerMask = select(0.0, 1.0, y >= 6);
+      let bottomMask = select(0.0, 1.0, y >= 12);
+      let blueDominance = max(c.b - max(c.r, c.g) * 0.88, 0.0);
+      let greenDominance = max(c.g - max(c.r, c.b) * 0.88, 0.0);
+      let skyBlue = smoothstep(0.015, 0.16, blueDominance);
+      let skyOvercast = (1.0 - smoothstep(0.08, 0.28, colorSpread)) *
+        smoothstep(0.58, 0.86, y0) *
+        smoothPatch;
+      let skySample = topMask *
+        smoothPatch *
+        smoothstep(0.40, 0.78, y0) *
+        max(skyBlue, skyOvercast * 0.62);
+      let vegetationSample = lowerMask *
+        smoothstep(0.025, 0.18, greenDominance) *
+        smoothstep(0.05, 0.24, colorSpread) *
+        (0.60 + sampleTexture * 0.40);
 
       brightness = brightness + y0;
       lumaSquared = lumaSquared + y0 * y0;
@@ -143,51 +180,106 @@ fn classify() {
       cool = cool + max(c.b - c.r, 0.0);
       saturation = saturation + colorSpread;
       edge = edge + sampleEdge;
-      if (y < 5) {
-        topBlue = topBlue + max(c.b - max(c.r, c.g) * 0.92, 0.0);
-      }
-      if (y > 8) {
-        lowerGreen = lowerGreen + max(c.g - max(c.r, c.b) * 0.90, 0.0);
-      }
+      structureAccum = structureAccum + sampleTexture * axisDominance;
+      skyAccum = skyAccum + skySample;
+      vegetationAccum = vegetationAccum + vegetationSample;
+      topSmoothAccum = topSmoothAccum + topMask * smoothPatch * smoothstep(0.42, 0.78, y0);
+      topLuma = topLuma + topMask * y0;
+      bottomLuma = bottomLuma + bottomMask * y0;
+      topBlue = topBlue + topMask * blueDominance;
+      lowerGreen = lowerGreen + lowerMask * greenDominance;
     }
   }
 
-  let inv = 1.0 / 256.0;
+  let inv = 1.0 / 432.0;
+  let topInv = 1.0 / 144.0;
+  let lowerInv = 1.0 / 288.0;
+  let bottomInv = 1.0 / 144.0;
   brightness = brightness * inv;
   let localContrast = sqrt(max(lumaSquared * inv - brightness * brightness, 0.0));
   warm = warm * inv;
   cool = cool * inv;
   saturation = saturation * inv;
   edge = edge * inv;
-  topBlue = topBlue * (1.0 / 80.0);
-  lowerGreen = lowerGreen * (1.0 / 112.0);
+  let topBrightness = topLuma * topInv;
+  let bottomBrightness = bottomLuma * bottomInv;
+  let topBlueCue = topBlue * topInv;
+  let lowerGreenCue = lowerGreen * lowerInv;
 
-  let texture = clamp01(smoothstep(0.025, 0.14, edge) * 0.65 + smoothstep(0.035, 0.18, localContrast) * 0.35);
+  let texture = clamp01(smoothstep(0.025, 0.14, edge) * 0.55 + smoothstep(0.035, 0.18, localContrast) * 0.45);
   let lowTexture = 1.0 - smoothstep(0.015, 0.08, edge + localContrast);
   let lowSaturation = 1.0 - smoothstep(0.03, 0.16, saturation);
   let darkness = 1.0 - smoothstep(0.025, 0.14, brightness);
   let covered = clamp01(darkness * (0.25 + lowTexture * 0.45 + lowSaturation * 0.30));
   let colorBias = clamp(warm - cool, -1.0, 1.0);
-  let outdoorCue = clamp01(
-    smoothstep(0.42, 0.72, brightness) * 0.32 +
-    smoothstep(0.012, 0.08, topBlue) * 0.38 +
-    smoothstep(0.010, 0.07, lowerGreen) * 0.30
+
+  let structureCue = clamp01(structureAccum * inv * 1.65);
+  let topSmoothCue = clamp01(topSmoothAccum * topInv);
+  let vegetationCue = clamp01(vegetationAccum * lowerInv * 1.45 + smoothstep(0.025, 0.12, lowerGreenCue) * 0.18);
+  let rawSkyCue = clamp01(skyAccum * topInv * 1.55 + smoothstep(0.018, 0.12, topBlueCue) * 0.22);
+  let daylightCue = smoothstep(0.42, 0.76, brightness);
+  let horizonCue = clamp01(smoothstep(0.06, 0.32, topBrightness - bottomBrightness) * 0.70 +
+    smoothstep(0.10, 0.42, abs(topBrightness - bottomBrightness)) * 0.30);
+  let indoorLightCue = clamp01(
+    smoothstep(0.025, 0.16, warm) * 0.42 +
+    (1.0 - smoothstep(0.02, 0.12, cool)) * 0.18 +
+    (1.0 - daylightCue) * 0.22
   );
+  let ceilingLikeCue = topSmoothCue *
+    (1.0 - smoothstep(0.012, 0.09, topBlueCue)) *
+    clamp01(0.40 + structureCue * 0.42 + indoorLightCue * 0.18);
+  let skyCue = clamp01(rawSkyCue * (1.0 - ceilingLikeCue * 0.55));
+  let opennessCue = clamp01(topSmoothCue * (0.62 + daylightCue * 0.38) * (1.0 - structureCue * 0.28));
+  let naturalCue = clamp01(vegetationCue * 0.65 + skyCue * 0.35);
+  let manmadeOutdoorCue = clamp01(skyCue * smoothstep(0.14, 0.50, structureCue) * (0.70 + daylightCue * 0.30));
+  let noOutdoorCue = 1.0 - clamp01(max(skyCue, vegetationCue * 0.85));
+  let enclosedCue = noOutdoorCue * clamp01(
+    0.22 +
+    structureCue * 0.34 +
+    indoorLightCue * 0.24 +
+    (1.0 - opennessCue) * 0.20
+  );
+  let ceilingCue = topSmoothCue * noOutdoorCue * clamp01(0.45 + structureCue * 0.35 + indoorLightCue * 0.20);
+  let indoorScore = clamp01(max(enclosedCue, ceilingCue) * (1.0 - covered * 0.85));
+  let outdoorScore = clamp01((
+    skyCue * 0.42 +
+    vegetationCue * 0.25 +
+    manmadeOutdoorCue * 0.18 +
+    daylightCue * opennessCue * 0.10 +
+    horizonCue * skyCue * 0.05
+  ) * (1.0 - covered * 0.85));
+  let balanceCue = 1.0 - smoothstep(0.10, 0.35, abs(indoorScore - outdoorScore));
+  let mixedScore = clamp01((
+    min(indoorScore, outdoorScore) * 0.78 +
+    skyCue * structureCue * 0.30 +
+    balanceCue * max(indoorScore, outdoorScore) * 0.22
+  ) * (1.0 - covered * 0.80));
 
   outScores[0] = covered;
-  outScores[1] = clamp01((1.0 - smoothstep(0.16, 0.36, brightness)) * (1.0 - covered * 0.88) * (0.60 + texture * 0.40));
-  outScores[2] = clamp01(smoothstep(0.48, 0.78, brightness) * (1.0 - covered));
-  outScores[3] = clamp01(smoothstep(0.03, 0.20, colorBias) * smoothstep(0.04, 0.22, saturation) * (1.0 - covered * 0.80));
-  outScores[4] = clamp01(smoothstep(0.03, 0.20, -colorBias) * smoothstep(0.04, 0.22, saturation) * (1.0 - covered * 0.80));
-  outScores[5] = clamp01(texture * (1.0 - covered * 0.75));
-  outScores[6] = clamp01((1.0 - texture) * smoothstep(0.08, 0.35, brightness) * (1.0 - covered));
-  outScores[7] = brightness;
-  outScores[8] = localContrast;
-  outScores[9] = edge;
-  outScores[10] = saturation;
-  outScores[11] = colorBias;
-  outScores[12] = outdoorCue;
-  outScores[13] = texture;
+  outScores[1] = indoorScore;
+  outScores[2] = outdoorScore;
+  outScores[3] = mixedScore;
+  outScores[4] = clamp01((1.0 - smoothstep(0.16, 0.36, brightness)) * (1.0 - covered * 0.88) * (0.60 + texture * 0.40));
+  outScores[5] = clamp01(smoothstep(0.54, 0.82, brightness) * (1.0 - covered) * 0.82);
+  outScores[6] = clamp01(smoothstep(0.03, 0.20, colorBias) * smoothstep(0.04, 0.22, saturation) * (1.0 - covered * 0.80));
+  outScores[7] = clamp01(smoothstep(0.03, 0.20, -colorBias) * smoothstep(0.04, 0.22, saturation) * (1.0 - covered * 0.80));
+  outScores[8] = clamp01(texture * (1.0 - covered * 0.75));
+  outScores[9] = clamp01((1.0 - texture) * smoothstep(0.08, 0.35, brightness) * (1.0 - covered));
+  outScores[10] = brightness;
+  outScores[11] = localContrast;
+  outScores[12] = edge;
+  outScores[13] = saturation;
+  outScores[14] = colorBias;
+  outScores[15] = indoorScore;
+  outScores[16] = outdoorScore;
+  outScores[17] = mixedScore;
+  outScores[18] = skyCue;
+  outScores[19] = vegetationCue;
+  outScores[20] = structureCue;
+  outScores[21] = opennessCue;
+  outScores[22] = naturalCue;
+  outScores[23] = manmadeOutdoorCue;
+  outScores[24] = texture;
 }
 `;
 
@@ -198,52 +290,19 @@ const INFERENCE_INTERVAL_MS = 450;
 const RELAXED_CAMERA_RETRY_MS = 2500;
 const CAMERA_SWITCH_PREVIEW_HOLD_MS = 1800;
 const CAMERA_CAPTURE_SETTLE_MS = 180;
-const SCORE_FLOATS = 14;
 const DEMO_CAPTURE_CONSTRAINTS = { width: 1280, height: 720, frameRate: 30 } as const;
 const RELAXED_CAPTURE_CONSTRAINTS = { frameRate: 30 } as const;
-
-const LABELS = [
-  { color: '#94a3b8', name: 'Lens covered' },
-  { color: '#60a5fa', name: 'Low light' },
-  { color: '#facc15', name: 'Bright scene' },
-  { color: '#fb923c', name: 'Warm scene' },
-  { color: '#22d3ee', name: 'Cool scene' },
-  { color: '#f8fafc', name: 'Detailed scene' },
-  { color: '#c084fc', name: 'Flat color' },
-] as const;
 
 interface FrameDimensions {
   height: number;
   width: number;
 }
 
-interface Prediction {
-  confidence: number;
-  features: {
-    brightness: number;
-    contrast: number;
-    edge: number;
-    saturation: number;
-  };
-  labelIndex: number;
-  scores: number[];
-  signals: {
-    environment: SceneSignal;
-    palette: SceneSignal;
-    texture: SceneSignal;
-  };
-}
-
-interface SceneSignal {
-  confidence: number;
-  label: string;
-}
-
 type CaptureProfile = 'demo' | 'relaxed';
 
-const INITIAL_PREDICTION: Prediction = {
+const INITIAL_PREDICTION: SceneSignalPrediction = {
   confidence: 0,
-  features: { brightness: 0, contrast: 0, edge: 0, saturation: 0 },
+  features: { brightness: 0, contrast: 0, edge: 0, saturation: 0, sky: 0, structure: 0, vegetation: 0 },
   labelIndex: 0,
   scores: LABELS.map(() => 0),
   signals: {
@@ -253,7 +312,7 @@ const INITIAL_PREDICTION: Prediction = {
   },
 };
 
-export default function NeuralLensScreen(): React.JSX.Element {
+export default function SceneSignalsScreen(): React.JSX.Element {
   const ref = useCanvasRef();
   const { device, adapter } = useDevice();
   const {
@@ -274,7 +333,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
   const [fps, setFps] = React.useState('0.0');
   const [frameSize, setFrameSize] = React.useState('pending');
   const [frameDimensions, setFrameDimensions] = React.useState<FrameDimensions | null>(null);
-  const [prediction, setPrediction] = React.useState<Prediction>(INITIAL_PREDICTION);
+  const [prediction, setPrediction] = React.useState<SceneSignalPrediction>(INITIAL_PREDICTION);
   const [error, setError] = React.useState<string | null>(null);
   const [lastGrabError, setLastGrabError] = React.useState<string | null>(null);
   const [inferenceError, setInferenceError] = React.useState<string | null>(null);
@@ -453,7 +512,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
 
     const startRender = (): void => {
       try {
-        const profile = createWebGpuPerfProbe('neural-lens', {
+        const profile = createWebGpuPerfProbe('signals', {
           inferenceIntervalMs: INFERENCE_INTERVAL_MS,
           uploadIntervalMs: FRAME_UPLOAD_INTERVAL_MS,
         });
@@ -568,7 +627,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
             const mapped = readbackBuffer.getMappedRange();
             const values = new Float32Array(mapped.slice(0));
             readbackBuffer.unmap();
-            const next = makePrediction(values);
+            const next = makeSceneSignalPrediction(values);
             predictionRef.current = next;
             setPrediction(next);
             profile.count('inferences');
@@ -642,7 +701,7 @@ export default function NeuralLensScreen(): React.JSX.Element {
                 setSource(frameSource);
                 if (__DEV__) {
                   console.log(
-                    `NEURAL_LENS_SOURCE ${JSON.stringify({
+                    `SCENE_SIGNALS_SOURCE ${JSON.stringify({
                       height: frame.height,
                       source: frameSource,
                       width: frame.width,
@@ -907,12 +966,16 @@ export default function NeuralLensScreen(): React.JSX.Element {
           }
           hud={
             <View style={styles.hud}>
-              <Text style={styles.hudText}>Neural lens · {status}</Text>
+              <Text style={styles.hudText}>Scene signals · {status}</Text>
               <Text style={styles.hudSub}>render: {fps} fps · source: {source} · uploaded: {frameSize}</Text>
               <Text style={styles.hudSub}>
                 features: brightness {prediction.features.brightness.toFixed(2)} · contrast{' '}
                 {prediction.features.contrast.toFixed(2)} · edge {prediction.features.edge.toFixed(2)} · saturation{' '}
                 {prediction.features.saturation.toFixed(2)}
+              </Text>
+              <Text style={styles.hudSub}>
+                scene: sky {prediction.features.sky.toFixed(2)} · vegetation{' '}
+                {prediction.features.vegetation.toFixed(2)} · structure {prediction.features.structure.toFixed(2)}
               </Text>
               {cameraError ? <Text style={styles.hudError}>camera error: {cameraError}</Text> : null}
               {lastGrabError && source !== 'camera' ? (
@@ -926,64 +989,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
       </ScrollView>
     </>
   );
-}
-
-function makePrediction(values: Float32Array): Prediction {
-  const scores = Array.from(values.slice(0, LABELS.length), finite01);
-  let labelIndex = 0;
-  for (let i = 1; i < scores.length; i += 1) {
-    if (scores[i] > scores[labelIndex]) labelIndex = i;
-  }
-  const covered = scores[0] ?? 0;
-  const brightness = finite01(values[7]);
-  const contrast = finite01(values[8]);
-  const edge = finite01(values[9]);
-  const saturation = finite01(values[10]);
-  const colorBias = finiteSigned(values[11]);
-  const outdoorCue = finite01(values[12]);
-  const texture = finite01(values[13]);
-
-  return {
-    confidence: scores[labelIndex] ?? 0,
-    features: { brightness, contrast, edge, saturation },
-    labelIndex,
-    scores,
-    signals: {
-      environment: makeEnvironmentSignal(outdoorCue, covered),
-      palette: makePaletteSignal(colorBias, saturation),
-      texture: makeTextureSignal(texture),
-    },
-  };
-}
-
-function finite01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
-function finiteSigned(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-1, Math.min(1, value));
-}
-
-function makeEnvironmentSignal(outdoorCue: number, covered: number): SceneSignal {
-  if (covered > 0.72) return { confidence: covered, label: 'blocked' };
-  if (outdoorCue >= 0.58) return { confidence: outdoorCue, label: 'outdoor-ish' };
-  if (outdoorCue <= 0.36) return { confidence: Math.min(0.92, 1 - outdoorCue), label: 'indoor-ish' };
-  return { confidence: 1 - Math.abs(outdoorCue - 0.5), label: 'mixed light' };
-}
-
-function makePaletteSignal(colorBias: number, saturation: number): SceneSignal {
-  const strength = Math.min(1, Math.abs(colorBias) * 4 + saturation * 0.8);
-  if (colorBias > 0.08) return { confidence: Math.max(0.36, strength), label: 'warm' };
-  if (colorBias < -0.08) return { confidence: Math.max(0.36, strength), label: 'cool' };
-  return { confidence: Math.max(0.35, 1 - Math.abs(colorBias) * 6), label: 'neutral' };
-}
-
-function makeTextureSignal(texture: number): SceneSignal {
-  if (texture >= 0.62) return { confidence: texture, label: 'high detail' };
-  if (texture >= 0.34) return { confidence: Math.min(0.78, texture + 0.18), label: 'some detail' };
-  return { confidence: Math.min(0.9, 1 - texture), label: 'flat' };
 }
 
 function fillTestPattern(buf: Uint8Array, size: number, t: number): void {

@@ -16,7 +16,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: config.name ?? 'Standard Camera Demo',
     slug: config.slug ?? 'standard-camera-demo',
-    plugins: [...(config.plugins ?? []), './plugins/with-bump-ios-build-number'],
+    plugins: [
+      ...(config.plugins ?? []),
+      './plugins/with-bundled-tfjs-model',
+      './plugins/with-bump-ios-build-number',
+    ],
     extra: {
       ...config.extra,
       jsBuildTime: Date.now(),

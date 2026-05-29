@@ -45,7 +45,7 @@ The catalog route is intentionally part of the demo app rather than README-only 
 ## Universal demo routes
 
 The main demo routes are shared across platforms. There should not be
-`.web.tsx` variants for `cube`, `shader-lens`, `neural-lens`, or
+`.web.tsx` variants for `cube`, `shader-lens`, `signals`, `neural`, or
 `lidar-depth-webxr`; a developer reading a demo route should see the
 browser-shaped application code that the repo is trying to prove out.
 
@@ -219,7 +219,7 @@ MediaStreamTrack (W3C) ──[ LLP 0011 bridge ]──→ frame.handle: CVPixelB
 
 **Architecture.** Same camera upload path as Demo 2. After upload, a compute pass samples a 24×18 grid from the `GPUTexture`, computes simple image features, and writes calibrated heuristic evidence scores into a storage buffer. A `MAP_READ` buffer copies back only a small fixed float vector: per-label scores plus feature readouts and secondary scene probes.
 
-**Status:** First version implemented as `neural-lens`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. The classifier distinguishes covered-lens/no-visible-scene, indoor, outdoor, mixed/window, exposure, color temperature, and texture/detail states. The indoor/outdoor path is still deliberately not a PlacesCNN-class semantic model: it is a layout-aware WGSL scorer over a 24×18 camera grid, combining top-of-frame sky evidence, lower-frame vegetation, horizon/openness, rectilinear structure, warm indoor lighting, and low-texture ceiling/window cues. It is more robust than average-color thresholds, but scenes without those visible cues still need a real trained scene classifier. It is deliberately not a VLM and does not claim semantic understanding, people detection, or emotion recognition; it is a tiny no-WASM inference proof point.
+**Status:** First version implemented as `signals`. It prefers a 1280×720 @ 30 fps preview profile, then retries once with a relaxed camera request if real frames do not arrive. Camera texture uploads target 30 fps; the compute classifier runs at a lower cadence so GPU readback does not block visual rendering. The classifier distinguishes covered-lens/no-visible-scene, indoor, outdoor, mixed/window, exposure, color temperature, and texture/detail states. The indoor/outdoor path is still deliberately not a PlacesCNN-class semantic model: it is a layout-aware WGSL scorer over a 24×18 camera grid, combining top-of-frame sky evidence, lower-frame vegetation, horizon/openness, rectilinear structure, warm indoor lighting, and low-texture ceiling/window cues. It is more robust than average-color thresholds, but scenes without those visible cues still need a real trained scene classifier. It is deliberately not a VLM and does not claim semantic understanding, people detection, or emotion recognition; it is a tiny no-WASM inference proof point.
 
 **Next ML direction:** Do not add another "human cue" heuristic. A people/face signal needs a real detector before it is user-facing. There are now two viable no-WASM branches to validate: a hand-ported WebGPU/WGSL detector for full control over camera texture flow, and a TensorFlow.js WebGPU branch for model-runtime leverage when the model accepts tensors directly. Browser ML runtimes that depend on a WebAssembly layer remain out of scope under Hermes V1.
 
@@ -298,7 +298,7 @@ same Transformers.js WebGPU model path
 2. The standard camera starts by default and the route shows the same Start/Stop affordance and stopped-camera placeholder as the other standard-camera demos.
 3. The route loads TFJS, initializes the WebGPU backend, loads the bundled COCO-SSD graph once, captures a low-cadence `ImageCapture.grabFrame()` tensor, and overlays object boxes and confidence bars.
 4. Switching to a static probe immediately shows the probe image, then animates in detections when the detector finishes. Switching probes reuses the loaded model and cached decoded probe tensors.
-5. For simulator smoke tests without a camera, `tfjs-scene-lens?source=workspace` opens directly on a deterministic probe while the normal route still defaults to camera.
+5. For simulator smoke tests without a camera, `neural?source=workspace` opens directly on a deterministic probe while the normal route still defaults to camera.
 
 **Architecture.**
 
@@ -318,7 +318,7 @@ COCO object boxes + scores
 animated boxes/confidence bars + object-derived scene summary
 ```
 
-**Status:** Prototype implemented as `tfjs-scene-lens` for route compatibility, but the UI labels it "TensorFlow object lens." The route defaults to camera, supports front/back constraints, retains static probes for deterministic testing, and exposes `globalThis.__TFJS_SCENE_SMOKE__` / `TFJS_SCENE_SMOKE ...` for existing smoke checks. The model JSON and five weight shards are vendored under `assets/models/coco-ssd-lite-mobilenet-v2`; Metro treats `.bin` files as assets, the `expo-asset` config plugin links the model directory into native builds, and the loader reads the shards through `expo-asset` / `expo-file-system` into `tf.io.fromMemory`. The model/runtime promises are module-level caches, probe tensors are cached per probe, route query `source=<probe>` supports no-camera simulator smoke tests, and inference runs about once per second so the live `<Video srcObject>` preview remains responsive.
+**Status:** Prototype implemented as `neural`, and the UI labels it "Neural lens" because this route runs an actual TensorFlow.js model. The route defaults to camera, supports front/back constraints, retains static probes for deterministic testing, and exposes `globalThis.__TFJS_SCENE_SMOKE__` / `TFJS_SCENE_SMOKE ...` for existing smoke checks. The model JSON and five weight shards are vendored under `assets/models/coco-ssd-lite-mobilenet-v2`; Metro treats `.bin` files as assets for JS/export, and iOS has a small build phase that copies the same directory into app resources under `TfjsModels/coco-ssd-lite-mobilenet-v2`. The loader checks `Paths.bundle` first on native, falls back to Metro/`expo-asset`, and feeds the concatenated shards into `tf.io.fromMemory`. The model/runtime promises are module-level caches, the route schedules one lazy preload after first paint/idle on focus, surfaces runtime/weights/graph/warmup phases through the HUD and loading overlay, and yields between large startup chunks so React can repaint while TFJS starts. Probe tensors are cached per probe, route query `source=<probe>` is an initial no-camera simulator smoke-test value rather than a controlled source, and inference runs about once per second so the live `<Video srcObject>` preview remains responsive. Front/back camera switches abort pending pre-inference work, clear stale boxes, and hold classification briefly while the replacement `ImageCapture` settles; this keeps camera reconfiguration from racing an unnecessary TFJS graph execution.
 
 **Complexity:** Medium. The app now depends on TFJS, TFJS Converter, `expo-asset`, `jpeg-js`, and COCO-SSD's class metadata. COCO-SSD still performs post-processing / NMS on CPU, so this is not an all-GPU detector. The demo mitigates that by downsampling before tensor creation, using async tensor reads, spacing camera inference to roughly 1 Hz, and keeping camera preview on the native video view rather than redrawing it through JS.
 
@@ -361,7 +361,7 @@ resources; returning to the route creates a fresh pipeline.
 Current upload targets:
 
 - `shader-lens`: upload at 30 fps, render every animation frame.
-- `neural-lens`: upload at 30 fps, render every animation frame, run inference
+- `signals`: upload at 30 fps, render every animation frame, run inference
   readback at a lower cadence.
 - `cube`: upload at 30 fps, render every animation frame with the latest
   uploaded texture.

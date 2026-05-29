@@ -58,7 +58,8 @@ const TABS: TabItem[] = [
 const LEAF_TITLES: Record<string, string> = {
   cube: 'Cube',
   'shader-lens': 'Shader Lens',
-  'neural-lens': 'Neural Lens',
+  'signals': 'Scene Signals',
+  neural: 'Neural Lens',
   'lidar-depth-webxr': 'WebXR LiDAR',
   'panoramic-scene-capture': 'Scene Capture',
   'webgpu-spike': 'WebGPU Spike',

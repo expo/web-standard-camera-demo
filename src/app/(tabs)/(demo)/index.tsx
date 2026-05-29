@@ -34,7 +34,16 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         accentColor="#4ade80"
         description="A tiny no-WASM classifier that runs WGSL compute over the live camera texture."
         detail="getUserMedia -> GPUTexture -> WGSL compute -> class scores"
-        href="/neural-lens"
+        href="/signals"
+        title="Scene signals"
+      />
+
+      <DemoChoiceCard
+        accentColor="#38bdf8"
+        description="A TensorFlow.js COCO-SSD detector that finds objects from camera frames on the WebGPU backend."
+        detail="Camera tensor -> TFJS WebGPU -> bundled COCO-SSD -> object boxes"
+        href="/neural"
+        status="prototype"
         title="Neural lens"
       />
 

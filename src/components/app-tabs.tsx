@@ -10,7 +10,8 @@ import { Colors } from '@/constants/theme';
 const DARK_PATHNAMES = new Set([
   '/cube',
   '/shader-lens',
-  '/neural-lens',
+  '/signals',
+  '/neural',
   '/lidar-depth-webxr',
   '/panoramic-scene-capture',
 ]);
