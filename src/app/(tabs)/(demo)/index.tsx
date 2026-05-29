@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { DemoChoiceCard } from '@/components/demo-choice-card';
 import { useTheme } from '@/hooks/use-theme';
@@ -38,22 +38,26 @@ export default function DemoCatalogScreen(): React.JSX.Element {
         title="Neural lens"
       />
 
-      <DemoChoiceCard
-        accentColor="#a78bfa"
-        description="ARKit camera frames and LiDAR scene depth flow through a tiny navigator.xr profile, then WebGPU visualizes focus planes and foreground masks."
-        detail="navigator.xr -> XRFrame depth/camera bytes -> GPUTextures -> WGSL"
-        href="/lidar-depth-webxr"
-        title="WebXR LiDAR depth"
-      />
+      {Platform.OS !== 'web' && (
+        <>
+          <DemoChoiceCard
+            accentColor="#a78bfa"
+            description="ARKit camera frames and LiDAR scene depth flow through a tiny navigator.xr profile, then WebGPU visualizes focus planes and foreground masks."
+            detail="navigator.xr -> XRFrame depth/camera bytes -> GPUTextures -> WGSL"
+            href="/lidar-depth-webxr"
+            title="WebXR LiDAR depth"
+          />
 
-      <DemoChoiceCard
-        accentColor="#22d3ee"
-        description="Scan a scene with WebXR depth, capture sparse keyframes, then inspect a frozen WebGPU surfel model."
-        detail="navigator.xr depth-sensing -> XRCPUDepthInformation -> WebGPU surfels"
-        href="/panoramic-scene-capture"
-        status="prototype"
-        title="Panoramic scene capture"
-      />
+          <DemoChoiceCard
+            accentColor="#22d3ee"
+            description="Scan a scene with WebXR depth, capture sparse keyframes, then inspect a frozen WebGPU surfel model."
+            detail="navigator.xr depth-sensing -> XRCPUDepthInformation -> WebGPU surfels"
+            href="/panoramic-scene-capture"
+            status="prototype"
+            title="Panoramic scene capture"
+          />
+        </>
+      )}
 
       <DemoChoiceCard
         accentColor="#60a5fa"
