@@ -251,8 +251,8 @@ export default function RunTestsScreen(): React.JSX.Element {
     // again — keep the existing filter in that case. A genuine "clear the
     // filter" needs an explicit deep link without `only=`.
     if (url == null) return;
-    const m = /[?&]only=([^&]+)/.exec(url);
-    onlyRef.current = m ? decodeURIComponent(m[1]) : undefined;
+    const parsedUrl = new URL(url);
+    onlyRef.current = parsedUrl.searchParams.get('only') ?? undefined;
     console.log(`[wpt:debug] URL filter parsed url=${url} only=${onlyRef.current ?? '<none>'}`);
   }, [url]);
 

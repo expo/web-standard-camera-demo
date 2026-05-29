@@ -4,6 +4,8 @@ import { requireNativeView } from 'expo';
 import * as React from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
 
+import { INTERNAL_TRACK_ENDED_EVENT } from './internalEvents';
+
 // Use the DOM lib types on the public surface so consumer code that's been
 // ported from a browser type-checks 1:1 against `navigator.mediaDevices`.
 type Stream = globalThis.MediaStream;
@@ -546,25 +548,25 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.dispatchEvent(new Event('pause'));
   }
 
-  // @ref LLP 0004#ended — fire when the stream becomes inactive (no live tracks).
-  // The track's `ended` event is already dispatched by the native module as a
-  // task (it crosses the React Native bridge). Inside that task we re-evaluate
-  // the ended condition synchronously so a single `queueTask` round-trip is
-  // enough for an observer to see `vid.ended` flip to true.
+  // @ref LLP 0004#srcobject-ended — fire when the stream becomes inactive
+  // (no live tracks). MediaStreamTrack.stop() does not fire the public
+  // `ended` event, so tracks emit a prefixed internal notification for media
+  // element bookkeeping. The notification is queued as a task for stop(), so
+  // a single `queueTask` round-trip is enough for observers to see `ended`.
   private __attachTrackListeners(): void {
     if (!this.__srcObject) return;
     for (const track of this.__srcObject.getTracks()) {
       const listener = () => {
         this.__maybeEnded();
       };
-      track.addEventListener('ended', listener);
+      track.addEventListener(INTERNAL_TRACK_ENDED_EVENT, listener);
       this.__trackEndedSubscriptions.push({ track, listener });
     }
   }
 
   private __detachTrackListeners(): void {
     for (const { track, listener } of this.__trackEndedSubscriptions) {
-      track.removeEventListener('ended', listener);
+      track.removeEventListener(INTERNAL_TRACK_ENDED_EVENT, listener);
     }
     this.__trackEndedSubscriptions = [];
   }

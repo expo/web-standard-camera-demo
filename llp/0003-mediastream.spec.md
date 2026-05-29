@@ -145,14 +145,15 @@ Once `"ended"`, `setMuted` calls are no-ops; `label` is unchanged.
 Implements [LLP 0008#dom-mediastreamtrack-stop](./0008-w3c-spec-text.spec.md#method-stop-dom-mediastreamtrack-stop). Our algorithm:
 
 1. If `readyState == "ended"` → return (idempotent per spec).
-2. Set `readyState = "ended"` synchronously.
-3. Disable the data-output `AVCaptureConnection` so frames stop flowing downstream.
-4. Ask the owning `MediaStream` whether any live tracks remain; if not, stop the `AVCaptureSession`. This is the AVFoundation realization of "notify track's source that track is ended" — for single-track video streams it means releasing the camera and turning off the indicator light.
-5. Fire `ended` via `SharedObject.emit`, which schedules it asynchronously on the JS runtime's thread — matching the spec's "fire as a separate task" requirement.
+2. Notify the `CaptureSource` that this track ended. The source owns the live-track refcount and stops the `AVCaptureSession` when no live tracks remain; for single-track video streams this releases the camera and turns off the indicator light.
+3. Set `readyState = "ended"` synchronously before the bridge call returns.
+4. Do **not** fire the public `ended` event. The spec reserves `ended` for source endings other than explicit `stop()`.
+
+The JS wrapper queues an internal, prefixed `__standardcamera_trackended` event after `stop()` so `<Video>` / the test audio element can re-evaluate whether their assigned `MediaStream` became inactive. This is intentionally not the public `MediaStreamTrack` `ended` event.
 
 ### `track-events`
 
-`ended` / `mute` / `unmute` — see [LLP 0008#dom-mediastreamtrack-mute-algorithm](./0008-w3c-spec-text.spec.md#event-setting-muted-state-dom-mediastreamtrack-mute-algorithm) and `#event-mediastreamtrack-ended`. Native side uses `SharedObject.emit`, which runs the dispatch on the JS runtime — the JS-side `MediaStreamTrack` class subscribes once in its constructor and re-dispatches as DOM `Event` objects.
+`ended` / `mute` / `unmute` — see [LLP 0008#dom-mediastreamtrack-mute-algorithm](./0008-w3c-spec-text.spec.md#event-setting-muted-state-dom-mediastreamtrack-mute-algorithm) and `#event-mediastreamtrack-ended`. Native side uses `SharedObject.emit`, which runs the dispatch on the JS runtime — the JS-side `MediaStreamTrack` class subscribes once in its constructor and re-dispatches as DOM `Event` objects. The public `ended` event is emitted only for non-`stop()` source endings such as `AVCaptureSessionRuntimeErrorNotification`.
 
 ### `track-getSettings`
 

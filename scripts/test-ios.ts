@@ -6,6 +6,7 @@
 //   bun run test:ios                    # iOS 26 simulator (default)
 //   bun run test:ios --device           # first connected iPhone via devicectl
 //   bun run test:ios --device <name|udid>
+//   bun run test:ios --device --only "MediaStream constructor"
 //
 // `--device` requires the app to be pre-installed (e.g. via
 // `bunx expo run:ios --device <udid>` once). The script does not build.
@@ -56,25 +57,43 @@ main()
 async function main(): Promise<number> {
   const target = parseTarget(process.argv.slice(2));
   if (target.kind === 'device') {
-    return runOnDevice(target.identifier);
+    return runOnDevice(target.identifier, target.only);
   }
-  return runOnSimulator();
+  return runOnSimulator(target.only);
 }
 
 type RunTarget =
-  | { kind: 'simulator' }
-  | { kind: 'device'; identifier?: string };
+  | { kind: 'simulator'; only?: string }
+  | { kind: 'device'; identifier?: string; only?: string };
 
 function parseTarget(args: string[]): RunTarget {
+  const only = parseOnly(args);
   const idx = args.indexOf('--device');
-  if (idx < 0) return { kind: 'simulator' };
+  if (idx < 0) return { kind: 'simulator', only };
   const next = args[idx + 1];
   // `--device <id>` if the next arg isn't another flag, else "any connected".
   const identifier = next && !next.startsWith('--') ? next : undefined;
-  return { kind: 'device', identifier };
+  return { kind: 'device', identifier, only };
 }
 
-async function runOnSimulator(): Promise<number> {
+function parseOnly(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--only') {
+      const values: string[] = [];
+      for (let j = i + 1; j < args.length && !args[j].startsWith('--'); j++) {
+        values.push(args[j]);
+      }
+      return values.length > 0 ? values.join(' ') : undefined;
+    }
+    if (arg.startsWith('--only=')) {
+      return arg.slice('--only='.length) || undefined;
+    }
+  }
+  return undefined;
+}
+
+async function runOnSimulator(only?: string): Promise<number> {
   const runtimeId = await pickIOS26Runtime();
   console.log(`Using runtime: ${runtimeId}`);
 
@@ -125,7 +144,7 @@ async function runOnSimulator(): Promise<number> {
     await sleep(2500);
     const stopTestUrlRetry = startOpenUrlRetry(
       udid,
-      `${URL_SCHEME}:///run-tests?autorun=1`,
+      buildTestRunnerUrl(only),
       'test URL'
     );
     console.log('Opened test URL; retrying until WPT output appears…');
@@ -157,7 +176,7 @@ async function runOnSimulator(): Promise<number> {
 
 // MARK: - Device runner (devicectl)
 
-async function runOnDevice(requested: string | undefined): Promise<number> {
+async function runOnDevice(requested: string | undefined, only?: string): Promise<number> {
   const device = await pickConnectedDevice(requested);
   console.log(`Using device: ${device.name} (${device.identifier})`);
 
@@ -171,7 +190,7 @@ async function runOnDevice(requested: string | undefined): Promise<number> {
   // @ref LLP 0007#cli-flow — Hand the deep link via `--payload-url` so the
   // app's `useLinkingURL()` sees `?autorun=1` at cold-start and the runner
   // auto-fires.
-  const payloadUrl = `${URL_SCHEME}:///run-tests?autorun=1`;
+  const payloadUrl = buildTestRunnerUrl(only);
   if (VERBOSE) console.log('$', 'xcrun', 'devicectl', 'device', 'process', 'launch', '--device', device.identifier, '--terminate-existing', '--console', '--payload-url', payloadUrl, APP_BUNDLE_ID);
   const proc = spawn({
     cmd: [
@@ -392,6 +411,13 @@ function buildDevelopmentClientUrl(metroUrl: string): string {
   return `${URL_SCHEME}://expo-development-client/?${new URLSearchParams({
     disableOnboarding: '1',
     url: metroUrl,
+  }).toString()}`;
+}
+
+function buildTestRunnerUrl(only?: string): string {
+  return `${URL_SCHEME}:///run-tests?${new URLSearchParams({
+    autorun: '1',
+    ...(only ? { only } : {}),
   }).toString()}`;
 }
 

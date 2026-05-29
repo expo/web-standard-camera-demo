@@ -7,6 +7,7 @@
 // both between tests.
 
 import { __installTestDeniedCheck, __resetCaptureGrantsForTesting } from '../MediaDevices';
+import { INTERNAL_TRACK_ENDED_EVENT } from '../internalEvents';
 import { __getDeniedKindsForTesting, __resetDeniedPermissionsForTesting } from './testharness';
 
 // Wire `setMediaPermission('denied', …)` (testharness helper) into the gUM
@@ -86,14 +87,13 @@ class StubAudioElement extends EventTarget {
   set ended(_v: boolean) {}
 
   #attachStreamListeners(stream: MediaStream): void {
-    // For track 'ended', call #maybeEnded synchronously: the track's 'ended'
-    // event itself already arrives one task after `stop()` (it crosses the
-    // native bridge), which is enough to satisfy the spec's "asynchronously"
-    // requirement. An additional `setTimeout` would push the element's
-    // `ended` flip into a SECOND task, missing the WPT assertion at the
-    // first queueTask boundary. For tracksetchange (script-initiated
-    // removeTrack), we DO need a setTimeout so `aud.ended` stays false until
-    // the next task, matching the Video element's pattern.
+    // For track state changes, call #maybeEnded synchronously inside the
+    // prefixed internal event task. That internal event is queued after
+    // stop(), which satisfies the spec's "asynchronously" requirement for
+    // the media element without firing the public MediaStreamTrack "ended"
+    // event. For tracksetchange (script-initiated removeTrack), we DO need
+    // a setTimeout so `aud.ended` stays false until the next task, matching
+    // the Video element's pattern.
     const onChange = (): void => {
       this.#detachTrackEndedListeners();
       this.#wireAudioEndedListeners(stream);
@@ -109,7 +109,7 @@ class StubAudioElement extends EventTarget {
       const fn = (): void => {
         this.#maybeEnded();
       };
-      t.addEventListener('ended', fn);
+      t.addEventListener(INTERNAL_TRACK_ENDED_EVENT, fn);
       this.#trackEndedListeners.push({ track: t, fn });
     }
   }
@@ -124,7 +124,7 @@ class StubAudioElement extends EventTarget {
 
   #detachTrackEndedListeners(): void {
     for (const { track, fn } of this.#trackEndedListeners) {
-      track.removeEventListener('ended', fn);
+      track.removeEventListener(INTERNAL_TRACK_ENDED_EVENT, fn);
     }
     this.#trackEndedListeners = [];
   }

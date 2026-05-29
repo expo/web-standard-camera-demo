@@ -100,13 +100,13 @@ Section: [§ MediaStreamTrack](https://www.w3.org/TR/mediacapture-streams/#media
 | `mediastreamtrack-enabled` | `enabled` (get/set) | **Implemented** | Set toggles whether frames / audio samples are forwarded (we flip the connection's `isEnabled`). |
 | `mediastreamtrack-muted` | `muted` | **Implemented** | Mirrors AVCaptureSession interruption state (overheating, backgrounding, in-use-by-another-app, audio-session interruption). |
 | `mediastreamtrack-readystate` | `readyState` | **Implemented** | `"live"` until `stop()`. |
-| `mediastreamtrack-stop` | `stop()` | **Implemented** | Transitions to `"ended"`, fires `ended`. |
+| `mediastreamtrack-stop` | `stop()` | **Implemented** | Transitions to `"ended"` synchronously; per spec it does **not** fire the public `ended` event. |
 | `mediastreamtrack-clone` | `clone()` | **Implemented** | New `id`, new JS object; shares the underlying capture source. Stopping the original does not stop the clone (per spec). See [LLP 0003#track-clone](./0003-mediastream.spec.md#track-clone). |
 | `mediastreamtrack-getcapabilities` | `getCapabilities()` | **Implemented** | Returns video capabilities (`width`/`height`/`aspectRatio`/`frameRate`/`facingMode`/`resizeMode`/`deviceId`/`groupId`) for video tracks; audio capabilities (`sampleRate`/`sampleSize`/`echoCancellation`/`autoGainControl`/`noiseSuppression`/`voiceIsolation`/`latency`/`channelCount`/`deviceId`/`groupId`) for audio tracks. |
 | `mediastreamtrack-getconstraints` | `getConstraints()` | **Implemented** | Returns the constraints passed to `getUserMedia`. |
 | `mediastreamtrack-getsettings` | `getSettings()` | **Implemented** | Video: `{ deviceId, groupId, facingMode, width, height, frameRate, aspectRatio, resizeMode }`. Audio: `{ deviceId, groupId, sampleRate, sampleSize, echoCancellation, autoGainControl, noiseSuppression, voiceIsolation, latency, channelCount }`. |
 | `mediastreamtrack-applyconstraints` | `applyConstraints(constraints?)` | **Implemented (partial)** | Empty constraints `{}` resolves as a no-op; non-empty constraints reject with `OverconstrainedError` (we do not actually re-apply). Per spec, when `readyState == "ended"`, the promise resolves regardless of constraints. |
-| `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **Implemented** | `mute`/`unmute` fire on AVCaptureSession / AVAudioSession interruption notifications. `ended` fires on `stop()` or a session runtime error. |
+| `mediastreamtrack-events` | `mute` / `unmute` / `ended` events | **Implemented** | `mute`/`unmute` fire on AVCaptureSession / AVAudioSession interruption notifications. `ended` fires on non-`stop()` source endings such as a session runtime error. |
 
 ## `HTMLMediaElement.srcObject` integration
 

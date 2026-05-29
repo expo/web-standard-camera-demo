@@ -4,6 +4,7 @@
 import type { EventSubscription } from 'expo-modules-core';
 
 import { DOMException } from './DOMException';
+import { INTERNAL_TRACK_ENDED_EVENT } from './internalEvents';
 import type { NativeMediaStreamTrack } from './native';
 import type { MediaTrackCapabilities, MediaTrackSettings, MediaStreamTrackKind, MediaStreamTrackState } from './types';
 
@@ -24,7 +25,10 @@ export class MediaStreamTrack extends EventTarget {
 
     // @ref LLP 0003#track-events — Forward native events to DOM-style events.
     this.#nativeSubscriptions.push(
-      native.addListener('ended', () => this.dispatchEvent(new Event('ended'))),
+      native.addListener('ended', () => {
+        this.dispatchEvent(new Event('ended'));
+        this.#dispatchInternalTrackEnded();
+      }),
       native.addListener('mute', () => this.dispatchEvent(new Event('mute'))),
       native.addListener('unmute', () => this.dispatchEvent(new Event('unmute'))),
     );
@@ -58,7 +62,13 @@ export class MediaStreamTrack extends EventTarget {
 
   // @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
   // @ref LLP 0003#track-stop
-  stop(): void { this._native.stop(); }
+  stop(): void {
+    const wasLive = this.readyState !== 'ended';
+    this._native.stop();
+    if (wasLive) {
+      setTimeout(() => this.#dispatchInternalTrackEnded(), 0);
+    }
+  }
 
   // @ref LLP 0008#dom-mediastreamtrack-getsettings — spec algorithm
   // @ref LLP 0003#track-getSettings
@@ -170,6 +180,13 @@ export class MediaStreamTrack extends EventTarget {
     if (this.#onunmute) this.removeEventListener('unmute', this.#onunmute);
     this.#onunmute = handler;
     if (handler) this.addEventListener('unmute', handler);
+  }
+
+  // @ref LLP 0004#srcobject-ended — HTMLMediaElement must notice that a
+  // MediaStream became inactive after stop(), but MediaStreamTrack.stop()
+  // must not fire the public "ended" event. Use a prefixed internal event.
+  #dispatchInternalTrackEnded(): void {
+    this.dispatchEvent(new Event(INTERNAL_TRACK_ENDED_EVENT));
   }
 }
 

@@ -143,7 +143,7 @@ internal final class CaptureSource {
   }
 
   // Called from MediaStreamTrack.stop() and .endByRuntimeError().
-  // @ref LLP 0003#track-stop — step 4: notify the source; if no live tracks
+  // @ref LLP 0003#track-stop — notify the source; if no live tracks
   // remain, stop the underlying AVCaptureSession.
   func unregisterTrack(_ track: MediaStreamTrack) {
     lock.lock()

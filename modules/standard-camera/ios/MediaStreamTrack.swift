@@ -79,17 +79,18 @@ internal final class MediaStreamTrack: SharedObject {
   }
 
   // @ref LLP 0008#dom-mediastreamtrack-stop — spec algorithm
-  // @ref LLP 0003#track-stop — Synchronous readyState change; async "ended" event.
+  // @ref LLP 0003#track-stop — Synchronous readyState change; no public
+  // "ended" event for explicit stop().
   // Per spec step 3, "notify track's source that track is ended"; CaptureSource
   // owns the refcount and stops the AVCaptureSession when this is the last live
-  // track. Per step 4 / spec ordering, we set readyState before firing `ended`.
+  // track. Per step 4 / spec ordering, we set readyState after notifying the
+  // source; both are synchronous within this bridge call.
   func stop() {
     if readyState == "ended" {
       return
     }
-    readyState = "ended"
     source?.unregisterTrack(self)
-    emit(event: "ended")
+    readyState = "ended"
   }
 
   // @ref LLP 0008#dom-mediastreamtrack-clone — spec algorithm

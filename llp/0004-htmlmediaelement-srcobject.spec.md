@@ -106,7 +106,7 @@ interface VideoRef {
 
 ### `srcObject-ended`
 
-- `ended` becomes `true` asynchronously after every track in `srcObject` has `readyState === "ended"`. The transition fires an `ended` event.
+- `ended` becomes `true` asynchronously after every track in `srcObject` has `readyState === "ended"`. The transition fires an `ended` event. Because `MediaStreamTrack.stop()` does not fire the public track `ended` event, the JS track wrapper queues a prefixed internal `__standardcamera_trackended` event for media-element bookkeeping.
 
 ### `srcObject-play-pause`
 
@@ -167,5 +167,5 @@ These omissions are because the underlying view is an `AVCaptureVideoPreviewLaye
 
 ## Open questions
 
-1. Should `ended` event also fire on the underlying `MediaStreamTrack` objects we observe? Yes — the spec says the track fires `ended`, and the video element listens. We wire this via the native track's `ended` event being forwarded into JS, where the `MediaStream` aggregates them and the `<Video>` listens.
+1. Should `ended` event also fire on the underlying `MediaStreamTrack` objects we observe? Only for non-`stop()` source endings. The spec says `stop()` sets `readyState` to `"ended"` without firing `ended`; `<Video>` listens to the internal `__standardcamera_trackended` event for both stop-driven and source-driven state changes.
 2. Should we expose `error: MediaError | null`? Out of scope until a use case appears.
