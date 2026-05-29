@@ -4067,29 +4067,6 @@ function signedYawDelta(fromYaw: number, toYaw: number): number {
   return delta === -Math.PI ? Math.PI : delta;
 }
 
-function perspective(fovy: number, aspect: number, near: number, far: number): Float32Array {
-  const f = 1 / Math.tan(fovy / 2);
-  const nf = 1 / (near - far);
-  return new Float32Array([
-    f / aspect, 0, 0, 0,
-    0, f, 0, 0,
-    0, 0, (far + near) * nf, -1,
-    0, 0, 2 * far * near * nf, 0,
-  ]);
-}
-
-function lookAt(eye: Vec3, center: Vec3, up: Vec3): Float32Array {
-  const z = normalize([eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]]);
-  const x = normalize(cross(up, z));
-  const y = cross(z, x);
-  return new Float32Array([
-    x[0], y[0], z[0], 0,
-    x[1], y[1], z[1], 0,
-    x[2], y[2], z[2], 0,
-    -dot(x, eye), -dot(y, eye), -dot(z, eye), 1,
-  ]);
-}
-
 export function mat4Multiply(a: Float32Array, b: Float32Array): Float32Array {
   const out = new Float32Array(16);
   for (let col = 0; col < 4; col += 1) {
@@ -4165,18 +4142,6 @@ export function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-function subtract(a: Vec3, b: Vec3): Vec3 {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-
-function addVec3(a: Vec3, b: Vec3): Vec3 {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-}
-
-function scaleVec3(v: Vec3, scale: number): Vec3 {
-  return [v[0] * scale, v[1] * scale, v[2] * scale];
-}
-
 function observationFacingNormalInto(
   out: Vec3,
   cameraToWorld: CameraToWorldTransformCache,
@@ -4198,14 +4163,6 @@ export function angleDegrees(a: Vec3, b: Vec3): number {
 
 function dot(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-function cross(a: Vec3, b: Vec3): Vec3 {
-  return [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
 }
 
 function normalize(v: Vec3): Vec3 {

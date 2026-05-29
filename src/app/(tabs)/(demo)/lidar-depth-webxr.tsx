@@ -40,6 +40,10 @@ const VIEW_MODES = [
   { label: 'Camera', value: 0 },
 ] as const;
 type ViewModeValue = (typeof VIEW_MODES)[number]['value'];
+type ViewModeSelection = {
+  routeValue: ViewModeValue | null;
+  value: ViewModeValue;
+};
 
 function firstRouteParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -392,7 +396,20 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   const [maskInfo, setMaskInfo] = React.useState('mask pending');
   const [targetDepth, setTargetDepth] = React.useState(DEFAULT_OCCLUSION_DEPTH_M);
   const [lastCenterDepthMeters, setLastCenterDepthMeters] = React.useState<number | null>(null);
-  const [viewMode, setViewMode] = React.useState<ViewModeValue>(routeViewMode ?? DEFAULT_VIEW_MODE);
+  const [viewModeSelection, setViewModeSelection] = React.useState<ViewModeSelection>(() => ({
+    routeValue: routeViewMode,
+    value: routeViewMode ?? DEFAULT_VIEW_MODE,
+  }));
+  const viewMode =
+    routeViewMode !== null && routeViewMode !== viewModeSelection.routeValue
+      ? routeViewMode
+      : viewModeSelection.value;
+  const setViewMode = React.useCallback(
+    (value: ViewModeValue) => {
+      setViewModeSelection({ routeValue: routeViewMode, value });
+    },
+    [routeViewMode]
+  );
   const lastCenterDepthRef = React.useRef<number | null>(null);
   const reticlePressProgress = React.useMemo(() => new Animated.Value(0), []);
   const targetDepthRef = React.useRef(targetDepth);
@@ -447,11 +464,6 @@ export default function WebXRLiDARDepthScreen(): React.JSX.Element {
   React.useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
-
-  React.useEffect(() => {
-    if (routeViewMode === null) return;
-    setViewMode(routeViewMode);
-  }, [routeViewMode]);
 
   React.useEffect(() => {
     return () => {

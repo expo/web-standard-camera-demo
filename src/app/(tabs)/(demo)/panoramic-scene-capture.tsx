@@ -792,10 +792,15 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }
   }
 
+  const startSessionRef = React.useRef(startSession);
+  React.useEffect(() => {
+    startSessionRef.current = startSession;
+  });
+
   React.useEffect(() => {
     if (autorun !== '1' || didAutorunRef.current || status !== 'idle') return;
     didAutorunRef.current = true;
-    void startSession();
+    void startSessionRef.current();
   }, [autorun, status]);
 
   async function stopSession(): Promise<void> {

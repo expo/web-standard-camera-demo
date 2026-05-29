@@ -372,7 +372,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
   // shader-lens for the rationale. We still mark the capture profile as
   // 'demo' for the HUD; the relaxed-fallback effect handles the case where
   // Home's chosen mode can't deliver frames the classifier expects.
-  /* eslint-disable react-hooks/set-state-in-effect -- Preserve the existing auto-start profile/reset timing. */
   useFocusEffect(
     React.useCallback(() => {
       if (didAutoStartCameraRef.current) return undefined;
@@ -389,7 +388,6 @@ export default function NeuralLensScreen(): React.JSX.Element {
       return undefined;
     }, [cameraStatus, externalLocked, resetFrameState, start, stream, userStopped])
   );
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useEffect(() => {
     if (didRetryRelaxedCameraRef.current || source === 'camera' || cameraStatus !== 'error' || stream) {
