@@ -214,6 +214,8 @@ export default function HomeScreen(): React.JSX.Element {
             ]}>
             <Video
               ref={videoRef}
+              autoplay
+              srcObject={stream}
               style={[styles.video, isFront ? styles.mirroredVideo : null]}
             />
           </View>

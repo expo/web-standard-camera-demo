@@ -144,13 +144,16 @@ export const Video = React.forwardRef<HTMLVideoElement, VideoProps>(function Vid
   // Wire the native view's commands onto the element.
   React.useEffect(() => {
     el.__bindNative(nativeRef.current);
-    if (props.autoplay && el.srcObject) {
-      void el.play();
-    }
     return () => {
       el.__bindNative(null);
     };
-  }, [el, props.autoplay]);
+  }, [el]);
+
+  React.useEffect(() => {
+    if (props.autoplay && srcObjectState) {
+      void el.play();
+    }
+  }, [el, props.autoplay, srcObjectState]);
 
   return (
     <NativeView

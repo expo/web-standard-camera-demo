@@ -122,10 +122,28 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       status: initialSource === 'camera' ? 'waiting' : 'loading',
     };
   });
+  const [screenFocused, setScreenFocused] = React.useState(false);
   const cacheModelStatus = cacheInfo.modelStatus;
   const cacheModelPhase = cacheInfo.modelLoadPhase;
   const cacheModelLoadCount = cacheInfo.modelLoadCount;
   const cameraModelWaitLine = formatModelLoadPhase(cacheInfo, true);
+  const activeCameraStream = screenFocused && source === 'camera' ? stream : null;
+
+  useFocusEffect(
+    React.useCallback(() => {
+      setScreenFocused(true);
+      return () => {
+        setScreenFocused(false);
+        cameraInferenceAbortRef.current?.abort();
+        cameraInferenceAbortRef.current = null;
+        imageCaptureRef.current = null;
+        imageCaptureAcceptAfterRef.current = 0;
+        captureSetupErrorRef.current = null;
+        detectSeqRef.current += 1;
+        traceNeuralLens('tfjs-screen-blur-cancelled');
+      };
+    }, [])
+  );
 
   React.useEffect(() => subscribeTfjsObjectCacheInfo((next) => {
     traceNeuralLens('tfjs-cache-info', {
@@ -142,13 +160,19 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    video.srcObject = stream;
-    if (stream) {
+    video.srcObject = activeCameraStream;
+    if (activeCameraStream) {
       void video.play();
     }
-  }, [stream]);
+  }, [activeCameraStream]);
 
   React.useEffect(() => {
+    if (!screenFocused || source !== 'camera') {
+      imageCaptureRef.current = null;
+      imageCaptureAcceptAfterRef.current = 0;
+      captureSetupErrorRef.current = null;
+      return;
+    }
     const track = stream?.getVideoTracks()[0];
     if (!track) {
       imageCaptureRef.current = null;
@@ -178,7 +202,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
         error: captureSetupErrorRef.current,
       });
     }
-  }, [cameraStatus, stream]);
+  }, [cameraStatus, screenFocused, source, stream]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -295,7 +319,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   );
 
   React.useEffect(() => {
-    if (source === 'camera') return undefined;
+    if (!screenFocused || source === 'camera') return undefined;
     let cancelled = false;
     const seq = detectSeqRef.current + 1;
     detectSeqRef.current = seq;
@@ -324,7 +348,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [source]);
+  }, [screenFocused, source]);
 
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
@@ -332,7 +356,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   const rotateForPortrait = Platform.OS !== 'web' && !isDesktop;
 
   React.useEffect(() => {
-    if (source !== 'camera') return undefined;
+    if (!screenFocused || source !== 'camera') return undefined;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const seq = detectSeqRef.current + 1;
@@ -519,6 +543,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
     cameraModelWaitLine,
     cameraStatus,
     rotateForPortrait,
+    screenFocused,
     source,
     stream,
   ]);
@@ -589,7 +614,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       ? 'classifying'
       : 'loading model'
     : detection.status;
-  const showCameraPlaceholder = source === 'camera' && (!stream || cameraStatus !== 'playing');
+  const showCameraPlaceholder = source === 'camera' && (!activeCameraStream || cameraStatus !== 'playing');
   const showLoadingOverlay = !result &&
     detection.status !== 'error' &&
     (activeCache.modelStatus !== 'ready' || detection.status === 'loading');
@@ -613,7 +638,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
               <Video
                 ref={videoRef}
                 autoplay
-                srcObject={stream}
+                srcObject={activeCameraStream}
                 style={[styles.video, isFront ? styles.mirroredVideo : null]}
               />
             ) : (
