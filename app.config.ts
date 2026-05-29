@@ -15,7 +15,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     name: config.name ?? 'Standard Camera Demo',
-    slug: config.slug ?? 'standard-camera-app',
+    slug: config.slug ?? 'standard-camera-demo',
     plugins: [...(config.plugins ?? []), './plugins/with-bump-ios-build-number'],
     extra: {
       ...config.extra,

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Standard Camera Demo",
-    "slug": "standard-camera-app",
+    "slug": "standard-camera-demo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -52,6 +52,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a795ef58-7bcf-4769-9170-1c8fc108e616"
+      }
     }
   }
 }
