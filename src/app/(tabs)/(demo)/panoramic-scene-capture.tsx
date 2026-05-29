@@ -21,6 +21,7 @@ import {
   disabled as disabledModifier,
   foregroundColor,
   frame,
+  lineLimit,
   pickerStyle,
   tag,
   tint,
@@ -102,9 +103,12 @@ import {
 // surfel cloud rendered with WebGPU.
 
 const QUAD_VERTEX_COUNT = 6;
-const COMMAND_BUTTON_GAP = 8;
-const COMMAND_BUTTON_HEIGHT = 38;
-const COMMAND_BUTTON_NATIVE_CHROME_WIDTH = 36;
+const COMMAND_BUTTON_COLUMN_GAP = 12;
+const COMMAND_BUTTON_HEIGHT = 44;
+const COMMAND_BUTTON_ICON_SLOT_WIDTH = 24;
+const COMMAND_BUTTON_LABEL_CHROME_WIDTH = 32;
+const COMMAND_BUTTON_ROW_GAP = 24;
+const COMMAND_BUTTON_GROUP_HEIGHT = COMMAND_BUTTON_HEIGHT * 2 + COMMAND_BUTTON_ROW_GAP;
 const GESTURE_RENDER_PROFILE_INTERVAL_MS = 500;
 const KEYFRAME_REJECTION_PROFILE_INTERVAL_MS = 1000;
 const MESH_PROFILE_INTERVAL_MS = 2000;
@@ -342,8 +346,8 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     ? Math.max(360, Math.min(windowWidth - 448, 980, Math.max(360, windowHeight - 190) * 4 / 3))
     : Math.min(Math.max(288, windowWidth - 32), 430);
   const stageHeight = Math.round(isDesktop ? stageWidth * 3 / 4 : stageWidth * 4 / 3);
-  const commandButtonWidth = Math.floor((stageWidth - COMMAND_BUTTON_GAP) / 2);
-
+  const commandButtonWidth = Math.floor((stageWidth - COMMAND_BUTTON_COLUMN_GAP) / 2);
+  const commandButtonLabelWidth = Math.max(96, commandButtonWidth - COMMAND_BUTTON_LABEL_CHROME_WIDTH);
   React.useEffect(() => {
     modelViewModeRef.current = modelViewMode;
     renderDirtyRef.current = true;
@@ -1490,41 +1494,33 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
           controls={
             <>
               <Host colorScheme="dark" style={[styles.commandHost, { width: stageWidth }]}>
-                <VStack spacing={COMMAND_BUTTON_GAP}>
-                  <CommandButton
-                    disabled={running ? transitioning : transitioning || !canStart || unsupported}
-                    icon={running ? 'stop.fill' : 'play.fill'}
-                    label={running ? 'Stop Scan' : 'Start Scan'}
-                    onPress={running ? () => void stopSession() : () => void startSession()}
-                    tone={running ? 'danger' : 'primary'}
-                    width={stageWidth}
-                  />
-                  <HStack spacing={COMMAND_BUTTON_GAP}>
+                <VStack spacing={COMMAND_BUTTON_ROW_GAP}>
+                  <HStack alignment="center" modifiers={[frame({ height: COMMAND_BUTTON_HEIGHT })]} spacing={COMMAND_BUTTON_COLUMN_GAP}>
                     <CommandButton
                       disabled={!canCapture}
                       icon="camera.fill"
                       label="Capture"
                       onPress={() => void captureModel()}
                       tone="primary"
-                      width={commandButtonWidth}
+                      labelWidth={commandButtonLabelWidth}
                     />
                     <CommandButton
                       disabled={!canPreview}
                       icon="eye.fill"
-                      label="Preview Model"
+                      label="Preview"
                       onPress={() => void previewModel()}
                       tone="preview"
-                      width={commandButtonWidth}
+                      labelWidth={commandButtonLabelWidth}
                     />
                   </HStack>
-                  <HStack spacing={COMMAND_BUTTON_GAP}>
+                  <HStack alignment="center" modifiers={[frame({ height: COMMAND_BUTTON_HEIGHT })]} spacing={COMMAND_BUTTON_COLUMN_GAP}>
                     <CommandButton
                       disabled={!canSave}
                       icon="square.and.arrow.down"
                       label={saving ? 'Saving' : 'Save'}
                       onPress={() => void saveModel()}
                       tone="primary"
-                      width={commandButtonWidth}
+                      labelWidth={commandButtonLabelWidth}
                     />
                     <CommandButton
                       disabled={transitioning}
@@ -1532,7 +1528,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
                       label={canRecenterModel ? 'Recenter' : 'Reset'}
                       onPress={canRecenterModel ? resetViewer : () => resetCapture('manual-reset')}
                       tone="reset"
-                      width={commandButtonWidth}
+                      labelWidth={commandButtonLabelWidth}
                     />
                   </HStack>
                 </VStack>
@@ -2219,16 +2215,16 @@ function CommandButton({
   disabled,
   icon,
   label,
+  labelWidth,
   onPress,
   tone,
-  width,
 }: {
   disabled: boolean;
   icon: SFSymbol;
   label: string;
+  labelWidth: number;
   onPress: () => void;
   tone: 'danger' | 'preview' | 'primary' | 'reset';
-  width: number;
 }): React.JSX.Element {
   const prominent = tone === 'primary' || tone === 'danger';
   const tintColor = (() => {
@@ -2238,7 +2234,6 @@ function CommandButton({
     return '#14b8a6';
   })();
   const labelColor = prominent ? '#f8fafc' : tintColor;
-  const labelWidth = Math.max(88, width - COMMAND_BUTTON_NATIVE_CHROME_WIDTH);
   return (
     <UIButton
       onPress={disabled ? undefined : onPress}
@@ -2248,10 +2243,13 @@ function CommandButton({
         controlSize('regular'),
         tint(tintColor),
         disabledModifier(disabled),
+        frame({ height: COMMAND_BUTTON_HEIGHT }),
       ]}>
-      <HStack modifiers={[frame({ width: labelWidth })]} spacing={6}>
-        <UIImage color={labelColor} size={15} systemName={icon} />
-        <UIText modifiers={[foregroundColor(labelColor)]}>{label}</UIText>
+      <HStack alignment="center" modifiers={[frame({ alignment: 'leading', height: COMMAND_BUTTON_HEIGHT, width: labelWidth })]} spacing={8}>
+        <HStack modifiers={[frame({ height: COMMAND_BUTTON_HEIGHT, width: COMMAND_BUTTON_ICON_SLOT_WIDTH })]}>
+          <UIImage color={labelColor} size={17} systemName={icon} />
+        </HStack>
+        <UIText modifiers={[foregroundColor(labelColor), lineLimit(1)]}>{label}</UIText>
       </HStack>
     </UIButton>
   );
@@ -2928,7 +2926,9 @@ const styles = StyleSheet.create({
     height: 5,
   },
   commandHost: {
-    minHeight: COMMAND_BUTTON_HEIGHT * 3 + COMMAND_BUTTON_GAP * 2,
+    height: COMMAND_BUTTON_GROUP_HEIGHT,
+    marginTop: 4,
+    minHeight: COMMAND_BUTTON_GROUP_HEIGHT,
   },
   modeControl: {
     gap: 6,

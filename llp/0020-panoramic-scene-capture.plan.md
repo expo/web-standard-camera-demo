@@ -212,7 +212,7 @@ Implemented:
   app-side scheduling guard. The route accepts `?autorun=1`, `?depth=raw`,
   `?depth=smooth`, and `?mesh=0` for physical-device profiling runs so
   the validator can deep-link directly into an active WebXR scan while keeping
-  the normal Start Scan control for manual use, and so profile-only logs can
+  the normal nav Start Scan control for manual use, and so profile-only logs can
   isolate raw-depth, smooth-depth, and mesh-reconstruction effects on frame continuity. Live
   snapshot publishing uses adaptive backoff after 10k retained samples and
   reports the selected refresh interval in telemetry; manual Preview and final
@@ -392,10 +392,9 @@ Implemented:
   Files-visible path, file URI, byte count, keyframe count, raw sample count,
   and surfel count only after the Documents file exists and reports a nonzero
   size.
-- Scan controls: the route keeps the native dark header Start/Stop action and
-  also exposes the same Start Scan / Stop Scan action in the Expo UI command
-  cluster so physical-device validation does not depend on discovering header
-  chrome.
+- Scan controls: the route exposes only the native dark header Start/Stop action
+  for starting and stopping scans. The Expo UI command cluster starts with
+  capture/model actions so the same scan transition is not duplicated in-page.
 - `model-view`: renders live and frozen surfel clouds with smaller instanced
   WebGPU splats, one-finger orbit, two-finger pan/pinch interaction, depth
   testing, and model statistics. Single-observation surfels render with smaller
@@ -1272,7 +1271,7 @@ the `expo-development-client` URL with `disableOnboarding=1`, attaches
 appended during the run so React Native `console.log` telemetry is collected
 even when device syslog does not include JS logs. It opens the panorama demo
 route only after handing the build its Metro URL, and then waits for the phone
-interaction. Use the phone to Start Scan, pan slowly until surfels appear,
+interaction. Use the phone's nav Start Scan action, pan slowly until surfels appear,
 Capture, and Save. The validator
 passes only after it sees nonzero keyframe, capture, WebGPU-render, and
 Files-export telemetry from the physical app logs, and the required

@@ -11,7 +11,9 @@ type ButtonStyleModifier = { readonly kind: 'buttonStyle'; readonly value: Butto
 type ControlSizeModifier = { readonly kind: 'controlSize'; readonly value: ControlSizeValue };
 type TintModifier = { readonly kind: 'tint'; readonly value: string };
 type ForegroundColorModifier = { readonly kind: 'foregroundColor'; readonly value: string };
+type LineLimitModifier = { readonly kind: 'lineLimit'; readonly value: { readonly limit?: number; readonly reservesSpace?: boolean } };
 type FrameModifierValue = {
+  readonly alignment?: 'center' | 'leading' | 'trailing' | 'top' | 'bottom' | 'topLeading' | 'topTrailing' | 'bottomLeading' | 'bottomTrailing';
   readonly height?: number;
   readonly maxHeight?: number;
   readonly maxWidth?: number;
@@ -26,6 +28,7 @@ type DemoModifier =
   | DisabledModifier
   | ForegroundColorModifier
   | FrameModifier
+  | LineLimitModifier
   | PickerStyleModifier
   | TagModifier
   | TintModifier;
@@ -52,6 +55,10 @@ export function frame(value: FrameModifierValue): FrameModifier {
 
 export function foregroundColor(value: string): ForegroundColorModifier {
   return { kind: 'foregroundColor', value };
+}
+
+export function lineLimit(limit?: number, options?: { reservesSpace?: boolean }): LineLimitModifier {
+  return { kind: 'lineLimit', value: { limit, reservesSpace: options?.reservesSpace } };
 }
 
 export function tint(value: string): TintModifier {
@@ -129,7 +136,19 @@ export function Text({ children, modifiers = [], style }: TextProps): React.JSX.
   const textColor = modifiers.find(
     (modifier): modifier is ForegroundColorModifier => modifier.kind === 'foregroundColor'
   )?.value;
-  return <RNText style={[textColor ? { color: textColor } : null, style]}>{children}</RNText>;
+  const lineLimitConfig = modifiers.find((modifier): modifier is LineLimitModifier => modifier.kind === 'lineLimit')?.value;
+  const frameStyle = modifiers.find((modifier): modifier is FrameModifier => modifier.kind === 'frame')?.value;
+  return (
+    <RNText
+      numberOfLines={lineLimitConfig?.limit}
+      style={[
+        textColor ? { color: textColor } : null,
+        frameStyle ? frameToStyle(frameStyle) as TextStyle : null,
+        style,
+      ]}>
+      {children}
+    </RNText>
+  );
 }
 
 export interface ButtonProps {
@@ -187,10 +206,13 @@ export function Image({ color = '#94a3b8', size = 16 }: ImageProps): React.JSX.E
 }
 
 function frameToStyle(value: FrameModifierValue): ViewStyle {
+  const flexibleWidth = value.maxWidth === Infinity;
   return {
+    flexBasis: flexibleWidth ? 0 : undefined,
+    flexGrow: flexibleWidth ? 1 : undefined,
     height: value.height,
     maxHeight: value.maxHeight,
-    maxWidth: value.maxWidth,
+    maxWidth: flexibleWidth ? undefined : value.maxWidth,
     minHeight: value.minHeight,
     minWidth: value.minWidth,
     width: value.width,
