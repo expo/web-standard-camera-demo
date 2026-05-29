@@ -587,15 +587,22 @@ export default function ShaderLensScreen(): React.JSX.Element {
 
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
+  // The iOS camera sensor delivers landscape frames regardless of UI
+  // orientation, so the WGSL preview rotates 90 degrees when the layout
+  // shrinks to a portrait stage. Web getUserMedia hands back frames already
+  // oriented for the device, so leave the rotation off there.
+  const rotatesPreview = Platform.OS !== 'web' && !isDesktop;
   // eslint-disable-next-line react-hooks/refs -- The long-lived WebGPU loop reads this ref between renders.
-  previewRotatesRef.current = !isDesktop;
-  const targetPreviewAspect = isDesktop ? 4 / 3 : DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width;
+  previewRotatesRef.current = rotatesPreview;
+  const targetPreviewAspect = rotatesPreview
+    ? DEMO_CAPTURE_CONSTRAINTS.height / DEMO_CAPTURE_CONSTRAINTS.width
+    : isDesktop
+      ? 4 / 3
+      : DEMO_CAPTURE_CONSTRAINTS.width / DEMO_CAPTURE_CONSTRAINTS.height;
   const previewAspect = frameDimensions
-    ? isDesktop
-      ? frameDimensions.width / frameDimensions.height
-      : frameDimensions.width > frameDimensions.height
-        ? frameDimensions.height / frameDimensions.width
-        : frameDimensions.width / frameDimensions.height
+    ? rotatesPreview && frameDimensions.width > frameDimensions.height
+      ? frameDimensions.height / frameDimensions.width
+      : frameDimensions.width / frameDimensions.height
     : targetPreviewAspect;
   const previewMaxHeight = Math.max(240, windowHeight - (isWebDesktop ? 180 : 440));
   const previewMaxWidth = Math.max(240, isWebDesktop ? windowWidth - 456 : windowWidth - 32);

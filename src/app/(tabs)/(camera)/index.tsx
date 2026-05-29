@@ -174,6 +174,11 @@ export default function HomeScreen(): React.JSX.Element {
   const isFront = activeFacing === 'user';
   const backFacingDisabled = facingModeAvailability.environment === 'unavailable';
   const isDesktop = width >= 1040;
+  // Web getUserMedia returns frames in the device's natural orientation, so
+  // even at a narrow viewport the typical landscape webcam fits a landscape
+  // stage. The portrait stage exists for native iOS where the AV sensor is
+  // always landscape and the layout rotates the preview to portrait.
+  const isWebNarrow = Platform.OS === 'web' && !isDesktop;
   const contentStyle = [
     styles.contentContainer,
     isDesktop ? styles.desktopContentContainer : null,
@@ -201,7 +206,12 @@ export default function HomeScreen(): React.JSX.Element {
             ) : null}
           </View>
 
-          <View style={[styles.videoContainer, isDesktop ? styles.desktopVideoContainer : null]}>
+          <View
+            style={[
+              styles.videoContainer,
+              isDesktop ? styles.desktopVideoContainer : null,
+              isWebNarrow ? styles.webNarrowVideoContainer : null,
+            ]}>
             <Video
               ref={videoRef}
               style={[styles.video, isFront ? styles.mirroredVideo : null]}
@@ -627,6 +637,9 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     aspectRatio: 4 / 3,
     borderRadius: 10,
+  },
+  webNarrowVideoContainer: {
+    aspectRatio: 4 / 3,
   },
   video: {
     flex: 1,
