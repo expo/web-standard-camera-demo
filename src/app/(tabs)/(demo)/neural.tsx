@@ -82,7 +82,8 @@ const CAMERA_INFERENCE_INTERVAL_MS = 1000;
 const CAMERA_WAIT_RETRY_MS = 450;
 const CAMERA_ERROR_RETRY_MS = 1500;
 const CAMERA_CAPTURE_SETTLE_MS = 250;
-const CAMERA_SWITCH_CLASSIFIER_PAUSE_MS = 900;
+const CAMERA_SWITCH_CLASSIFIER_PAUSE_MS = 1600;
+const CAMERA_MODEL_PRELOAD_STABLE_MS = 1800;
 const PROBE_DETECT_DEBOUNCE_MS = 140;
 
 export default function TfjsSceneLensScreen(): React.JSX.Element {
@@ -120,6 +121,8 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       status: initialSource === 'camera' ? 'waiting' : 'loading',
     };
   });
+  const cacheModelStatus = cacheInfo.modelStatus;
+  const cameraModelWaitLine = formatModelLoadPhase(cacheInfo, true);
 
   React.useEffect(() => subscribeTfjsObjectCacheInfo(setCacheInfo), []);
 
@@ -153,25 +156,44 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
 
   useFocusEffect(
     React.useCallback(() => {
+      if (source !== 'camera' || !stream || cameraStatus !== 'playing') return undefined;
+      if (cacheModelStatus !== 'idle') return undefined;
+
       let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
       let idleCancel: (() => void) | null = null;
-      idleCancel = scheduleAfterPaintAndIdle(() => {
-        if (cancelled) return;
-        const preload = preloadTfjsObjectModel();
-        setCacheInfo(getTfjsObjectCacheInfo());
-        void preload
-          .then((next) => {
-            if (!cancelled) setCacheInfo(next);
-          })
-          .catch(() => {
-            if (!cancelled) setCacheInfo(getTfjsObjectCacheInfo());
-          });
-      });
+
+      const stableDelayMs = Math.max(
+        CAMERA_MODEL_PRELOAD_STABLE_MS,
+        cameraInferencePausedUntilRef.current - Date.now(),
+        imageCaptureAcceptAfterRef.current - Date.now()
+      );
+
+      timer = setTimeout(() => {
+        timer = null;
+        idleCancel = scheduleAfterPaintAndIdle(() => {
+          if (cancelled) return;
+          const preload = preloadTfjsObjectModel();
+          setCacheInfo(getTfjsObjectCacheInfo());
+          void preload
+            .then((next) => {
+              if (!cancelled) setCacheInfo(next);
+            })
+            .catch(() => {
+              if (!cancelled) setCacheInfo(getTfjsObjectCacheInfo());
+            });
+        });
+      }, stableDelayMs);
+
       return () => {
         cancelled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
         idleCancel?.();
       };
-    }, [])
+    }, [cacheModelStatus, cameraStatus, source, stream])
   );
 
   useFocusEffect(
@@ -316,6 +338,16 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
         return;
       }
 
+      if (cacheModelStatus !== 'ready' && cacheModelStatus !== 'error') {
+        publishWaiting(
+          cacheModelStatus === 'loading'
+            ? cameraModelWaitLine
+            : 'detector waiting for stable camera'
+        );
+        schedule(CAMERA_WAIT_RETRY_MS);
+        return;
+      }
+
       let frame: TfjsCameraFrame | null = null;
       const controller = new AbortController();
       cameraInferenceAbortRef.current?.abort();
@@ -377,7 +409,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       cameraInferenceAbortRef.current?.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [cameraError, cameraStatus, rotateForPortrait, source, stream]);
+  }, [cacheModelStatus, cameraError, cameraModelWaitLine, cameraStatus, rotateForPortrait, source, stream]);
 
   const previewMaxHeight = Math.max(300, windowHeight - (isWebDesktop ? 180 : 500));
   const previewMaxWidth = Math.max(240, isWebDesktop ? windowWidth - 456 : windowWidth - 32);
@@ -413,7 +445,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   const activeCache = result?.cache ?? cacheInfo;
   const topDetection = result?.detections[0];
   const activeProbe = source === 'camera' ? null : findProbe(source);
-  const modelPhaseLine = formatModelLoadPhase(activeCache);
+  const modelPhaseLine = formatModelLoadPhase(activeCache, source === 'camera');
   const primaryLine = result
     ? `${result.summary.reason} ${formatPercent(result.summary.confidence)}`
     : detection.status === 'error'
@@ -749,7 +781,7 @@ function formatError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
-function formatModelLoadPhase(cache: TfjsObjectCacheInfo): string {
+function formatModelLoadPhase(cache: TfjsObjectCacheInfo, waitingForCamera: boolean): string {
   switch (cache.modelLoadPhase) {
     case 'runtime':
       return 'initializing TensorFlow.js';
@@ -767,7 +799,7 @@ function formatModelLoadPhase(cache: TfjsObjectCacheInfo): string {
       return 'model load failed';
     case 'idle':
     default:
-      return 'waiting for screen paint';
+      return waitingForCamera ? 'waiting for stable camera' : 'waiting for screen paint';
   }
 }
 

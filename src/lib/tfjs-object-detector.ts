@@ -140,6 +140,7 @@ interface CocoClass {
 type MetroAssetModule = string | number | { height: number; uri: string; width: number };
 type LoadedModelAssetBuffer = { buffer: ArrayBuffer; source: TfjsModelWeightSource };
 type LoadedWeightData = { buffer: ArrayBuffer; source: TfjsModelWeightSource };
+type BundledModelShard = { filename: string; moduleId: MetroAssetModule };
 
 const DETECTOR_MAX_EDGE = 320;
 const DEFAULT_MAX_BOXES = 8;
@@ -150,38 +151,12 @@ const FILE_READ_CHUNK_BYTES = 1024 * 1024;
 // model JSON and weight shards so iOS can classify without fetching a model.
 const BUNDLED_MODEL_DIR = 'coco-ssd-lite-mobilenet-v2';
 const NATIVE_MODEL_ROOT = 'TfjsModels';
-/* eslint-disable @typescript-eslint/no-require-imports -- Metro asset ids for bundled model shards are created with require(). */
-const BUNDLED_MODEL_JSON = require('../../assets/models/coco-ssd-lite-mobilenet-v2/model.json') as ModelJson;
-const BUNDLED_MODEL_SHARDS = [
-  {
-    filename: 'group1-shard1of5.bin',
-    moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard1of5.bin'),
-  },
-  {
-    filename: 'group1-shard2of5.bin',
-    moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard2of5.bin'),
-  },
-  {
-    filename: 'group1-shard3of5.bin',
-    moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard3of5.bin'),
-  },
-  {
-    filename: 'group1-shard4of5.bin',
-    moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard4of5.bin'),
-  },
-  {
-    filename: 'group1-shard5of5.bin',
-    moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard5of5.bin'),
-  },
-] as const;
-const { CLASSES } = require('@tensorflow-models/coco-ssd/dist/classes') as {
-  CLASSES: Record<number, CocoClass | undefined>;
-};
-/* eslint-enable @typescript-eslint/no-require-imports */
-
 let runtimePromise: Promise<ObjectRuntime> | null = null;
 let modelPromise: Promise<ObjectModel> | null = null;
 let weightDataPromise: Promise<LoadedWeightData> | null = null;
+let bundledModelJson: ModelJson | null = null;
+let bundledModelShards: readonly BundledModelShard[] | null = null;
+let cocoClasses: Record<number, CocoClass | undefined> | null = null;
 let modelLoadPhase: TfjsModelLoadPhase = 'idle';
 let modelStatus: TfjsModelStatus = 'idle';
 let modelWeightSource: TfjsModelWeightSource | null = null;
@@ -498,17 +473,18 @@ async function detectTfjsObjects(
 async function loadBundledCocoSsdGraphModel(runtime: ObjectRuntime): Promise<GraphModel> {
   setModelLoadState('loading', 'weights');
   const weightData = await loadBundledWeightData();
+  const modelJson = getBundledModelJson();
   await yieldToUi();
   setModelLoadState('loading', 'graph');
   const tfconv = await import('@tensorflow/tfjs-converter');
   await yieldToUi();
   const handler = runtime.tf.io.fromMemory({
-    convertedBy: BUNDLED_MODEL_JSON.convertedBy,
-    format: BUNDLED_MODEL_JSON.format,
-    generatedBy: BUNDLED_MODEL_JSON.generatedBy,
-    modelTopology: BUNDLED_MODEL_JSON.modelTopology,
+    convertedBy: modelJson.convertedBy,
+    format: modelJson.format,
+    generatedBy: modelJson.generatedBy,
+    modelTopology: modelJson.modelTopology,
     weightData: weightData.buffer,
-    weightSpecs: BUNDLED_MODEL_JSON.weightsManifest.flatMap((group) => group.weights),
+    weightSpecs: modelJson.weightsManifest.flatMap((group) => group.weights),
   });
   return await withTimeout(
     tfconv.loadGraphModel(handler, undefined, runtime.tf.io),
@@ -522,8 +498,9 @@ async function loadBundledWeightData(): Promise<LoadedWeightData> {
     weightDataPromise = (async () => {
       const buffers: ArrayBuffer[] = [];
       const sources = new Set<TfjsModelWeightSource>();
-      for (let i = 0; i < BUNDLED_MODEL_SHARDS.length; i += 1) {
-        const shard = BUNDLED_MODEL_SHARDS[i];
+      const shards = getBundledModelShards();
+      for (let i = 0; i < shards.length; i += 1) {
+        const shard = shards[i];
         const asset = await withTimeout(
           readBundledAssetArrayBuffer(shard.filename, shard.moduleId as MetroAssetModule),
           MODEL_ASSET_TIMEOUT_MS,
@@ -730,12 +707,13 @@ function buildDetectedObjects(
   classes: readonly number[]
 ): ObjectDetectionBox[] {
   const objects: ObjectDetectionBox[] = [];
+  const cocoClassesById = getCocoClasses();
   for (const index of indexes) {
     const ymin = Number(boxes[index * 4] ?? 0) * height;
     const xmin = Number(boxes[index * 4 + 1] ?? 0) * width;
     const ymax = Number(boxes[index * 4 + 2] ?? 0) * height;
     const xmax = Number(boxes[index * 4 + 3] ?? 0) * width;
-    const className = CLASSES[(classes[index] ?? -1) + 1]?.displayName ?? 'object';
+    const className = cocoClassesById[(classes[index] ?? -1) + 1]?.displayName ?? 'object';
     objects.push({
       bbox: normalizeBbox([xmin, ymin, xmax - xmin, ymax - ymin], width, height),
       className,
@@ -743,6 +721,53 @@ function buildDetectedObjects(
     });
   }
   return objects;
+}
+
+function getBundledModelJson(): ModelJson {
+  if (!bundledModelJson) {
+    bundledModelJson = require('../../assets/models/coco-ssd-lite-mobilenet-v2/model.json') as ModelJson;
+  }
+  return bundledModelJson;
+}
+
+function getBundledModelShards(): readonly BundledModelShard[] {
+  if (!bundledModelShards) {
+    /* eslint-disable @typescript-eslint/no-require-imports -- Metro asset ids for bundled model shards are created with require(). */
+    bundledModelShards = [
+      {
+        filename: 'group1-shard1of5.bin',
+        moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard1of5.bin'),
+      },
+      {
+        filename: 'group1-shard2of5.bin',
+        moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard2of5.bin'),
+      },
+      {
+        filename: 'group1-shard3of5.bin',
+        moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard3of5.bin'),
+      },
+      {
+        filename: 'group1-shard4of5.bin',
+        moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard4of5.bin'),
+      },
+      {
+        filename: 'group1-shard5of5.bin',
+        moduleId: require('../../assets/models/coco-ssd-lite-mobilenet-v2/group1-shard5of5.bin'),
+      },
+    ];
+    /* eslint-enable @typescript-eslint/no-require-imports */
+  }
+  return bundledModelShards;
+}
+
+function getCocoClasses(): Record<number, CocoClass | undefined> {
+  if (!cocoClasses) {
+    /* eslint-disable-next-line @typescript-eslint/no-require-imports -- Defer class metadata until detection post-processing. */
+    cocoClasses = (require('@tensorflow-models/coco-ssd/dist/classes') as {
+      CLASSES: Record<number, CocoClass | undefined>;
+    }).CLASSES;
+  }
+  return cocoClasses;
 }
 
 async function createProbeTensor(tf: Tfjs, probe: ObjectProbeId): Promise<ObjectInput> {
