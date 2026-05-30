@@ -208,13 +208,23 @@ async function runOnDevice(requested: string | undefined, only?: string): Promis
       APP_BUNDLE_ID,
     ],
     stdout: 'pipe',
-    stderr: 'inherit',
+    stderr: 'pipe',
   });
   console.log('Launched test runner; waiting for results…');
 
   let summary: ParsedSummary;
   try {
-    summary = await parseWPTOutput(proc.stdout as ReadableStream<Uint8Array>);
+    try {
+      summary = await Promise.any([
+        parseWPTOutput(proc.stdout as ReadableStream<Uint8Array>),
+        parseWPTOutput(proc.stderr as ReadableStream<Uint8Array>),
+      ]);
+    } catch (e) {
+      if (e instanceof AggregateError) {
+        throw new Error(e.errors.map((error) => (error as Error).message).join('\n'));
+      }
+      throw e;
+    }
   } finally {
     // --console blocks until the app exits; SIGTERM is forwarded to the app.
     try {
@@ -569,6 +579,8 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
   let pendingRead: ReturnType<typeof reader.read> | null = null;
   let summary: ParsedSummary | null = null;
   const start = Date.now();
+  let streamEnded = false;
+  const recentLines: string[] = [];
 
   while (Date.now() - start < LOG_TIMEOUT_MS) {
     // @ref LLP 0010#cli-flow — Keep exactly one read pending on the simulator
@@ -587,8 +599,9 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
     pendingRead = null;
     const { value, done } = readResult.result;
     if (done) {
+      streamEnded = true;
       if (summary) break;
-      continue; // poll again
+      break;
     }
     buffer += decoder.decode(value, { stream: true });
 
@@ -596,6 +609,9 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
     while ((nl = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + 1);
+      if (!line.includes('WPT_RESULT:') && !line.includes('WPT_DONE:')) {
+        rememberRecentLine(recentLines, line);
+      }
       const handled = handleLine(line);
       if (handled?.summary) {
         summary = handled.summary;
@@ -605,9 +621,22 @@ async function parseWPTOutput(stream: ReadableStream<Uint8Array>): Promise<Parse
   }
 
   if (!summary) {
-    throw new Error(`Timed out after ${LOG_TIMEOUT_MS}ms waiting for WPT_DONE`);
+    const recent = recentLines.length > 0
+      ? `\nRecent log output:\n${recentLines.join('\n')}`
+      : '';
+    if (streamEnded) {
+      throw new Error(`Log stream ended before WPT_DONE${recent}`);
+    }
+    throw new Error(`Timed out after ${LOG_TIMEOUT_MS}ms waiting for WPT_DONE${recent}`);
   }
   return summary;
+}
+
+function rememberRecentLine(lines: string[], line: string): void {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  lines.push(trimmed);
+  if (lines.length > 12) lines.shift();
 }
 
 function handleLine(line: string): { summary?: ParsedSummary } | undefined {
