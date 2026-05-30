@@ -181,19 +181,43 @@ async function runOnDevice(requested: string | undefined, only?: string): Promis
   console.log(`Using device: ${device.name} (${device.identifier})`);
 
   await ensureAppInstalledOnDevice(device.identifier);
+  const metroServer = await ensureMetroRunning();
+  const deviceMetroUrl = await getDeviceMetroUrl();
 
-  // @ref LLP 0010#cli-flow — Launch with --console to stream the app's
-  // stdout/stderr. The app's `emit()` writes WPT_RESULT/WPT_DONE lines via
-  // `console.log` (which RN bridges to stdout in dev builds) AND `NSLog`
-  // (visible in os_log). For physical devices we rely on console.log; the
-  // dev build hosts a Metro bundle whose console.log surfaces here.
-  // @ref LLP 0010#cli-flow — Hand the deep link via `--payload-url` so the
-  // app's `useLinkingURL()` sees `?autorun=1` at cold-start and the runner
-  // auto-fires.
-  const payloadUrl = buildTestRunnerUrl(only);
-  if (VERBOSE) console.log('$', 'xcrun', 'devicectl', 'device', 'process', 'launch', '--device', device.identifier, '--terminate-existing', '--console', '--payload-url', payloadUrl, APP_BUNDLE_ID);
+  // @ref LLP 0010#cli-flow — Physical devices need a two-step launch: first
+  // connect the Expo dev client to Metro while --console is attached, then
+  // send the test-route payload to the already-running app. A single cold
+  // launch with the test payload can be swallowed by the dev client before
+  // the JS app has mounted.
+  const devClientUrl = buildDevelopmentClientUrl(deviceMetroUrl);
+  const testUrl = buildTestRunnerUrl(only);
+  const launchCmd = [
+    'xcrun',
+    'devicectl',
+    'device',
+    'process',
+    'launch',
+    '--device',
+    device.identifier,
+    '--terminate-existing',
+    '--console',
+    '--payload-url',
+    devClientUrl,
+    APP_BUNDLE_ID,
+  ];
+  if (VERBOSE) console.log('$', launchCmd.join(' '));
   const proc = spawn({
-    cmd: [
+    cmd: launchCmd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  console.log(`Opened development client with Metro ${deviceMetroUrl}`);
+
+  let summary: ParsedSummary;
+  try {
+    const summaryPromise = parseDeviceConsole(proc);
+    await sleep(3_500);
+    await sh([
       'xcrun',
       'devicectl',
       'device',
@@ -201,30 +225,12 @@ async function runOnDevice(requested: string | undefined, only?: string): Promis
       'launch',
       '--device',
       device.identifier,
-      '--terminate-existing',
-      '--console',
       '--payload-url',
-      payloadUrl,
+      testUrl,
       APP_BUNDLE_ID,
-    ],
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  console.log('Launched test runner; waiting for results…');
-
-  let summary: ParsedSummary;
-  try {
-    try {
-      summary = await Promise.any([
-        parseWPTOutput(proc.stdout as ReadableStream<Uint8Array>),
-        parseWPTOutput(proc.stderr as ReadableStream<Uint8Array>),
-      ]);
-    } catch (e) {
-      if (e instanceof AggregateError) {
-        throw new Error(e.errors.map((error) => (error as Error).message).join('\n'));
-      }
-      throw e;
-    }
+    ]);
+    console.log('Opened test URL; waiting for results…');
+    summary = await summaryPromise;
   } finally {
     // --console blocks until the app exits; SIGTERM is forwarded to the app.
     try {
@@ -232,10 +238,25 @@ async function runOnDevice(requested: string | undefined, only?: string): Promis
     } catch {
       // ignore
     }
+    metroServer.stop();
   }
 
   printSummary(summary);
   return summary.failed === 0 && summary.timeout === 0 ? 0 : 1;
+}
+
+async function parseDeviceConsole(proc: ReturnType<typeof spawn>): Promise<ParsedSummary> {
+  try {
+    return await Promise.any([
+      parseWPTOutput(proc.stdout as ReadableStream<Uint8Array>),
+      parseWPTOutput(proc.stderr as ReadableStream<Uint8Array>),
+    ]);
+  } catch (e) {
+    if (e instanceof AggregateError) {
+      throw new Error(e.errors.map((error) => (error as Error).message).join('\n'));
+    }
+    throw e;
+  }
 }
 
 interface DeviceInfo {
@@ -422,6 +443,18 @@ function buildDevelopmentClientUrl(metroUrl: string): string {
     disableOnboarding: '1',
     url: metroUrl,
   }).toString()}`;
+}
+
+async function getDeviceMetroUrl(): Promise<string> {
+  for (const iface of ['en0', 'en1']) {
+    try {
+      const host = (await capture(['ipconfig', 'getifaddr', iface])).trim();
+      if (host) return `http://${host}:${METRO_PORT}`;
+    } catch {
+      // Try the next interface.
+    }
+  }
+  return METRO_URL;
 }
 
 function buildTestRunnerUrl(only?: string): string {
