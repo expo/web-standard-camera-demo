@@ -92,10 +92,10 @@ The clone is a JS-only stream (no `_native`) when constructed via this path. Eac
 
 ### Session lifecycle
 
-- The session is created and started inside `getUserMedia` ([LLP 0003#gum-build-session](./0003-getusermedia.spec.md#gum-build-session)).
+- The session is created inside `getUserMedia` ([LLP 0003#gum-build-session](./0003-getusermedia.spec.md#gum-build-session)). Audio-only streams start immediately on the session queue; video streams start lazily when a preview or `ImageCapture` consumer requests frames.
 - The `AVCaptureSession` is owned by a `CaptureSource` Swift object that is reference-counted by **live** `MediaStreamTrack` instances. Each native track strong-refs its source; on `stop()` (or runtime-error end), the track unregisters itself. When the live count reaches zero, the `CaptureSource`'s `unregisterTrack` posts `stopRunning` to the session queue.
-- This shape means clones keep the camera running: stopping every track of the original stream does *not* stop the session as long as a cloned track is still live. The session is stopped only when every original-and-cloned track has been ended.
-- The session is **not** stopped when a `VideoView` is removed from the React tree — the stream lives independently of any view. Multiple views can show the same stream.
+- This shape means clones keep the source live: stopping every track of the original stream does *not* end the source as long as a cloned track still references it. The session is fully torn down only when every original-and-cloned track has been ended.
+- When the last native `VideoView` preview detaches, `CaptureSource` may pause the underlying session without ending tracks. A later `<Video>.play()` or `ImageCapture.grabFrame()` request restarts it on the session queue. Multiple attached views can still show the same stream; detaching one view does not pause while another preview remains subscribed.
 
 ---
 

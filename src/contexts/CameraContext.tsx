@@ -335,10 +335,49 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       const previous = streamRef.current;
       if (previous) {
         const stopPreviousStartedAt = nowMs();
-        streamRef.current = null;
-        setStreamState(null);
-        for (const t of previous.getTracks()) t.stop();
-        traceNeuralLens('camera-context-previous-stream-stopped', {
+        setStatus('stopping');
+        traceNeuralLens('camera-context-previous-stream-release-start', {
+          requestId,
+          tracks: previous.getTracks().length,
+        });
+        // @ref LLP 0013#camera-ownership-handoff — Front/back hot-swaps use
+        // the same deterministic AVFoundation handoff as WebXR/ARKit: stop
+        // tracks, await the source's serialized release point, then let React
+        // detach/swap the preview. This avoids assigning
+        // AVCaptureVideoPreviewLayer.session while the old session is still
+        // stopping on the AVFoundation queue.
+        try {
+          await stopTracksAndWaitForCaptureRelease(previous);
+        } catch (releaseError) {
+          const err = releaseError as Error;
+          traceNeuralLens('camera-context-previous-stream-release-error', {
+            error: err.name ?? 'Error',
+            message: err.message,
+            requestId,
+            sinceCallMs: round(nowMs() - startStartedAt),
+          });
+          if (requestId === startRequestRef.current) {
+            cameraOwnershipGate.setStartInFlight(false);
+            if (mountedRef.current) {
+              setError(`${err.name ?? 'Error'}: ${err.message}`);
+              setStatus('error');
+            }
+          }
+          return;
+        }
+        if (!mountedRef.current || requestId !== startRequestRef.current) {
+          traceNeuralLens('camera-context-previous-stream-release-stale', {
+            requestId,
+            sinceCallMs: round(nowMs() - startStartedAt),
+          });
+          return;
+        }
+        if (streamRef.current === previous) {
+          streamRef.current = null;
+          setStreamState(null);
+          setSettings(null);
+        }
+        traceNeuralLens('camera-context-previous-stream-release-done', {
           requestId,
           durationMs: round(nowMs() - stopPreviousStartedAt),
           tracks: previous.getTracks().length,

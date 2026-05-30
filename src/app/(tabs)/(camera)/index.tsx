@@ -34,7 +34,6 @@ const RESOLUTION_PRESETS: ResolutionPreset[] = [
 ];
 
 const FRAME_RATE_PRESETS: number[] = [30, 60];
-const HOME_CAMERA_FOCUS_SETTLE_MS = 350;
 
 // `label` shortener — `device.localizedName` returns strings like "Back Triple
 // Camera" or "Front TrueDepth Camera". Trim the redundant "Camera" suffix and
@@ -73,11 +72,9 @@ export default function HomeScreen(): React.JSX.Element {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const statusRef = React.useRef(status);
   const streamRef = React.useRef(stream);
-  const focusSettleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [screenFocused, setScreenFocused] = React.useState(false);
-  const [focusSettled, setFocusSettled] = React.useState(false);
   const [previewFocusSerial, setPreviewFocusSerial] = React.useState(0);
-  const activePreviewStream = screenFocused && focusSettled ? stream : null;
+  const activePreviewStream = screenFocused ? stream : null;
   const previewKey = activePreviewStream
     ? `home-preview-${previewFocusSerial}-${activePreviewStream.id}`
     : `home-preview-${previewFocusSerial}-detached`;
@@ -101,7 +98,6 @@ export default function HomeScreen(): React.JSX.Element {
     traceNeuralLens('home-preview-srcobject-start', {
       attaching: activePreviewStream !== null,
       cameraStatus: status,
-      focusSettled,
       focusSerial: previewFocusSerial,
       screenFocused,
     });
@@ -114,7 +110,7 @@ export default function HomeScreen(): React.JSX.Element {
       durationMs: round(nowMs() - attachStartedAt),
       focusSerial: previewFocusSerial,
     });
-  }, [activePreviewStream, focusSettled, previewFocusSerial, screenFocused, status]);
+  }, [activePreviewStream, previewFocusSerial, screenFocused, status]);
 
   // Run-tests deeplink stops the camera so the WPT runner gets a clean slate.
   React.useEffect(() => addTestRunStartListener(() => stop('test-run-start')), [stop]);
@@ -125,32 +121,13 @@ export default function HomeScreen(): React.JSX.Element {
         cameraStatus: statusRef.current,
         hasStream: streamRef.current !== null,
       });
-      if (focusSettleTimerRef.current) {
-        clearTimeout(focusSettleTimerRef.current);
-        focusSettleTimerRef.current = null;
-      }
       setScreenFocused(true);
-      setFocusSettled(false);
-      focusSettleTimerRef.current = setTimeout(() => {
-        focusSettleTimerRef.current = null;
-        traceNeuralLens('home-screen-focus-settled', {
-          cameraStatus: statusRef.current,
-          delayMs: HOME_CAMERA_FOCUS_SETTLE_MS,
-          hasStream: streamRef.current !== null,
-        });
-        setFocusSettled(true);
-        setPreviewFocusSerial((value) => value + 1);
-      }, HOME_CAMERA_FOCUS_SETTLE_MS);
+      setPreviewFocusSerial((value) => value + 1);
       return () => {
-        if (focusSettleTimerRef.current) {
-          clearTimeout(focusSettleTimerRef.current);
-          focusSettleTimerRef.current = null;
-        }
         traceNeuralLens('home-screen-blur', {
           cameraStatus: statusRef.current,
           hasStream: streamRef.current !== null,
         });
-        setFocusSettled(false);
         setScreenFocused(false);
       };
     }, [])
@@ -160,7 +137,6 @@ export default function HomeScreen(): React.JSX.Element {
   // tying this to focus avoids reopening AVFoundation behind WebXR/ARKit demos.
   useFocusEffect(
     React.useCallback(() => {
-      if (!focusSettled) return undefined;
       if (userStopped || externalLocked) return undefined;
       if (
         !stream &&
@@ -172,7 +148,7 @@ export default function HomeScreen(): React.JSX.Element {
         void start();
       }
       return undefined;
-    }, [externalLocked, focusSettled, start, status, stream, userStopped])
+    }, [externalLocked, start, status, stream, userStopped])
   );
 
   // @ref LLP 0009#decision — Web browsers can omit `settings.facingMode` for

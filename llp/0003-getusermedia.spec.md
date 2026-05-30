@@ -91,7 +91,7 @@ Done on iOS, on the dedicated session queue `dev.ide.standardcamera.session`. Si
 7. `session.commitConfiguration()`
 8. Snapshot the device's active format (`activeFormat.formatDescription`) for `track.getSettings()`: `deviceId`, `groupId` (= deviceId in v1), `facingMode`, `width`, `height`, `frameRate`, `aspectRatio`.
 9. Capture `frameSink.output.connection(with: .video)` as the track's `AVCaptureConnection` — this is what `track.enabled = false` toggles.
-10. Return the `MediaStream`, then ask its `CaptureSource` to start the session on `MediaStream.sessionQueue` without awaiting `startRunning()`.
+10. Return the `MediaStream`. Audio-only streams ask their `CaptureSource` to start on `MediaStream.sessionQueue`; video streams wait for the first real consumer (`<Video>.play()` / preview attach or `ImageCapture.grabFrame()`) to request startup.
 
 The atomic configuration matters: we add input and output in the *same* `beginConfiguration` / `commitConfiguration` block so the auto-created connection between them comes up in one step. We did this differently in an earlier revision and the connection was `nil` when the track was constructed.
 
@@ -100,9 +100,11 @@ off the main thread, but resolving `getUserMedia()` only after it completes also
 means React cannot attach the `<Video>` preview layer until the session is
 already hot. That made tab-return and front/back switch UI animations compete
 with a main-thread preview attachment to a running capture graph. The current
-shape returns the stream after the graph is configured, lets the preview attach
-to a cold session, and coalesces `getUserMedia()`, `<Video srcObject>`, and
-`play()` start requests through `CaptureSource.startSessionIfNeeded()`.
+shape returns the stream after the graph is configured and leaves video capture
+stopped until a preview or frame accessor requests frames. That lets the
+preview attach to a cold session first, then coalesces `<Video srcObject>`,
+`play()`, and `ImageCapture.grabFrame()` startup requests through
+`CaptureSource.startSessionIfNeeded()` on the serialized session queue.
 
 ## `gum-error-mapping`
 

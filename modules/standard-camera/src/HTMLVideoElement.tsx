@@ -214,6 +214,8 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   // paused, and __accumulatedSeconds + (now - playStartMs) while playing.
   private __playStartMs: number = 0;
   private __accumulatedSeconds: number = 0;
+  private __currentTimeSnapshot: number | null = null;
+  private __currentTimeSnapshotClearTimer: ReturnType<typeof setTimeout> | null = null;
   private __notifyReact: (s: Stream | null) => void;
   // Pre-stream user values for `preload` / `playbackRate` / `defaultPlaybackRate`.
   // While `srcObject` is a MediaStream the getters MUST return the spec-fixed
@@ -243,6 +245,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     this.__duration = NaN;
     this.__ended = false;
     // Per HTML spec, assigning a MediaStream resets the timeline to 0.
+    this.__clearCurrentTimeSnapshot();
     this.__playStartMs = 0;
     this.__accumulatedSeconds = 0;
     // Treat srcObject assignment as a clean slate: pause and stop the
@@ -305,10 +308,15 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
   get duration(): number { return this.__duration; }
 
   // @ref LLP 0005#currentTime — Reads elapsed-since-play wall clock while
-  // playing, freezes at the accumulated value while paused.
+  // playing, freezes at the accumulated value while paused. A playing read is
+  // task-stable so same-task no-op setter checks do not race wall-clock ticks.
   get currentTime(): number {
     if (this.__playStartMs === 0) return this.__accumulatedSeconds;
-    return this.__accumulatedSeconds + (Date.now() - this.__playStartMs) / 1000;
+    if (this.__currentTimeSnapshot !== null) return this.__currentTimeSnapshot;
+    const currentTime = this.__currentTimeUncached();
+    this.__currentTimeSnapshot = currentTime;
+    this.__queueCurrentTimeSnapshotClear();
+    return currentTime;
   }
   set currentTime(_value: number) {
     // @ref LLP 0005#srcobject-currentTime — UA MUST ignore attempts to set
@@ -370,6 +378,7 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
       });
     }
     this.__paused = false;
+    this.__clearCurrentTimeSnapshot();
     this.__playStartMs = Date.now();
     this.__startTimeUpdates();
   }
@@ -378,9 +387,10 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
     void this.__native?.pauseAsync();
     // Freeze currentTime: bank the just-played interval into the accumulator.
     if (this.__playStartMs !== 0) {
-      this.__accumulatedSeconds += (Date.now() - this.__playStartMs) / 1000;
+      this.__accumulatedSeconds = this.__currentTimeUncached();
       this.__playStartMs = 0;
     }
+    this.__clearCurrentTimeSnapshot();
     this.__paused = true;
     this.__stopTimeUpdates();
   }
@@ -401,6 +411,24 @@ class VideoElementImpl extends EventTarget implements HTMLVideoElement {
       clearInterval(this.__timeUpdateInterval);
       this.__timeUpdateInterval = null;
     }
+  }
+  private __currentTimeUncached(): number {
+    if (this.__playStartMs === 0) return this.__accumulatedSeconds;
+    return this.__accumulatedSeconds + (Date.now() - this.__playStartMs) / 1000;
+  }
+  private __queueCurrentTimeSnapshotClear(): void {
+    if (this.__currentTimeSnapshotClearTimer) return;
+    this.__currentTimeSnapshotClearTimer = setTimeout(() => {
+      this.__currentTimeSnapshot = null;
+      this.__currentTimeSnapshotClearTimer = null;
+    }, 0);
+  }
+  private __clearCurrentTimeSnapshot(): void {
+    if (this.__currentTimeSnapshotClearTimer) {
+      clearTimeout(this.__currentTimeSnapshotClearTimer);
+      this.__currentTimeSnapshotClearTimer = null;
+    }
+    this.__currentTimeSnapshot = null;
   }
 
   // Event-handler property accessors. Each on* setter swaps the addEventListener

@@ -91,7 +91,10 @@ interface VideoRef {
 <a id="currentTime"></a>
 ### `srcObject-currentTime`
 
-- Get: returns elapsed wall-clock seconds since `play()` or first frame.
+- Get: returns elapsed wall-clock seconds since `play()` or first frame. While
+  playing, repeated reads in the same JavaScript task return the same sampled
+  "last known" time so `played.end(0) === currentTime` and no-op setter checks
+  are not made flaky by a one-millisecond wall-clock tick between reads.
 - Set: the UA MUST ignore attempts to set `currentTime` for a MediaStream source. Per the WPT test, the assignment `vid.currentTime = 42` must leave `currentTime` at `0` (or its actual elapsed value).
 
 <a id="defaultPlaybackRate"></a><a id="playbackRate"></a>

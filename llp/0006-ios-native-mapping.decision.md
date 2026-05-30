@@ -71,11 +71,14 @@ static let sessionQueue = DispatchQueue(label: "dev.ide.standardcamera.session",
 This mirrors `expo-camera`'s pattern and is the standard AVFoundation idiom. Reading state for getters (`active`, `readyState`) happens on the main thread without locking — these read atomic flags only.
 
 The capture graph is configured before `getUserMedia()` resolves, but
-`AVCaptureSession.startRunning()` is kicked asynchronously through
-`CaptureSource.startSessionIfNeeded()` instead of being awaited by the bridge.
-That helper coalesces startup requests from `getUserMedia()`, `<Video
-srcObject>`, and `play()` so a preview can attach to a cold session first and
-the blocking AVFoundation start remains serialized off the main thread.
+video `AVCaptureSession.startRunning()` is not kicked by `getUserMedia()`.
+Preview attachment and `ImageCapture.grabFrame()` are the frame consumers, so
+they request startup through `CaptureSource.startSessionIfNeeded()` after the
+preview layer has had a chance to attach to a cold session. That helper
+coalesces startup requests from `<Video srcObject>`, `play()`, and
+`ImageCapture` so the blocking AVFoundation start remains serialized off the
+main thread. When the last preview detaches, the source may pause the session
+without ending tracks; the next consumer restarts it on the same queue.
 
 ## First-frame detection
 

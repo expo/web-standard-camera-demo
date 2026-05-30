@@ -88,10 +88,15 @@ layer so the focused route is the only live preview consumer of the shared
 `MediaStream`. When the Home tab regains focus it reattaches `null → stream`
 instead of relying on a stale offscreen native view. Home also keys its native
 preview by a focus serial so a tab return creates a fresh native `<Video>` view
-even when the shared `MediaStream` object itself has not changed. Home waits a
-short focus-settle window before preview reattachment or auto-start so the iOS
-native tab animation is not sharing its first frames with AVFoundation preview
-startup work.
+even when the shared `MediaStream` object itself has not changed. The native
+module keeps this path cold rather than timer-gated: video `getUserMedia()`
+configures the capture graph but does not start it, and the last preview
+detachment pauses the session without ending tracks. A refocused Home preview
+therefore attaches before the serialized off-main `startRunning()` call.
+Explicit front/back, device, resolution, or frame-rate hot-swaps also await the
+previous standard stream's native capture-release helper before React detaches
+the old preview and attaches the replacement stream, so preview-layer session
+assignment does not race a still-stopping AVFoundation graph.
 
 ## Frame-bound demo mirroring
 

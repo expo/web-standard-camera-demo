@@ -163,7 +163,11 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
   }
 
   let stream = MediaStream(id: UUID().uuidString, tracks: tracks)
-  source.startSessionIfNeeded(reason: "getUserMedia", streamId: stream.id)
+  if videoDevice == nil {
+    // @ref LLP 0008#audio-build-session — Audio-only streams have no preview
+    // or ImageCapture consumer that can lazily request the session start.
+    source.startSessionIfNeeded(reason: "getUserMediaAudioOnly", streamId: stream.id)
+  }
   standardCameraTrace("native-gum-done", [
     "durationMs": (CFAbsoluteTimeGetCurrent() - gumStartedAt) * 1000,
     "tracks": tracks.count,

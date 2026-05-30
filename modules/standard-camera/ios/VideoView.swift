@@ -113,7 +113,7 @@ internal final class VideoView: ExpoView {
     mirroringLayer.onTransformWrite = nil
     previewRotationObservation?.invalidate()
     firstFrameObserver?.invalidate()
-    previewSource?.unregisterPreview(self)
+    detachPreviewSource(reason: "deinit")
   }
 
   private func syncMirrorFromLayerTransform() {
@@ -157,6 +157,25 @@ internal final class VideoView: ExpoView {
   // preview layer hasn't created its connection yet (no session attached).
   var previewConnectionEnabledForTesting: Bool? {
     previewLayer.connection?.isEnabled
+  }
+
+  private func detachPreviewSource(reason: String, streamId: String? = nil) {
+    guard let source = previewSource else { return }
+    let remainingPreviews = source.unregisterPreview(self)
+    previewSource = nil
+    standardCameraTrace("native-preview-source-detach", [
+      "remainingPreviews": remainingPreviews,
+      "reason": reason,
+      "streamId": streamId
+    ])
+    if remainingPreviews == 0 {
+      // @ref LLP 0006#concurrency — Let the capture graph cool down when no
+      // preview layer is rendering it. The next <Video>.play() or
+      // ImageCapture.grabFrame() request restarts the session on the
+      // serialized AVFoundation queue, avoiding hot preview-layer attachment
+      // on the main thread.
+      source.stopSessionForPause(reason: "preview-\(reason)")
+    }
   }
 
   // Called by `CaptureSource.setVideoEnabled` so the preview layer's
@@ -210,8 +229,7 @@ internal final class VideoView: ExpoView {
     currentPreviewRotationAngle = nil
     // Detach from any previous source so we don't receive stale preview-
     // enable callbacks after the stream changes.
-    previewSource?.unregisterPreview(self)
-    previewSource = nil
+    detachPreviewSource(reason: "replace")
 
     guard let stream = srcObject, let session = stream.captureSession else {
       standardCameraTrace("native-preview-attach-start", [

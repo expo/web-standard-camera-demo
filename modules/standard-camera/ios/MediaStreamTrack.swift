@@ -226,6 +226,16 @@ internal final class MediaStreamTrack: SharedObject {
     if kind != "video" || readyState == "ended" {
       return nil
     }
+    if let source {
+      // @ref LLP 0003#gum-build-session — Video getUserMedia() no longer
+      // starts capture by itself. A frame accessor is a real consumer, so it
+      // may request startup on the AVFoundation queue before polling pixels.
+      let wasCold = !source.session.isRunning
+      source.startSessionIfNeeded(reason: "getLatestFrame", traceSkips: false)
+      if wasCold {
+        return nil
+      }
+    }
     guard let frameSink = source?.frameSink,
           let latest = frameSink.copyLatestPixelBuffer() else {
       return nil
@@ -273,6 +283,7 @@ internal final class MediaStreamTrack: SharedObject {
     if kind != "audio" || readyState == "ended" {
       return nil
     }
+    source?.startSessionIfNeeded(reason: "getLatestAudioBuffer", traceSkips: false)
     guard let audioSink = source?.audioSink else {
       return nil
     }
