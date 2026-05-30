@@ -232,9 +232,12 @@ async function runOnDevice(requested: string | undefined, only?: string): Promis
     console.log('Opened test URL; waiting for results…');
     summary = await summaryPromise;
   } finally {
-    // --console blocks until the app exits; SIGTERM is forwarded to the app.
+    // --console blocks until the app exits. Sending SIGTERM to devicectl is
+    // forwarded to the app, which makes a successful physical run look like
+    // an end-of-suite crash on the phone. SIGKILL tears down only the local
+    // console helper, leaving the dev client running after WPT_DONE.
     try {
-      proc.kill();
+      proc.kill('SIGKILL');
     } catch {
       // ignore
     }

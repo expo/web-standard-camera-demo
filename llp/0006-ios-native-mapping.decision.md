@@ -80,6 +80,14 @@ coalesces startup requests from `<Video srcObject>`, `play()`, and
 main thread. When the last preview detaches, the source may pause the session
 without ending tracks; the next consumer restarts it on the same queue.
 
+Preview-layer session replacement is part of the same concurrency boundary even
+though the layer itself is mutated on the main thread. `AVCaptureVideoPreviewLayer`
+can internally open a session configuration transaction while `previewLayer.session`
+is being set or cleared, and AVFoundation throws if `stopRunning()` overlaps that
+transaction. A `<Video>` view therefore unregisters from the old `CaptureSource`
+first, performs the preview-layer session mutation, and only then enqueues the
+old source's pause on `MediaStream.sessionQueue`.
+
 ## First-frame detection
 
 The `loadeddata` event must fire when the first frame is rendered. We attach a hidden `AVCaptureVideoDataOutput` (a `FrameSink`) to the session in `getUserMedia`, and its `captureOutput(_:didOutput:from:)` delegate fires once per session. The view installs an `onFirstFrame` callback on the stream's frame sink when its `srcObject` is set, and that callback fires `onLoadedData` / `onDurationChange`.

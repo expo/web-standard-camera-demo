@@ -231,6 +231,11 @@ As of 2026-05-22 the canonical green-test claim is "49/49 on iPhone 15 Pro / iOS
 9. Pretty-print summary. Exit `0` if `failed === 0` and `timeout === 0`, else `1`.
 10. **Always** shut down the simulator on exit (success, failure, or signal), and kill any Metro/log-stream process that the script started.
 
+For physical-device runs, the `devicectl --console` process is local plumbing,
+not the test subject. After `WPT_DONE`, the runner kills that local console
+process with `SIGKILL`; using `SIGTERM` is forwarded by `devicectl` to the app
+and makes a successful run look like an end-of-suite app crash.
+
 ## Triggering
 
 The native development build config sets `expo-dev-client` `skipOnboarding` to

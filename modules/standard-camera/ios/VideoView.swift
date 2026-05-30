@@ -113,7 +113,9 @@ internal final class VideoView: ExpoView {
     mirroringLayer.onTransformWrite = nil
     previewRotationObservation?.invalidate()
     firstFrameObserver?.invalidate()
-    detachPreviewSource(reason: "deinit")
+    let sourceToPause = detachPreviewSource(reason: "deinit")
+    previewLayer.session = nil
+    sourceToPause?.stopSessionForPause(reason: "preview-deinit")
   }
 
   private func syncMirrorFromLayerTransform() {
@@ -159,8 +161,8 @@ internal final class VideoView: ExpoView {
     previewLayer.connection?.isEnabled
   }
 
-  private func detachPreviewSource(reason: String, streamId: String? = nil) {
-    guard let source = previewSource else { return }
+  private func detachPreviewSource(reason: String, streamId: String? = nil) -> CaptureSource? {
+    guard let source = previewSource else { return nil }
     let remainingPreviews = source.unregisterPreview(self)
     previewSource = nil
     standardCameraTrace("native-preview-source-detach", [
@@ -174,8 +176,13 @@ internal final class VideoView: ExpoView {
       // ImageCapture.grabFrame() request restarts the session on the
       // serialized AVFoundation queue, avoiding hot preview-layer attachment
       // on the main thread.
-      source.stopSessionForPause(reason: "preview-\(reason)")
+      // The caller pauses only after replacing the AVCaptureVideoPreviewLayer
+      // session, since AVFoundation may use an internal
+      // beginConfiguration/commitConfiguration pair for that layer mutation
+      // and stopRunning() cannot overlap it.
+      return source
     }
+    return nil
   }
 
   // Called by `CaptureSource.setVideoEnabled` so the preview layer's
@@ -229,7 +236,7 @@ internal final class VideoView: ExpoView {
     currentPreviewRotationAngle = nil
     // Detach from any previous source so we don't receive stale preview-
     // enable callbacks after the stream changes.
-    detachPreviewSource(reason: "replace")
+    let sourceToPause = detachPreviewSource(reason: "replace")
 
     guard let stream = srcObject, let session = stream.captureSession else {
       standardCameraTrace("native-preview-attach-start", [
@@ -245,6 +252,7 @@ internal final class VideoView: ExpoView {
         "durationMs": (CFAbsoluteTimeGetCurrent() - attachStartedAt) * 1000,
         "hadPreviewSession": hadPreviewSession
       ])
+      sourceToPause?.stopSessionForPause(reason: "preview-replace")
       return
     }
 
@@ -293,6 +301,9 @@ internal final class VideoView: ExpoView {
     if let source = videoTrack?.source {
       previewSource = source
       source.registerPreview(self)
+    }
+    if let sourceToPause, sourceToPause !== videoTrack?.source {
+      sourceToPause.stopSessionForPause(reason: "preview-replace")
     }
     standardCameraTrace("native-preview-attach-done", [
       "attaching": true,
