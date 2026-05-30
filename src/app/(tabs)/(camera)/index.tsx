@@ -7,6 +7,7 @@ import { useCamera, type CameraConstraints } from '@/contexts/CameraContext';
 import { useTheme } from '@/hooks/use-theme';
 import { displayFacingMode } from '@/lib/camera-facing';
 import { addTestRunStartListener } from '@/lib/camera-run-events';
+import { nowMs, round, traceNeuralLens } from '@/lib/neural-lens-trace';
 import { Video, type HTMLVideoElement } from '../../../../modules/standard-camera';
 
 // @ref LLP 0000 — Demo screen: the entire surface a developer interacts with
@@ -69,21 +70,68 @@ export default function HomeScreen(): React.JSX.Element {
     applyConstraints,
   } = useCamera();
   const videoRef = React.useRef<HTMLVideoElement>(null);
+  const statusRef = React.useRef(status);
+  const streamRef = React.useRef(stream);
+  const [screenFocused, setScreenFocused] = React.useState(false);
+  const [previewFocusSerial, setPreviewFocusSerial] = React.useState(0);
+  const activePreviewStream = screenFocused ? stream : null;
+  const previewKey = activePreviewStream
+    ? `home-preview-${previewFocusSerial}-${activePreviewStream.id}`
+    : `home-preview-${previewFocusSerial}-detached`;
+
+  React.useEffect(() => {
+    statusRef.current = status;
+    streamRef.current = stream;
+  }, [status, stream]);
 
   // Mirror the context stream onto the local Video element. The element only
-  // exists on this screen, so keeping the wiring here (rather than in the
-  // provider) avoids the provider needing to know about a DOM-like element.
+  // exists on this screen, so keeping the wiring here avoids the provider
+  // needing to know about a DOM-like element.
+  //
+  // @ref LLP 0012#global-camera-controls — Native tabs can keep inactive
+  // routes mounted. Detach the preview while Home is unfocused so another
+  // focused route's native preview layer is the only attached <Video>.
   React.useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    v.srcObject = stream;
-    if (stream) {
+    const attachStartedAt = nowMs();
+    traceNeuralLens('home-preview-srcobject-start', {
+      attaching: activePreviewStream !== null,
+      cameraStatus: status,
+      focusSerial: previewFocusSerial,
+      screenFocused,
+    });
+    v.srcObject = activePreviewStream;
+    if (activePreviewStream) {
       void v.play();
     }
-  }, [stream]);
+    traceNeuralLens('home-preview-srcobject-done', {
+      attaching: activePreviewStream !== null,
+      durationMs: round(nowMs() - attachStartedAt),
+      focusSerial: previewFocusSerial,
+    });
+  }, [activePreviewStream, previewFocusSerial, screenFocused, status]);
 
   // Run-tests deeplink stops the camera so the WPT runner gets a clean slate.
-  React.useEffect(() => addTestRunStartListener(stop), [stop]);
+  React.useEffect(() => addTestRunStartListener(() => stop('test-run-start')), [stop]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      traceNeuralLens('home-screen-focus', {
+        cameraStatus: statusRef.current,
+        hasStream: streamRef.current !== null,
+      });
+      setScreenFocused(true);
+      setPreviewFocusSerial((value) => value + 1);
+      return () => {
+        traceNeuralLens('home-screen-blur', {
+          cameraStatus: statusRef.current,
+          hasStream: streamRef.current !== null,
+        });
+        setScreenFocused(false);
+      };
+    }, [])
+  );
 
   // Focus-scoped auto-start. Native tabs can keep offscreen routes mounted;
   // tying this to focus avoids reopening AVFoundation behind WebXR/ARKit demos.
@@ -165,7 +213,7 @@ export default function HomeScreen(): React.JSX.Element {
   const onToggleCamera = React.useCallback((): void => {
     if (inlineStartStopDisabled) return;
     if (cameraRunning) {
-      stop();
+      stop('home-inline');
     } else {
       void start();
     }
@@ -213,9 +261,10 @@ export default function HomeScreen(): React.JSX.Element {
               isWebNarrow ? styles.webNarrowVideoContainer : null,
             ]}>
             <Video
+              key={previewKey}
               ref={videoRef}
               autoplay
-              srcObject={stream}
+              srcObject={activePreviewStream}
               style={[styles.video, isFront ? styles.mirroredVideo : null]}
             />
           </View>

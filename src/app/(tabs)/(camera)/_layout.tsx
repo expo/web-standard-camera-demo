@@ -36,7 +36,7 @@ export default function CameraStackLayout(): React.JSX.Element {
   const onPress = React.useCallback((): void => {
     if (disabled) return;
     if (standardRunning) {
-      stop();
+      stop('home-header');
     } else {
       void start();
     }
@@ -53,7 +53,7 @@ export default function CameraStackLayout(): React.JSX.Element {
           type: 'sfSymbol' as const,
           name: sfSymbol,
         },
-        identifier: 'standard-camera-start-stop',
+        identifier: 'home-camera-start-stop',
         onPress,
         tintColor,
         variant: 'plain' as const,

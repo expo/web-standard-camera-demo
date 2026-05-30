@@ -4,6 +4,10 @@ import Foundation
 
 internal func standardCameraTrace(_ event: String, _ payload: [String: Any?] = [:]) {
 #if DEBUG
+  let environment = ProcessInfo.processInfo.environment
+  let enabled = environment["STANDARD_CAMERA_TRACE"] == "1"
+    || environment["NEURAL_LENS_TRACE"] == "1"
+  guard enabled else { return }
   var body: [String: Any] = [
     "event": event,
     "ts": Int(Date().timeIntervalSince1970 * 1000)

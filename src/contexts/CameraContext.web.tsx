@@ -55,7 +55,7 @@ export interface CameraContextValue {
   lidarStatus: LiDARCameraStatus;
   lidarError: string | null;
   start: (next?: CameraConstraints) => Promise<void>;
-  stop: () => void;
+  stop: (reason?: string) => void;
   lockExternal: () => Promise<void>;
   unlockExternal: () => void;
   applyConstraints: (patch: Partial<CameraConstraints>) => void;
@@ -86,7 +86,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
   const streamRef = React.useRef<MediaStream | null>(null);
   const requestIdRef = React.useRef(0);
 
-  const stop = React.useCallback((): void => {
+  const stop = React.useCallback((_reason = 'unknown'): void => {
     requestIdRef.current += 1;
     const live = streamRef.current;
     streamRef.current = null;
@@ -257,7 +257,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       lidarError: null,
       start,
       stop,
-      lockExternal: async () => stop(),
+      lockExternal: async () => stop('external-lock'),
       unlockExternal: () => {},
       applyConstraints,
     }),

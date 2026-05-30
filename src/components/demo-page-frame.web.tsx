@@ -59,7 +59,7 @@ function useResolvedAction(action: DemoPageFrameProps['action']): DemoPageAction
   return {
     disabled,
     label,
-    onPress: running ? stop : () => void start(),
+    onPress: running ? () => stop('demo-inline-web') : () => void start(),
     running,
     testID: 'standard-camera-start-stop',
   };

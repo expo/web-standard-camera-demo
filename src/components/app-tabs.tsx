@@ -1,8 +1,10 @@
 import { usePathname } from 'expo-router';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
+import * as React from 'react';
 import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
+import { notifyAppTabPress } from '@/lib/app-tab-events';
 
 // Routes whose content is painted on a hard dark background. Their stack
 // headers opt into the expo-router `headerUserInterfaceStyle` patch per screen;
@@ -26,12 +28,20 @@ export default function AppTabs() {
       ? 'light'
       : systemScheme;
   const colors = Colors[effectiveScheme];
+  const screenListeners = React.useMemo(() => (
+    ({ route }: { route: { name: string } }) => ({
+      tabPress: () => {
+        notifyAppTabPress(route.name);
+      },
+    })
+  ), []);
 
   return (
     <NativeTabs
       backgroundColor={colors.background}
       indicatorColor={colors.backgroundElement}
       labelStyle={{ selected: { color: colors.text } }}
+      screenListeners={screenListeners}
       unstable_nativeProps={{ colorScheme: forceDark ? 'dark' : 'inherit' }}>
       <NativeTabs.Trigger name="(camera)">
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>

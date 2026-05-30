@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   detectTfjsCameraFrame,
   makeObjectSceneSummary,
+  preloadTfjsObjectModel,
   type ObjectDetectionBox,
 } from './tfjs-object-detector';
 
@@ -37,6 +38,21 @@ describe('makeObjectSceneSummary', () => {
     expect(summary.label).toBe('Object-first scene');
     expect(summary.reason).toBe('umbrella');
     expect(summary.confidence).toBe(0.58);
+  });
+});
+
+describe('preloadTfjsObjectModel', () => {
+  test('aborts before loading TensorFlow when the signal is already cancelled', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      await preloadTfjsObjectModel({ signal: controller.signal });
+      throw new Error('Expected preloadTfjsObjectModel to abort');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe('AbortError');
+    }
   });
 });
 

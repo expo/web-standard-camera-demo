@@ -3,7 +3,7 @@ import * as React from 'react';
 import { cameraConstraintsEqual, mergeCameraConstraints } from '@/lib/camera-constraints';
 import { KNOWN_FACING_AVAILABILITY, type CameraFacingAvailability } from '@/lib/camera-facing';
 import { createCameraOwnershipGate } from '@/lib/camera-ownership';
-import { nowMs, round, traceNeuralLens } from '@/lib/neural-lens-trace';
+import { isNeuralLensTraceEnabled, nowMs, round, traceNeuralLens } from '@/lib/neural-lens-trace';
 
 import {
   NativeStandardCamera,
@@ -90,7 +90,7 @@ export interface CameraContextValue {
    * constraints if none provided). Hot-swaps a running stream if one exists.
    */
   start: (next?: CameraConstraints) => Promise<void>;
-  stop: () => void;
+  stop: (reason?: string) => void;
   /**
    * Tear down the getUserMedia stream so another subsystem can take the
    * AVCaptureDevice (ARKit), and gate focused standard-camera consumers until
@@ -110,9 +110,12 @@ export interface CameraContextValue {
 const DEFAULT_CONSTRAINTS: CameraConstraints = { facingMode: 'environment' };
 const CAMERA_HARDWARE_RELEASE_DELAY_MS = 150;
 
-// Module-load trace so we can confirm fresh JS reached the phone — appears
-// at the top of the JS evaluation, before any React renders.
-console.log(`CAMERA_CTX module-load @ ${new Date().toISOString()}`);
+function cameraContextLog(message: () => string): void {
+  if (!isNeuralLensTraceEnabled()) return;
+  console.log(message());
+}
+
+cameraContextLog(() => `CAMERA_CTX module-load @ ${new Date().toISOString()}`);
 
 type ReleasableNativeStream = {
   _native?: {
@@ -174,7 +177,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     };
   }, []);
 
-  const stop = React.useCallback((): void => {
+  const stop = React.useCallback((reason = 'unknown'): void => {
     const stopStartedAt = nowMs();
     const stopRequestId = startRequestRef.current + 1;
     startRequestRef.current = stopRequestId;
@@ -191,6 +194,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     traceNeuralLens('camera-context-stop', {
       durationMs: round(nowMs() - stopStartedAt),
       hadStream: live !== null,
+      reason,
       tracks: live?.getTracks().length ?? 0,
     });
     if (mountedRef.current) {
@@ -219,7 +223,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
     // @ref LLP 0013#camera-ownership-handoff — Pasted device logs need to
     // prove whether WebXR actually acquired the external camera lock before a
     // standard getUserMedia start could steal AVFoundation from ARKit.
-    console.log(`CAMERA_CTX external-lock engaged ${JSON.stringify({
+    cameraContextLog(() => `CAMERA_CTX external-lock engaged ${JSON.stringify({
       hadPendingStart: pendingMedia !== null,
       hadStream: live !== null,
     })}`);
@@ -249,7 +253,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
 
   const unlockExternal = React.useCallback((): void => {
     // @ref LLP 0013#camera-ownership-handoff
-    console.log('CAMERA_CTX external-lock released');
+    cameraContextLog(() => 'CAMERA_CTX external-lock released');
     cameraOwnershipGate.unlockExternal();
     if (mountedRef.current) {
       setExternalLocked(false);
@@ -280,7 +284,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         hasStream: streamRef.current !== null,
       });
       if (blockReason === 'external-lock') {
-        console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
+        cameraContextLog(() => `CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
         traceNeuralLens('camera-context-start-blocked', {
           reason: blockReason,
           sinceCallMs: round(nowMs() - startStartedAt),
@@ -288,7 +292,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         return;
       }
       if (blockReason === 'duplicate-default-start') {
-        console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
+        cameraContextLog(() => `CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
         traceNeuralLens('camera-context-start-blocked', {
           reason: blockReason,
           sinceCallMs: round(nowMs() - startStartedAt),
@@ -304,7 +308,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         hasStream: streamRef.current !== null,
       });
       if (blockReason === 'external-lock') {
-        console.log(`CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
+        cameraContextLog(() => `CAMERA_CTX start blocked external-lock ${JSON.stringify(effective)}`);
         traceNeuralLens('camera-context-start-blocked', {
           reason: blockReason,
           sinceCallMs: round(nowMs() - startStartedAt),
@@ -312,7 +316,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         return;
       }
       if (blockReason === 'duplicate-default-start') {
-        console.log(`CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
+        cameraContextLog(() => `CAMERA_CTX start skipped in-flight ${JSON.stringify(effective)}`);
         traceNeuralLens('camera-context-start-blocked', {
           reason: blockReason,
           sinceCallMs: round(nowMs() - startStartedAt),
@@ -343,7 +347,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
       setError(null);
       setStatus('requesting');
       setUserStopped(false);
-      console.log(`CAMERA_CTX start req=${requestId} ${JSON.stringify(effective)}`);
+      cameraContextLog(() => `CAMERA_CTX start req=${requestId} ${JSON.stringify(effective)}`);
 
       const video: MediaTrackConstraints = {};
       if (effective.deviceId) {
@@ -377,9 +381,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
           requestId,
           tracks: s.getVideoTracks().length,
         });
-        console.log(
-          `CAMERA_CTX gUM-ok req=${requestId} tracks=${s.getVideoTracks().length}`
-        );
+        cameraContextLog(() => `CAMERA_CTX gUM-ok req=${requestId} tracks=${s.getVideoTracks().length}`);
         if (!mountedRef.current || requestId !== startRequestRef.current) {
           traceNeuralLens('camera-context-gum-stale', {
             requestId,
@@ -412,9 +414,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         }
       } catch (e) {
         const err = e as Error & { name?: string; constraint?: string };
-        console.log(
-          `CAMERA_CTX gUM-fail req=${requestId} ${err.name ?? 'Error'}: ${err.message}`
-        );
+        cameraContextLog(() => `CAMERA_CTX gUM-fail req=${requestId} ${err.name ?? 'Error'}: ${err.message}`);
         if (!mountedRef.current || requestId !== startRequestRef.current) return;
         traceNeuralLens('camera-context-gum-error', {
           constraint: err.constraint ?? null,
@@ -505,7 +505,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }): Rea
         // matching native session has established ownership and then stops.
         const decision = cameraOwnershipGate.handleExternalSessionEvent(event);
         if (!decision.accepted) {
-          console.log(`CAMERA_CTX lidar event ignored ${JSON.stringify({
+          cameraContextLog(() => `CAMERA_CTX lidar event ignored ${JSON.stringify({
             activeSessionId: cameraOwnershipGate.activeExternalSessionId(),
             reason: decision.reason,
             sessionId: event.sessionId,

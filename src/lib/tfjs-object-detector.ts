@@ -93,6 +93,13 @@ export interface TfjsObjectResult {
 export type TfjsModelWeightSource = 'metro-asset' | 'mixed' | 'native-bundle';
 export type TfjsModelLoadPhase = 'idle' | 'runtime' | 'weights' | 'graph' | 'warmup' | 'ready' | 'error';
 export type TfjsModelStatus = 'error' | 'idle' | 'loading' | 'ready';
+export type TfjsObjectDetectionStage =
+  | 'model'
+  | 'tensor'
+  | 'graph'
+  | 'output-data'
+  | 'nms'
+  | 'postprocess';
 
 type Tfjs = typeof TfjsModule;
 
@@ -143,12 +150,15 @@ type MetroAssetModule = string | number | { height: number; uri: string; width: 
 type LoadedModelAssetBuffer = { buffer: ArrayBuffer; source: TfjsModelWeightSource };
 type LoadedWeightData = { buffer: ArrayBuffer; source: TfjsModelWeightSource };
 type BundledModelShard = { filename: string; moduleId: MetroAssetModule };
+type AbortableOptions = { signal?: AbortSignal };
 
-const DETECTOR_MAX_EDGE = 320;
+const DETECTOR_MAX_EDGE = 256;
 const DEFAULT_MAX_BOXES = 8;
 const DEFAULT_MIN_SCORE = 0.42;
 const MODEL_ASSET_TIMEOUT_MS = 20000;
 const FILE_READ_CHUNK_BYTES = 1024 * 1024;
+const ARRAY_BUFFER_COPY_CHUNK_BYTES = 1024 * 1024;
+const CAMERA_SAMPLE_ROWS_PER_YIELD = 8;
 // @ref LLP 0012#demo-6-tensorflowjs-object-lens — the demo vendors COCO-SSD
 // model JSON and weight shards so iOS can classify without fetching a model.
 const BUNDLED_MODEL_DIR = 'coco-ssd-lite-mobilenet-v2';
@@ -170,11 +180,21 @@ const cacheListeners = new Set<(info: TfjsObjectCacheInfo) => void>();
 
 export async function detectTfjsObjectProbe(
   probe: ObjectProbeId,
-  options?: { maxBoxes?: number; minScore?: number }
+  options?: {
+    maxBoxes?: number;
+    minScore?: number;
+    onStage?: (stage: TfjsObjectDetectionStage) => void;
+    signal?: AbortSignal;
+  }
 ): Promise<TfjsObjectResult> {
-  const model = await loadTfjsObjectModel();
+  throwIfAborted(options?.signal);
+  options?.onStage?.('model');
+  const model = await loadTfjsObjectModel(options);
+  throwIfAborted(options?.signal);
+  options?.onStage?.('tensor');
   const input = await createProbeTensor(model.runtime.tf, probe);
   try {
+    throwIfAborted(options?.signal);
     return await detectTfjsObjects(
       model,
       input,
@@ -191,8 +211,8 @@ export async function detectTfjsObjectProbe(
   }
 }
 
-export async function preloadTfjsObjectModel(): Promise<TfjsObjectCacheInfo> {
-  await loadTfjsObjectModel();
+export async function preloadTfjsObjectModel(options?: AbortableOptions): Promise<TfjsObjectCacheInfo> {
+  await loadTfjsObjectModel(options);
   return getTfjsObjectCacheInfo();
 }
 
@@ -206,13 +226,22 @@ export function subscribeTfjsObjectCacheInfo(listener: (info: TfjsObjectCacheInf
 
 export async function detectTfjsCameraFrame(
   frame: TfjsCameraFrame,
-  options?: { maxBoxes?: number; minScore?: number; rotateForPortrait?: boolean; signal?: AbortSignal }
+  options?: {
+    maxBoxes?: number;
+    minScore?: number;
+    onStage?: (stage: TfjsObjectDetectionStage) => void;
+    rotateForPortrait?: boolean;
+    signal?: AbortSignal;
+  }
 ): Promise<TfjsObjectResult> {
   throwIfAborted(options?.signal);
-  const model = await loadTfjsObjectModel();
+  options?.onStage?.('model');
+  const model = await loadTfjsObjectModel(options);
   throwIfAborted(options?.signal);
+  options?.onStage?.('tensor');
   const input = await createCameraFrameTensor(model.runtime.tf, frame, {
     rotateForPortrait: options?.rotateForPortrait,
+    signal: options?.signal,
   });
   try {
     throwIfAborted(options?.signal);
@@ -235,9 +264,17 @@ export async function detectTfjsCameraFrame(
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
+  throw createAbortError();
+}
+
+function createAbortError(): Error {
   const error = new Error('Detection aborted');
   error.name = 'AbortError';
-  throw error;
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 export function clearTfjsObjectDetectorCache(): void {
@@ -325,7 +362,8 @@ export function makeObjectSceneSummary(detections: readonly ObjectDetectionBox[]
   };
 }
 
-async function loadTfjsObjectModel(): Promise<ObjectModel> {
+async function loadTfjsObjectModel(options?: AbortableOptions): Promise<ObjectModel> {
+  throwIfAborted(options?.signal);
   traceNeuralLens('tfjs-model-request', {
     hasModelPromise: modelPromise !== null,
     modelLoadCount,
@@ -340,45 +378,66 @@ async function loadTfjsObjectModel(): Promise<ObjectModel> {
       });
       setModelLoadState('loading', 'runtime');
       const runtime = await ensureTfjsRuntime();
+      throwIfAborted(options?.signal);
       await yieldToUi();
+      throwIfAborted(options?.signal);
       const start = Date.now();
-      const graph = await loadBundledCocoSsdGraphModel(runtime);
-      setModelLoadState('loading', 'warmup');
-      await yieldToUi();
-      const warmupStartedAt = nowMs();
-      traceNeuralLens('tfjs-model-warmup-start', {
-        backend: runtime.info.backend,
-      });
-      const zeroTensor = runtime.tf.zeros([1, 300, 300, 3], 'int32');
-      const warmup = await graph.executeAsync(zeroTensor);
-      await Promise.all(asTensorArray(warmup).map((tensor) => tensor.data()));
-      runtime.tf.dispose(warmup);
-      zeroTensor.dispose();
-      traceNeuralLens('tfjs-model-warmup-done', {
-        durationMs: round(nowMs() - warmupStartedAt),
-      });
-      modelLoadCount += 1;
-      setModelLoadState('ready', 'ready');
-      traceNeuralLens('tfjs-model-build-done', {
-        backend: runtime.info.backend,
-        modelLoadCount,
-        totalMs: round(nowMs() - modelStartedAt),
-      });
-      return {
-        graph,
-        loadMs: Date.now() - start,
-        runtime,
-      };
+      let graph: GraphModel | null = await loadBundledCocoSsdGraphModel(runtime, options);
+      try {
+        throwIfAborted(options?.signal);
+        setModelLoadState('loading', 'warmup');
+        await yieldToUi();
+        throwIfAborted(options?.signal);
+        const warmupStartedAt = nowMs();
+        traceNeuralLens('tfjs-model-warmup-start', {
+          backend: runtime.info.backend,
+        });
+        const zeroTensor = runtime.tf.zeros([1, 300, 300, 3], 'int32');
+        let warmup: TfjsModule.Tensor | TfjsModule.Tensor[] | null = null;
+        try {
+          warmup = await graph.executeAsync(zeroTensor);
+          throwIfAborted(options?.signal);
+          await Promise.all(asTensorArray(warmup).map((tensor) => tensor.data()));
+          throwIfAborted(options?.signal);
+        } finally {
+          if (warmup) runtime.tf.dispose(warmup);
+          zeroTensor.dispose();
+        }
+        traceNeuralLens('tfjs-model-warmup-done', {
+          durationMs: round(nowMs() - warmupStartedAt),
+        });
+        modelLoadCount += 1;
+        setModelLoadState('ready', 'ready');
+        traceNeuralLens('tfjs-model-build-done', {
+          backend: runtime.info.backend,
+          modelLoadCount,
+          totalMs: round(nowMs() - modelStartedAt),
+        });
+        const loadedGraph = graph;
+        graph = null;
+        return {
+          graph: loadedGraph,
+          loadMs: Date.now() - start,
+          runtime,
+        };
+      } finally {
+        graph?.dispose();
+      }
     })();
   }
   try {
     return await modelPromise;
   } catch (error) {
     modelPromise = null;
-    setModelLoadState('error', 'error');
-    traceNeuralLens('tfjs-model-build-error', {
-      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-    });
+    if (isAbortError(error)) {
+      setModelLoadState('idle', 'idle');
+      traceNeuralLens('tfjs-model-build-abort');
+    } else {
+      setModelLoadState('error', 'error');
+      traceNeuralLens('tfjs-model-build-error', {
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      });
+    }
     throw error;
   }
 }
@@ -478,10 +537,12 @@ async function detectTfjsObjects(
   model: ObjectModel,
   input: ObjectInput,
   source: TfjsObjectSource,
-  options?: { maxBoxes?: number; minScore?: number }
+  options?: { maxBoxes?: number; minScore?: number; onStage?: (stage: TfjsObjectDetectionStage) => void; signal?: AbortSignal }
 ): Promise<TfjsObjectResult> {
   const detectStart = nowMs();
   const tf = model.runtime.tf;
+  throwIfAborted(options?.signal);
+  options?.onStage?.('graph');
   traceNeuralLens('tfjs-detect-graph-start', {
     backend: model.runtime.info.backend,
     inputHeight: input.height,
@@ -489,31 +550,50 @@ async function detectTfjsObjects(
     source: source.kind,
   });
   const batched = tf.tidy(() => tf.expandDims(input.tensor));
-  const output = asTensorArray(await model.graph.executeAsync(batched));
-  traceNeuralLens('tfjs-detect-graph-done', {
-    durationMs: round(nowMs() - detectStart),
-    source: source.kind,
-  });
-  const scoresTensor = output[0];
-  const boxesTensor = output[1];
-  if (!scoresTensor || !boxesTensor) {
+  let output: TfjsModule.Tensor[] | null = null;
+  let disposedGraphTensors = false;
+  let scores: Float32Array | Int32Array | Uint8Array = new Float32Array();
+  let boxes: Float32Array | Int32Array | Uint8Array = new Float32Array();
+  let scoresShape: readonly number[] = [];
+  let boxesShape: readonly number[] = [];
+
+  try {
+    output = asTensorArray(await model.graph.executeAsync(batched));
+    traceNeuralLens('tfjs-detect-graph-done', {
+      durationMs: round(nowMs() - detectStart),
+      source: source.kind,
+    });
+    throwIfAborted(options?.signal);
+    const scoresTensor = output[0];
+    const boxesTensor = output[1];
+    if (!scoresTensor || !boxesTensor) {
+      throw new Error('COCO-SSD graph returned an unexpected output shape');
+    }
+    scoresShape = scoresTensor.shape;
+    boxesShape = boxesTensor.shape;
+    options?.onStage?.('output-data');
+    const dataStartedAt = nowMs();
+    [scores, boxes] = await Promise.all([scoresTensor.data(), boxesTensor.data()]);
+    traceNeuralLens('tfjs-detect-output-data-done', {
+      durationMs: round(nowMs() - dataStartedAt),
+      source: source.kind,
+    });
+    throwIfAborted(options?.signal);
     batched.dispose();
     tf.dispose(output);
-    throw new Error('COCO-SSD graph returned an unexpected output shape');
+    disposedGraphTensors = true;
+    output = null;
+  } finally {
+    if (!disposedGraphTensors) {
+      batched.dispose();
+      if (output) tf.dispose(output);
+    }
   }
-  const scoresShape = scoresTensor.shape;
-  const boxesShape = boxesTensor.shape;
-  const dataStartedAt = nowMs();
-  const [scores, boxes] = await Promise.all([scoresTensor.data(), boxesTensor.data()]);
-  traceNeuralLens('tfjs-detect-output-data-done', {
-    durationMs: round(nowMs() - dataStartedAt),
-    source: source.kind,
-  });
-  batched.dispose();
-  tf.dispose(output);
 
+  options?.onStage?.('nms');
   const nmsStartedAt = nowMs();
   const [maxScores, classes] = calculateMaxScores(scores, scoresShape[1] ?? 0, scoresShape[2] ?? 0);
+  throwIfAborted(options?.signal);
   const boxes2d = tf.tensor2d(boxes, [boxesShape[1] ?? 0, boxesShape[3] ?? 4]);
   const scores1d = tf.tensor1d(maxScores);
   let indexesTensor: TfjsModule.Tensor1D | null = null;
@@ -526,7 +606,9 @@ async function detectTfjsObjects(
       options?.minScore ?? DEFAULT_MIN_SCORE,
       options?.minScore ?? DEFAULT_MIN_SCORE
     );
+    throwIfAborted(options?.signal);
     indexes = Array.from(await indexesTensor.data());
+    throwIfAborted(options?.signal);
   } finally {
     indexesTensor?.dispose();
     boxes2d.dispose();
@@ -538,6 +620,7 @@ async function detectTfjsObjects(
     source: source.kind,
   });
 
+  options?.onStage?.('postprocess');
   const detections = buildDetectedObjects(
     input.width,
     input.height,
@@ -563,10 +646,15 @@ async function detectTfjsObjects(
   };
 }
 
-async function loadBundledCocoSsdGraphModel(runtime: ObjectRuntime): Promise<GraphModel> {
+async function loadBundledCocoSsdGraphModel(
+  runtime: ObjectRuntime,
+  options?: AbortableOptions
+): Promise<GraphModel> {
+  throwIfAborted(options?.signal);
   setModelLoadState('loading', 'weights');
   const weightsStartedAt = nowMs();
-  const weightData = await loadBundledWeightData();
+  const weightData = await loadBundledWeightData(options);
+  throwIfAborted(options?.signal);
   traceNeuralLens('tfjs-model-weights-ready', {
     bytes: weightData.buffer.byteLength,
     durationMs: round(nowMs() - weightsStartedAt),
@@ -574,13 +662,16 @@ async function loadBundledCocoSsdGraphModel(runtime: ObjectRuntime): Promise<Gra
   });
   const modelJson = getBundledModelJson();
   await yieldToUi();
+  throwIfAborted(options?.signal);
   setModelLoadState('loading', 'graph');
   const converterStartedAt = nowMs();
   const tfconv = await import('@tensorflow/tfjs-converter');
+  throwIfAborted(options?.signal);
   traceNeuralLens('tfjs-model-converter-import-done', {
     durationMs: round(nowMs() - converterStartedAt),
   });
   await yieldToUi();
+  throwIfAborted(options?.signal);
   const handler = runtime.tf.io.fromMemory({
     convertedBy: modelJson.convertedBy,
     format: modelJson.format,
@@ -593,15 +684,18 @@ async function loadBundledCocoSsdGraphModel(runtime: ObjectRuntime): Promise<Gra
   const graph = await withTimeout(
     tfconv.loadGraphModel(handler, undefined, runtime.tf.io),
     MODEL_ASSET_TIMEOUT_MS,
-    'COCO-SSD graph load'
+    'COCO-SSD graph load',
+    options?.signal
   );
+  throwIfAborted(options?.signal);
   traceNeuralLens('tfjs-model-graph-load-done', {
     durationMs: round(nowMs() - graphStartedAt),
   });
   return graph;
 }
 
-async function loadBundledWeightData(): Promise<LoadedWeightData> {
+async function loadBundledWeightData(options?: AbortableOptions): Promise<LoadedWeightData> {
+  throwIfAborted(options?.signal);
   if (weightDataPromise) {
     traceNeuralLens('tfjs-model-weights-cache-hit', {
       modelWeightSource: modelWeightSource ?? null,
@@ -615,13 +709,16 @@ async function loadBundledWeightData(): Promise<LoadedWeightData> {
       const sources = new Set<TfjsModelWeightSource>();
       const shards = getBundledModelShards();
       for (let i = 0; i < shards.length; i += 1) {
+        throwIfAborted(options?.signal);
         const shard = shards[i];
         const shardStartedAt = nowMs();
         const asset = await withTimeout(
-          readBundledAssetArrayBuffer(shard.filename, shard.moduleId as MetroAssetModule),
+          readBundledAssetArrayBuffer(shard.filename, shard.moduleId as MetroAssetModule, options),
           MODEL_ASSET_TIMEOUT_MS,
-          `COCO-SSD weight shard ${i + 1}`
+          `COCO-SSD weight shard ${i + 1}`,
+          options?.signal
         );
+        throwIfAborted(options?.signal);
         traceNeuralLens('tfjs-model-weight-shard-done', {
           bytes: asset.buffer.byteLength,
           durationMs: round(nowMs() - shardStartedAt),
@@ -632,6 +729,7 @@ async function loadBundledWeightData(): Promise<LoadedWeightData> {
         buffers.push(asset.buffer);
         sources.add(asset.source);
         await yieldToUi();
+        throwIfAborted(options?.signal);
       }
       const source = sources.size === 1
         ? [...sources][0] ?? 'metro-asset'
@@ -639,7 +737,8 @@ async function loadBundledWeightData(): Promise<LoadedWeightData> {
       modelWeightSource = source;
       emitTfjsObjectCacheInfo();
       const concatStartedAt = nowMs();
-      const buffer = await concatArrayBuffers(buffers);
+      const buffer = await concatArrayBuffers(buffers, options?.signal);
+      throwIfAborted(options?.signal);
       traceNeuralLens('tfjs-model-weights-load-done', {
         bytes: buffer.byteLength,
         concatMs: round(nowMs() - concatStartedAt),
@@ -657,15 +756,21 @@ async function loadBundledWeightData(): Promise<LoadedWeightData> {
   } catch (error) {
     weightDataPromise = null;
     modelWeightSource = null;
+    if (isAbortError(error)) {
+      traceNeuralLens('tfjs-model-weights-load-abort');
+    }
     throw error;
   }
 }
 
 async function readBundledAssetArrayBuffer(
   filename: string,
-  moduleId: MetroAssetModule
+  moduleId: MetroAssetModule,
+  options?: AbortableOptions
 ): Promise<LoadedModelAssetBuffer> {
-  const nativeBuffer = await readNativeBundledModelAsset(filename);
+  throwIfAborted(options?.signal);
+  const nativeBuffer = await readNativeBundledModelAsset(filename, options);
+  throwIfAborted(options?.signal);
   if (nativeBuffer) {
     traceNeuralLens('tfjs-model-weight-source', {
       bytes: nativeBuffer.byteLength,
@@ -679,31 +784,38 @@ async function readBundledAssetArrayBuffer(
   }
 
   const { Asset } = await import('expo-asset');
+  throwIfAborted(options?.signal);
   const asset = Asset.fromModule(moduleId);
 
   if (!isWebRuntime()) {
     const downloaded = await asset.downloadAsync();
+    throwIfAborted(options?.signal);
     traceNeuralLens('tfjs-model-weight-source', {
       filename,
       source: 'metro-asset',
       uriKind: downloaded.localUri ? 'local' : 'remote',
     });
     return {
-      buffer: await readAssetArrayBuffer(downloaded.localUri ?? downloaded.uri),
+      buffer: await readAssetArrayBuffer(downloaded.localUri ?? downloaded.uri, options),
       source: 'metro-asset',
     };
   }
 
   return {
-    buffer: await readAssetArrayBuffer(asset.uri),
+    buffer: await readAssetArrayBuffer(asset.uri, options),
     source: 'metro-asset',
   };
 }
 
-async function readNativeBundledModelAsset(filename: string): Promise<ArrayBuffer | null> {
+async function readNativeBundledModelAsset(
+  filename: string,
+  options?: AbortableOptions
+): Promise<ArrayBuffer | null> {
   if (isWebRuntime()) return null;
   try {
+    throwIfAborted(options?.signal);
     const { File, FileMode, Paths } = await import('expo-file-system');
+    throwIfAborted(options?.signal);
     const file = new File(
       ensureFileUri(Paths.bundle.uri),
       NATIVE_MODEL_ROOT,
@@ -711,8 +823,9 @@ async function readNativeBundledModelAsset(filename: string): Promise<ArrayBuffe
       filename
     );
     if (!file.exists) return null;
-    return await readFileWithHandle(file, FileMode.ReadOnly);
-  } catch {
+    return await readFileWithHandle(file, FileMode.ReadOnly, options?.signal);
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     return null;
   }
 }
@@ -726,22 +839,26 @@ function isWebRuntime(): boolean {
   return process.env.EXPO_OS === 'web';
 }
 
-async function readAssetArrayBuffer(uri: string): Promise<ArrayBuffer> {
+async function readAssetArrayBuffer(uri: string, options?: AbortableOptions): Promise<ArrayBuffer> {
+  throwIfAborted(options?.signal);
   if (uri.startsWith('file://')) {
     const { File: ExpoFile, FileMode } = await import('expo-file-system');
-    return await readFileWithHandle(new ExpoFile(uri), FileMode.ReadOnly);
+    return await readFileWithHandle(new ExpoFile(uri), FileMode.ReadOnly, options?.signal);
   }
-  const response = await fetch(uri);
+  const response = await fetch(uri, { signal: options?.signal });
   if (!response.ok) {
     throw new Error(`Could not load bundled model asset ${response.status}: ${uri}`);
   }
+  throwIfAborted(options?.signal);
   return await response.arrayBuffer();
 }
 
 async function readFileWithHandle(
   file: Pick<ExpoFileSystemFile, 'open'>,
-  readOnlyMode: ExpoFileMode
+  readOnlyMode: ExpoFileMode,
+  signal?: AbortSignal
 ): Promise<ArrayBuffer> {
+  throwIfAborted(signal);
   const handle: FileHandle = file.open(readOnlyMode);
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -749,10 +866,12 @@ async function readFileWithHandle(
 
   try {
     while (remaining == null || remaining > 0) {
+      throwIfAborted(signal);
       const length = remaining == null
         ? FILE_READ_CHUNK_BYTES
         : Math.min(FILE_READ_CHUNK_BYTES, remaining);
       const chunk = handle.readBytes(length);
+      throwIfAborted(signal);
       if (chunk.byteLength === 0) break;
       chunks.push(chunk);
       total += chunk.byteLength;
@@ -760,16 +879,21 @@ async function readFileWithHandle(
         remaining -= chunk.byteLength;
       }
       await yieldToUi();
+      throwIfAborted(signal);
     }
   } finally {
     handle.close();
   }
 
+  throwIfAborted(signal);
   const out = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {
+    throwIfAborted(signal);
     out.set(chunk, offset);
     offset += chunk.byteLength;
+    await yieldToEventLoop();
+    throwIfAborted(signal);
   }
   return out.buffer;
 }
@@ -784,30 +908,61 @@ function yieldToUi(): Promise<void> {
   });
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+  signal?: AbortSignal
+): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
+  let abortListener: (() => void) | null = null;
   try {
+    throwIfAborted(signal);
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
         timeout = setTimeout(() => {
           reject(new Error(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
+        if (signal) {
+          abortListener = () => {
+            reject(createAbortError());
+          };
+          signal.addEventListener('abort', abortListener, { once: true });
+        }
       }),
     ]);
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (abortListener && signal) {
+      signal.removeEventListener('abort', abortListener);
+    }
   }
 }
 
-async function concatArrayBuffers(buffers: readonly ArrayBuffer[]): Promise<ArrayBuffer> {
+async function concatArrayBuffers(buffers: readonly ArrayBuffer[], signal?: AbortSignal): Promise<ArrayBuffer> {
+  throwIfAborted(signal);
   const total = buffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
   const out = new Uint8Array(total);
   let offset = 0;
   for (const buffer of buffers) {
-    out.set(new Uint8Array(buffer), offset);
-    offset += buffer.byteLength;
-    await yieldToUi();
+    throwIfAborted(signal);
+    const source = new Uint8Array(buffer);
+    for (let readOffset = 0; readOffset < source.byteLength; readOffset += ARRAY_BUFFER_COPY_CHUNK_BYTES) {
+      throwIfAborted(signal);
+      const end = Math.min(source.byteLength, readOffset + ARRAY_BUFFER_COPY_CHUNK_BYTES);
+      const chunk = source.subarray(readOffset, end);
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+      await yieldToEventLoop();
+      throwIfAborted(signal);
+    }
   }
   return out.buffer;
 }
@@ -966,7 +1121,7 @@ async function decodeProbeInput(probe: ObjectProbeId): Promise<CachedProbeInput>
 async function createCameraFrameTensor(
   tf: Tfjs,
   frame: TfjsCameraFrame,
-  options?: { rotateForPortrait?: boolean }
+  options?: { rotateForPortrait?: boolean; signal?: AbortSignal }
 ): Promise<ObjectInput> {
   const start = nowMs();
   if (frame.width <= 0 || frame.height <= 0) {
@@ -987,8 +1142,9 @@ async function createCameraFrameTensor(
   });
   const sampleStartedAt = nowMs();
   const rgb = frame._data
-    ? samplePackedCameraBytesToRgb(frame, target.width, target.height, options)
+    ? await samplePackedCameraBytesToRgb(frame, target.width, target.height, options)
     : await sampleExternalImageToRgb(frame, target.width, target.height);
+  throwIfAborted(options?.signal);
   traceNeuralLens('tfjs-camera-tensor-sample-done', {
     durationMs: round(nowMs() - sampleStartedAt),
     inputBytes: frame._data?.byteLength ?? null,
@@ -1046,27 +1202,62 @@ function sampleRgbaToRgb(
   return rgb;
 }
 
-function samplePackedCameraBytesToRgb(
+async function samplePackedCameraBytesToRgb(
   frame: TfjsCameraFrame,
   targetWidth: number,
   targetHeight: number,
-  options?: { rotateForPortrait?: boolean }
-): Int32Array {
+  options?: { rotateForPortrait?: boolean; signal?: AbortSignal }
+): Promise<Int32Array> {
   const source = frame._data;
   if (!source) throw new Error('Camera frame has no packed pixel data');
   const rgb = new Int32Array(targetWidth * targetHeight * 3);
   const isBgra = frame._format === 'bgra8unorm';
+  const sourceByTargetX = new Int32Array(targetWidth);
+  const sourceByTargetY = new Int32Array(targetHeight);
+
+  if (options?.rotateForPortrait) {
+    for (let y = 0; y < targetHeight; y += 1) {
+      sourceByTargetY[y] = Math.min(
+        frame.width - 1,
+        Math.floor(((y + 0.5) * frame.width) / targetHeight)
+      );
+    }
+    for (let x = 0; x < targetWidth; x += 1) {
+      sourceByTargetX[x] = Math.min(
+        frame.height - 1,
+        Math.floor((1 - ((x + 0.5) / targetWidth)) * frame.height)
+      );
+    }
+  } else {
+    for (let y = 0; y < targetHeight; y += 1) {
+      sourceByTargetY[y] = Math.min(
+        frame.height - 1,
+        Math.floor(((y + 0.5) * frame.height) / targetHeight)
+      );
+    }
+    for (let x = 0; x < targetWidth; x += 1) {
+      sourceByTargetX[x] = Math.min(
+        frame.width - 1,
+        Math.floor(((x + 0.5) * frame.width) / targetWidth)
+      );
+    }
+  }
 
   for (let y = 0; y < targetHeight; y += 1) {
+    if (y > 0 && y % CAMERA_SAMPLE_ROWS_PER_YIELD === 0) {
+      throwIfAborted(options?.signal);
+      await yieldToEventLoop();
+      throwIfAborted(options?.signal);
+    }
+    const rotatedSourceX = sourceByTargetY[y] ?? 0;
+    const sourceY = sourceByTargetY[y] ?? 0;
     for (let x = 0; x < targetWidth; x += 1) {
-      const normalizedX = (x + 0.5) / targetWidth;
-      const normalizedY = (y + 0.5) / targetHeight;
       const sx = options?.rotateForPortrait
-        ? Math.min(frame.width - 1, Math.floor(normalizedY * frame.width))
-        : Math.min(frame.width - 1, Math.floor(normalizedX * frame.width));
+        ? rotatedSourceX
+        : sourceByTargetX[x] ?? 0;
       const sy = options?.rotateForPortrait
-        ? Math.min(frame.height - 1, Math.floor((1 - normalizedX) * frame.height))
-        : Math.min(frame.height - 1, Math.floor(normalizedY * frame.height));
+        ? sourceByTargetX[x] ?? 0
+        : sourceY;
       const sourceOffset = (sy * frame.width + sx) * 4;
       const targetOffset = (y * targetWidth + x) * 3;
       if (isBgra) {
@@ -1081,6 +1272,7 @@ function samplePackedCameraBytesToRgb(
     }
   }
 
+  throwIfAborted(options?.signal);
   return rgb;
 }
 

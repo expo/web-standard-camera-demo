@@ -200,6 +200,8 @@ internal final class VideoView: ExpoView {
   // @ref LLP 0005#srcobject-readyState — Reset to HAVE_NOTHING; fire
   //                                       loadeddata when frames arrive.
   private func attachStream() {
+    let attachStartedAt = CFAbsoluteTimeGetCurrent()
+    let hadPreviewSession = previewLayer.session != nil
     firstFrameObserver?.invalidate()
     firstFrameObserver = nil
     previewRotationObservation?.invalidate()
@@ -212,13 +214,28 @@ internal final class VideoView: ExpoView {
     previewSource = nil
 
     guard let stream = srcObject, let session = stream.captureSession else {
+      standardCameraTrace("native-preview-attach-start", [
+        "attaching": false,
+        "hadPreviewSession": hadPreviewSession
+      ])
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       previewLayer.session = nil
       CATransaction.commit()
+      standardCameraTrace("native-preview-attach-done", [
+        "attaching": false,
+        "durationMs": (CFAbsoluteTimeGetCurrent() - attachStartedAt) * 1000,
+        "hadPreviewSession": hadPreviewSession
+      ])
       return
     }
 
+    standardCameraTrace("native-preview-attach-start", [
+      "attaching": true,
+      "hadPreviewSession": hadPreviewSession,
+      "isRunning": session.isRunning,
+      "streamId": stream.id
+    ])
     // Attaching a session and rotating the connection mutate animatable
     // properties on the preview layer; wrap them so Core Animation doesn't
     // animate the transition (which appeared as a slide-in from the left
@@ -259,6 +276,14 @@ internal final class VideoView: ExpoView {
       previewSource = source
       source.registerPreview(self)
     }
+    standardCameraTrace("native-preview-attach-done", [
+      "attaching": true,
+      "connectionEnabled": previewLayer.connection?.isEnabled,
+      "durationMs": (CFAbsoluteTimeGetCurrent() - attachStartedAt) * 1000,
+      "hadPreviewSession": hadPreviewSession,
+      "isRunning": session.isRunning,
+      "streamId": stream.id
+    ])
 
     // @ref LLP 0006#first-frame-detection — Drive loadeddata off the FrameSink's
     // first sample callback. The FrameSink lives on the first video track's
@@ -275,7 +300,18 @@ internal final class VideoView: ExpoView {
     // @ref LLP 0005#srcobject-play-pause — Start the session if not running
     if !session.isRunning {
       MediaStream.sessionQueue.async {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        standardCameraTrace("native-preview-start-running-start", [
+          "reason": "attachStream",
+          "streamId": stream.id
+        ])
         session.startRunning()
+        standardCameraTrace("native-preview-start-running-done", [
+          "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+          "isRunning": session.isRunning,
+          "reason": "attachStream",
+          "streamId": stream.id
+        ])
       }
     }
   }
@@ -343,7 +379,16 @@ internal final class VideoView: ExpoView {
     guard let session = srcObject?.captureSession else { return }
     MediaStream.sessionQueue.async { [weak self] in
       if !session.isRunning {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        standardCameraTrace("native-preview-start-running-start", [
+          "reason": "play"
+        ])
         session.startRunning()
+        standardCameraTrace("native-preview-start-running-done", [
+          "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+          "isRunning": session.isRunning,
+          "reason": "play"
+        ])
       }
       DispatchQueue.main.async {
         self?.previewLayer.connection?.isEnabled = true

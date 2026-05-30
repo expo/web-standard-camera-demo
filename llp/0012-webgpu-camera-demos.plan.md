@@ -82,6 +82,14 @@ it. Native tabs and stacks may keep screens mounted after navigation, so camera
 demo auto-start effects must be focus-scoped and must not reacquire AVFoundation
 while a WebXR/LiDAR route is the visible route.
 
+Visible `<Video srcObject>` previews are focus-scoped for the same reason:
+inactive tabs may remain mounted, but they should detach their native preview
+layer so the focused route is the only live preview consumer of the shared
+`MediaStream`. When the Home tab regains focus it reattaches `null → stream`
+instead of relying on a stale offscreen native view. Home also keys its native
+preview by a focus serial so a tab return creates a fresh native `<Video>` view
+even when the shared `MediaStream` object itself has not changed.
+
 ## Frame-bound demo mirroring
 
 Front-camera previews are mirrored for self-view, but the WebGPU demos must
@@ -318,9 +326,34 @@ COCO object boxes + scores
 animated boxes/confidence bars + object-derived scene summary
 ```
 
-**Status:** Prototype implemented as `neural`, and the UI labels it "Neural lens" because this route runs an actual TensorFlow.js model. The route defaults to camera, supports front/back constraints, retains static probes for deterministic testing, and exposes `globalThis.__TFJS_SCENE_SMOKE__` / `TFJS_SCENE_SMOKE ...` for existing smoke checks. The model JSON and five weight shards are vendored under `assets/models/coco-ssd-lite-mobilenet-v2`; Metro treats `.bin` files as assets for JS/export, and iOS has a small build phase that copies the same directory into app resources under `TfjsModels/coco-ssd-lite-mobilenet-v2`. The detector module keeps route import cheap by deferring the large model JSON, shard asset IDs, and COCO class metadata `require()` calls until model loading or detection post-processing. The loader checks `Paths.bundle` first on native, falls back to Metro/`expo-asset`, and feeds the concatenated shards into `tf.io.fromMemory`. The model/runtime promises are module-level caches, the route defers camera-source preload until the selected camera has been playing quietly for a short window, surfaces runtime/weights/graph/warmup phases through the HUD and loading overlay, and yields between large startup chunks so React can repaint while TFJS starts. Probe tensors are cached per probe, route query `source=<probe>` is an initial no-camera simulator smoke-test value rather than a controlled source, and inference runs about once per second so the live `<Video srcObject>` preview remains responsive. Front/back camera switches abort pending pre-inference work, clear stale boxes, hold classification while the replacement `ImageCapture` settles, and prevent the camera detection loop from starting TFJS loading until the cached model is ready or retrying from an error; this keeps camera reconfiguration from racing the heavy TensorFlow.js startup path. Development builds emit `NEURAL_LENS_TRACE` JSON lines, mirrored into `globalThis.__NEURAL_LENS_TRACE__`, across picker taps, shared camera restarts, native `AVCaptureSession.startRunning()` / `stopRunning()`, model load phases, weight reads, tensor creation, and graph/NMS execution so front/back switch stalls can be attributed from device logs.
+**Status:** Prototype implemented as `neural`, and the UI labels it "Neural lens" because this route runs an actual TensorFlow.js model. The route defaults to camera, supports front/back constraints, retains static probes for deterministic testing, and exposes `globalThis.__TFJS_SCENE_SMOKE__` / `TFJS_SCENE_SMOKE ...` for existing smoke checks. The model JSON and five weight shards are vendored under `assets/models/coco-ssd-lite-mobilenet-v2`; Metro treats `.bin` files as assets for JS/export, and iOS has a small build phase that copies the same directory into app resources under `TfjsModels/coco-ssd-lite-mobilenet-v2`. The detector module keeps route import cheap by deferring the large model JSON, shard asset IDs, and COCO class metadata `require()` calls until model loading or detection post-processing. The loader checks `Paths.bundle` first on native, falls back to Metro/`expo-asset`, and feeds the concatenated shards into `tf.io.fromMemory`. The model/runtime promises are module-level caches, the route defers camera-source preload until the selected camera has been playing quietly for a short window, surfaces runtime/weights/graph/warmup phases through the HUD and loading overlay, and yields between large startup chunks so React can repaint while TFJS starts. Weight concatenation now copies in 1MB chunks with UI yields, and live camera tensors are sampled in small row batches with abort checks so JS byte loops do not monopolize the UI thread. Probe tensors are cached per probe, route query `source=<probe>` is an initial no-camera simulator smoke-test value rather than a controlled source, and inference runs about once per second so the live `<Video srcObject>` preview remains responsive. Front/back camera switches abort pending pre-inference work, clear stale boxes, wait only for replacement `ImageCapture` readiness, and prevent the camera detection loop from starting TFJS loading until the cached model is ready or retrying from an error; this keeps camera reconfiguration from racing the heavy TensorFlow.js startup path without a fixed switch delay. Development traces are opt-in: set `globalThis.__NEURAL_LENS_TRACE_ENABLED__ = true`, `EXPO_PUBLIC_NEURAL_LENS_TRACE=1`, or `NEURAL_LENS_TRACE=1` for JS traces, and `STANDARD_CAMERA_TRACE=1` for native app launch traces. When enabled, `NEURAL_LENS_TRACE` JSON lines are mirrored into `globalThis.__NEURAL_LENS_TRACE__` across picker taps, shared camera restarts, native `AVCaptureSession.startRunning()` / `stopRunning()`, native preview attach/detach, model load phases, weight reads, tensor creation, and graph/NMS execution so front/back switch stalls can be attributed from device logs. Neural front/back switches also attach a route-local `switchId` plus `switchElapsedMs` to camera state, ImageCapture, first-frame, and first-detection milestones so one switch can be reconstructed even when model traces interleave.
 
 **Complexity:** Medium. The app now depends on TFJS, TFJS Converter, `expo-asset`, `jpeg-js`, and COCO-SSD's class metadata. COCO-SSD still performs post-processing / NMS on CPU, so this is not an all-GPU detector. The demo mitigates that by downsampling before tensor creation, using async tensor reads, spacing camera inference to roughly 1 Hz, and keeping camera preview on the native video view rather than redrawing it through JS.
+
+On focus, the camera detector waits briefly before its first TFJS pass even
+when the model cache is already ready. That keeps native tab activation and
+`<Video srcObject>` reattachment responsive; it does not reset the
+module-level runtime/model/weight caches.
+
+Blur/focus traces record the current Neural detector stage, preview
+reattachment timing, and screen cleanup timing. The native tab host's
+`tabPress` event also asks the route to stop Neural TF work before the route
+blur effect runs. Deferred model preload timers observe the same focused flag
+so leaving the tab cannot start a queued preload. Active preloads also share
+the route abort controller with camera and probe inference; the loader checks
+that signal while reading bundled weight shards, before concatenating weights,
+before converter/graph work, and before warmup. The detector checks the same
+abort signal after graph execution, output tensor readback, and NMS so a tab
+switch can skip the remaining post-processing for an in-flight detection. The
+underlying TFJS graph call is still not preemptible once it has entered the
+runtime, so traces distinguish `tfjs-graph` from later abortable stages.
+
+Front/back switches are readiness-based: once the replacement stream reaches
+`playing`, the loop waits for `ImageCapture`'s short frame-settle window and
+then probes `grabFrame()`, retrying transient "No frames available" results
+instead of sleeping behind a fixed classifier pause. The camera detector uses a
+256 px max edge for live frames to reduce the JS sampling loop and graph input
+size; static probes keep the same preprocessing path.
 
 ## Build order
 

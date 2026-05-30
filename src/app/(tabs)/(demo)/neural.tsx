@@ -21,8 +21,9 @@ import {
 } from '@/components/demo-platform-controls';
 import { DemoPageFrame } from '@/components/demo-page-frame';
 import { useCamera } from '@/contexts/CameraContext';
+import { addAppTabPressListener } from '@/lib/app-tab-events';
 import { displayFacingMode } from '@/lib/camera-facing';
-import { nowMs, round, traceNeuralLens } from '@/lib/neural-lens-trace';
+import { isNeuralLensTraceEnabled, nowMs, round, traceNeuralLens } from '@/lib/neural-lens-trace';
 import {
   detectTfjsCameraFrame,
   detectTfjsObjectProbe,
@@ -50,6 +51,19 @@ type DetectionState = {
   result: TfjsObjectResult | null;
   source: SourceId;
   status: DetectionStatus;
+};
+
+type TraceDetails = Record<string, boolean | number | string | null | undefined>;
+
+type CameraSwitchTrace = {
+  fromFacingMode: 'user' | 'environment';
+  id: number;
+  sawFirstDetection: boolean;
+  sawFirstFrame: boolean;
+  sawImageCapture: boolean;
+  sawPlaying: boolean;
+  startedAt: number;
+  toFacingMode: 'user' | 'environment';
 };
 
 type SmokeState =
@@ -83,7 +97,7 @@ const CAMERA_INFERENCE_INTERVAL_MS = 1000;
 const CAMERA_WAIT_RETRY_MS = 450;
 const CAMERA_ERROR_RETRY_MS = 1500;
 const CAMERA_CAPTURE_SETTLE_MS = 250;
-const CAMERA_SWITCH_CLASSIFIER_PAUSE_MS = 1600;
+const CAMERA_FOCUS_CLASSIFIER_PAUSE_MS = 900;
 const CAMERA_MODEL_PRELOAD_STABLE_MS = 1800;
 const PROBE_DETECT_DEBOUNCE_MS = 140;
 
@@ -104,11 +118,16 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   } = useCamera();
 
   const videoRef = React.useRef<HTMLVideoElement>(null);
+  const screenFocusedRef = React.useRef(false);
   const imageCaptureRef = React.useRef<ImageCapture | null>(null);
   const imageCaptureAcceptAfterRef = React.useRef(0);
   const captureSetupErrorRef = React.useRef<string | null>(null);
   const cameraInferenceAbortRef = React.useRef<AbortController | null>(null);
+  const modelPreloadAbortRef = React.useRef<AbortController | null>(null);
   const cameraInferencePausedUntilRef = React.useRef(0);
+  const cameraInferenceStageRef = React.useRef('idle');
+  const cameraSwitchTraceRef = React.useRef<CameraSwitchTrace | null>(null);
+  const cameraSwitchTraceSeqRef = React.useRef(0);
   const detectSeqRef = React.useRef(0);
 
   const [cacheInfo, setCacheInfo] = React.useState<TfjsObjectCacheInfo>(() => getTfjsObjectCacheInfo());
@@ -129,21 +148,91 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   const cameraModelWaitLine = formatModelLoadPhase(cacheInfo, true);
   const activeCameraStream = screenFocused && source === 'camera' ? stream : null;
 
+  const activeSwitchPayload = React.useCallback((payload: TraceDetails = {}): TraceDetails => {
+    const activeSwitch = cameraSwitchTraceRef.current;
+    if (!activeSwitch) return payload;
+    return {
+      ...payload,
+      switchElapsedMs: round(nowMs() - activeSwitch.startedAt),
+      switchFromFacingMode: activeSwitch.fromFacingMode,
+      switchId: activeSwitch.id,
+      switchToFacingMode: activeSwitch.toFacingMode,
+    };
+  }, []);
+
+  const setCameraInferenceStage = React.useCallback((stage: string, payload: TraceDetails = {}): void => {
+    cameraInferenceStageRef.current = stage;
+    traceNeuralLens('neural-camera-inference-stage', activeSwitchPayload({
+      stage,
+      ...payload,
+    }));
+  }, [activeSwitchPayload]);
+
+  const stopTfWork = React.useCallback((reason: string, payload: TraceDetails = {}): void => {
+    const stopStartedAt = nowMs();
+    const previousInferenceStage = cameraInferenceStageRef.current;
+    const hadCameraAbortController = cameraInferenceAbortRef.current !== null;
+    const hadPreloadAbortController = modelPreloadAbortRef.current !== null;
+    traceNeuralLens('neural-tf-work-stop-start', activeSwitchPayload({
+      hasAbortController: hadCameraAbortController || hadPreloadAbortController,
+      hasCameraAbortController: hadCameraAbortController,
+      hasPreloadAbortController: hadPreloadAbortController,
+      previousInferenceStage,
+      reason,
+      ...payload,
+    }));
+    screenFocusedRef.current = false;
+    setScreenFocused(false);
+    cameraInferenceAbortRef.current?.abort();
+    cameraInferenceAbortRef.current = null;
+    modelPreloadAbortRef.current?.abort();
+    modelPreloadAbortRef.current = null;
+    imageCaptureRef.current = null;
+    imageCaptureAcceptAfterRef.current = 0;
+    captureSetupErrorRef.current = null;
+    detectSeqRef.current += 1;
+    if (cameraSwitchTraceRef.current) {
+      traceNeuralLens('neural-camera-switch-cancelled', activeSwitchPayload({
+        reason,
+      }));
+      cameraSwitchTraceRef.current = null;
+    }
+    cameraInferenceStageRef.current = reason === 'screen-blur' ? 'blurred' : 'stopped';
+    if (reason === 'screen-blur') {
+      traceNeuralLens('tfjs-screen-blur-cancelled');
+    }
+    traceNeuralLens('neural-tf-work-stop-done', activeSwitchPayload({
+      durationMs: round(nowMs() - stopStartedAt),
+      previousInferenceStage,
+      reason,
+      ...payload,
+    }));
+  }, [activeSwitchPayload]);
+
   useFocusEffect(
     React.useCallback(() => {
+      traceNeuralLens('neural-screen-focus', {
+        previousInferenceStage: cameraInferenceStageRef.current,
+      });
+      screenFocusedRef.current = true;
       setScreenFocused(true);
+      cameraInferencePausedUntilRef.current = Math.max(
+        cameraInferencePausedUntilRef.current,
+        Date.now() + CAMERA_FOCUS_CLASSIFIER_PAUSE_MS
+      );
       return () => {
-        setScreenFocused(false);
-        cameraInferenceAbortRef.current?.abort();
-        cameraInferenceAbortRef.current = null;
-        imageCaptureRef.current = null;
-        imageCaptureAcceptAfterRef.current = 0;
-        captureSetupErrorRef.current = null;
-        detectSeqRef.current += 1;
-        traceNeuralLens('tfjs-screen-blur-cancelled');
+        stopTfWork('screen-blur');
       };
-    }, [])
+    }, [stopTfWork])
   );
+
+  React.useEffect(() => addAppTabPressListener((event) => {
+    if (!screenFocusedRef.current) return;
+    if (event.name === '(demo)' || event.name === 'Demo' || event.name === 'demo') return;
+    stopTfWork('tab-press', {
+      tabName: event.name,
+    });
+  }), [stopTfWork]);
 
   React.useEffect(() => subscribeTfjsObjectCacheInfo((next) => {
     traceNeuralLens('tfjs-cache-info', {
@@ -160,11 +249,54 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    const attachStartedAt = nowMs();
+    traceNeuralLens('neural-preview-srcobject-start', {
+      attaching: activeCameraStream !== null,
+      cameraStatus,
+      inferenceStage: cameraInferenceStageRef.current,
+    });
     video.srcObject = activeCameraStream;
     if (activeCameraStream) {
       void video.play();
     }
-  }, [activeCameraStream]);
+    traceNeuralLens('neural-preview-srcobject-done', {
+      attaching: activeCameraStream !== null,
+      durationMs: round(nowMs() - attachStartedAt),
+    });
+  }, [activeCameraStream, cameraStatus]);
+
+  React.useEffect(() => {
+    const activeSwitch = cameraSwitchTraceRef.current;
+    if (activeSwitch && source === 'camera') {
+      const track = stream?.getVideoTracks()[0] ?? null;
+      const trackSettings = track?.getSettings();
+      traceNeuralLens('neural-camera-switch-state', activeSwitchPayload({
+        cameraStatus,
+        constraintFacingMode: constraints.facingMode ?? null,
+        hasStream: stream !== null,
+        settingsFacingMode: settings?.facingMode ?? trackSettings?.facingMode ?? null,
+        settingsFrameRate: typeof settings?.frameRate === 'number' ? settings.frameRate : null,
+        settingsHeight: typeof settings?.height === 'number' ? settings.height : null,
+        settingsWidth: typeof settings?.width === 'number' ? settings.width : null,
+        trackReadyState: track?.readyState ?? null,
+      }));
+      if (cameraStatus === 'playing' && stream && !activeSwitch.sawPlaying) {
+        activeSwitch.sawPlaying = true;
+        traceNeuralLens('neural-camera-switch-playing', activeSwitchPayload({
+          settingsFacingMode: settings?.facingMode ?? trackSettings?.facingMode ?? null,
+          settingsHeight: typeof settings?.height === 'number' ? settings.height : null,
+          settingsWidth: typeof settings?.width === 'number' ? settings.width : null,
+          trackReadyState: track?.readyState ?? null,
+        }));
+      }
+      if (cameraStatus === 'error') {
+        traceNeuralLens('neural-camera-switch-error', activeSwitchPayload({
+          error: cameraError ?? 'Camera unavailable',
+        }));
+        cameraSwitchTraceRef.current = null;
+      }
+    }
+  }, [activeSwitchPayload, cameraError, cameraStatus, constraints.facingMode, settings, source, stream]);
 
   React.useEffect(() => {
     if (!screenFocused || source !== 'camera') {
@@ -178,7 +310,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       imageCaptureRef.current = null;
       imageCaptureAcceptAfterRef.current = 0;
       captureSetupErrorRef.current = null;
-      traceNeuralLens('neural-image-capture-cleared', { cameraStatus });
+      traceNeuralLens('neural-image-capture-cleared', activeSwitchPayload({ cameraStatus }));
       return;
     }
     try {
@@ -186,32 +318,45 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       imageCaptureAcceptAfterRef.current = Date.now() + CAMERA_CAPTURE_SETTLE_MS;
       captureSetupErrorRef.current = null;
       const trackSettings = track.getSettings();
-      traceNeuralLens('neural-image-capture-created', {
+      traceNeuralLens('neural-image-capture-created', activeSwitchPayload({
         acceptAfterMs: CAMERA_CAPTURE_SETTLE_MS,
         facingMode: trackSettings.facingMode ?? null,
         frameRate: typeof trackSettings.frameRate === 'number' ? trackSettings.frameRate : null,
         height: typeof trackSettings.height === 'number' ? trackSettings.height : null,
         readyState: track.readyState,
         width: typeof trackSettings.width === 'number' ? trackSettings.width : null,
-      });
+      }));
+      const activeSwitch = cameraSwitchTraceRef.current;
+      if (activeSwitch && !activeSwitch.sawImageCapture) {
+        activeSwitch.sawImageCapture = true;
+        traceNeuralLens('neural-camera-switch-image-capture-ready', activeSwitchPayload({
+          acceptAfterMs: CAMERA_CAPTURE_SETTLE_MS,
+          facingMode: trackSettings.facingMode ?? null,
+          readyState: track.readyState,
+        }));
+      }
     } catch (e: unknown) {
       imageCaptureRef.current = null;
       imageCaptureAcceptAfterRef.current = 0;
       captureSetupErrorRef.current = formatError(e);
-      traceNeuralLens('neural-image-capture-error', {
+      traceNeuralLens('neural-image-capture-error', activeSwitchPayload({
         error: captureSetupErrorRef.current,
-      });
+      }));
     }
-  }, [cameraStatus, screenFocused, source, stream]);
+  }, [activeSwitchPayload, cameraStatus, screenFocused, source, stream]);
 
   useFocusEffect(
     React.useCallback(() => {
       if (source !== 'camera' || !stream || cameraStatus !== 'playing') return undefined;
-      if (cacheModelStatus !== 'idle') return undefined;
+      const cacheAtSchedule = getTfjsObjectCacheInfo();
+      if (cacheAtSchedule.modelStatus !== 'idle') return undefined;
 
       let cancelled = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let idleCancel: (() => void) | null = null;
+      const controller = new AbortController();
+      modelPreloadAbortRef.current?.abort();
+      modelPreloadAbortRef.current = controller;
 
       const stableDelayMs = Math.max(
         CAMERA_MODEL_PRELOAD_STABLE_MS,
@@ -221,20 +366,31 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       traceNeuralLens('neural-model-preload-scheduled', {
         cameraStatus,
         delayMs: Math.ceil(stableDelayMs),
-        modelLoadPhase: cacheModelPhase,
-        modelStatus: cacheModelStatus,
+        modelLoadPhase: cacheAtSchedule.modelLoadPhase,
+        modelStatus: cacheAtSchedule.modelStatus,
       });
 
       timer = setTimeout(() => {
         timer = null;
+        if (cancelled || !screenFocusedRef.current) {
+          traceNeuralLens('neural-model-preload-skipped', {
+            reason: cancelled ? 'cancelled' : 'not-focused',
+          });
+          return;
+        }
         idleCancel = scheduleAfterPaintAndIdle(() => {
-          if (cancelled) return;
+          if (cancelled || !screenFocusedRef.current) {
+            traceNeuralLens('neural-model-preload-skipped', {
+              reason: cancelled ? 'cancelled' : 'not-focused',
+            });
+            return;
+          }
           const startedAt = nowMs();
           traceNeuralLens('neural-model-preload-start', {
             modelLoadPhase: getTfjsObjectCacheInfo().modelLoadPhase,
             modelStatus: getTfjsObjectCacheInfo().modelStatus,
           });
-          const preload = preloadTfjsObjectModel();
+          const preload = preloadTfjsObjectModel({ signal: controller.signal });
           setCacheInfo(getTfjsObjectCacheInfo());
           void preload
             .then((next) => {
@@ -245,20 +401,36 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
                 modelStatus: next.modelStatus,
                 runtimeInitCount: next.runtimeInitCount,
               });
-              if (!cancelled) setCacheInfo(next);
+              if (!cancelled && screenFocusedRef.current) setCacheInfo(next);
             })
             .catch((e: unknown) => {
+              if (isAbortError(e)) {
+                traceNeuralLens('neural-model-preload-abort', {
+                  durationMs: round(nowMs() - startedAt),
+                });
+                if (!cancelled && screenFocusedRef.current) setCacheInfo(getTfjsObjectCacheInfo());
+                return;
+              }
               traceNeuralLens('neural-model-preload-error', {
                 durationMs: round(nowMs() - startedAt),
                 error: formatError(e),
               });
-              if (!cancelled) setCacheInfo(getTfjsObjectCacheInfo());
+              if (!cancelled && screenFocusedRef.current) setCacheInfo(getTfjsObjectCacheInfo());
+            })
+            .finally(() => {
+              if (modelPreloadAbortRef.current === controller) {
+                modelPreloadAbortRef.current = null;
+              }
             });
         });
       }, stableDelayMs);
 
       return () => {
         cancelled = true;
+        controller.abort();
+        if (modelPreloadAbortRef.current === controller) {
+          modelPreloadAbortRef.current = null;
+        }
         traceNeuralLens('neural-model-preload-cancelled', {
           hadIdleCallback: idleCancel !== null,
           hadTimer: timer !== null,
@@ -269,7 +441,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
         }
         idleCancel?.();
       };
-    }, [cacheModelPhase, cacheModelStatus, cameraStatus, source, stream])
+    }, [cameraStatus, source, stream])
   );
 
   useFocusEffect(
@@ -324,31 +496,63 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
     const seq = detectSeqRef.current + 1;
     detectSeqRef.current = seq;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
+    cameraInferenceAbortRef.current?.abort();
+    cameraInferenceAbortRef.current = controller;
 
     publishSmoke({ source, status: 'loading' });
 
     timer = setTimeout(() => {
       void (async () => {
+        setCameraInferenceStage('probe-waiting', { source });
         await waitForQuietFrame();
-        const next = await detectTfjsObjectProbe(source);
+        if (cancelled || controller.signal.aborted || detectSeqRef.current !== seq) return;
+        setCameraInferenceStage('probe-start', { source });
+        const next = await detectTfjsObjectProbe(source, {
+          onStage: (stage) => setCameraInferenceStage(`probe-${stage}`, { source }),
+          signal: controller.signal,
+        });
         if (cancelled || detectSeqRef.current !== seq) return;
         setCacheInfo(next.cache);
         publishSmoke(makeReadySmoke(source, next), true);
         setDetection({ error: null, result: next, source, status: 'ready' });
+        setCameraInferenceStage('idle', {
+          reason: 'probe-done',
+          source,
+        });
       })().catch((e: unknown) => {
         if (cancelled || detectSeqRef.current !== seq) return;
+        if (isAbortError(e)) {
+          setCameraInferenceStage('idle', {
+            reason: 'probe-abort',
+            source,
+          });
+          return;
+        }
         setCacheInfo(getTfjsObjectCacheInfo());
         const message = formatError(e);
         publishSmoke({ error: message, source, status: 'error' }, true);
         setDetection({ error: message, result: null, source, status: 'error' });
+        setCameraInferenceStage('idle', {
+          reason: 'probe-error',
+          source,
+        });
+      }).finally(() => {
+        if (cameraInferenceAbortRef.current === controller) {
+          cameraInferenceAbortRef.current = null;
+        }
       });
     }, PROBE_DETECT_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
+      controller.abort();
+      if (cameraInferenceAbortRef.current === controller) {
+        cameraInferenceAbortRef.current = null;
+      }
       if (timer) clearTimeout(timer);
     };
-  }, [screenFocused, source]);
+  }, [screenFocused, setCameraInferenceStage, source]);
 
   const isDesktop = windowWidth >= 1040;
   const isWebDesktop = Platform.OS === 'web' && isDesktop;
@@ -397,11 +601,17 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       if (cancelled || detectSeqRef.current !== seq) return;
       const capture = imageCaptureRef.current;
       if (cameraStatus === 'error') {
+        setCameraInferenceStage('waiting-camera-error', { cameraStatus });
         publishError(cameraError ?? 'Camera unavailable');
         schedule(CAMERA_ERROR_RETRY_MS);
         return;
       }
       if (!stream || cameraStatus !== 'playing' || !capture) {
+        setCameraInferenceStage('waiting-camera', {
+          cameraStatus,
+          hasCapture: capture !== null,
+          hasStream: stream !== null,
+        });
         publishWaiting(captureSetupErrorRef.current ?? cameraError ?? `camera ${cameraStatus}`);
         schedule(CAMERA_WAIT_RETRY_MS);
         return;
@@ -417,6 +627,11 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
           cameraStatus,
           reason: 'settling',
           waitMs: Math.ceil(settleMs),
+          ...activeSwitchPayload(),
+        });
+        setCameraInferenceStage('waiting-settle', {
+          cameraStatus,
+          waitMs: Math.ceil(settleMs),
         });
         publishWaiting('camera settling');
         schedule(Math.min(CAMERA_WAIT_RETRY_MS, Math.ceil(settleMs)));
@@ -429,11 +644,17 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
           modelLoadPhase: cacheModelPhase,
           modelStatus: cacheModelStatus,
           reason: 'model-not-ready',
+          ...activeSwitchPayload(),
+        });
+        setCameraInferenceStage('waiting-model', {
+          cameraStatus,
+          modelLoadPhase: cacheModelPhase,
+          modelStatus: cacheModelStatus,
         });
         publishWaiting(
           cacheModelStatus === 'loading'
             ? cameraModelWaitLine
-            : 'detector waiting for stable camera'
+            : 'detector waiting for model preload'
         );
         schedule(CAMERA_WAIT_RETRY_MS);
         return;
@@ -457,67 +678,118 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
             : { error: null, result: null, source: 'camera', status: 'loading' }
         ));
         publishSmoke({ source: 'camera', status: 'loading' });
+        setCameraInferenceStage('paint-before-grab', { cameraStatus });
         await waitForNextPaint();
         if (!isCurrentCapture()) return;
         const grabStartedAt = nowMs();
-        traceNeuralLens('neural-camera-grab-start', {
+        setCameraInferenceStage('grab-frame', {
           cameraStatus,
           modelLoadCount: cacheModelLoadCount,
         });
+        traceNeuralLens('neural-camera-grab-start', activeSwitchPayload({
+          cameraStatus,
+          modelLoadCount: cacheModelLoadCount,
+        }));
         frame = await capture.grabFrame();
-        traceNeuralLens('neural-camera-grab-done', {
+        traceNeuralLens('neural-camera-grab-done', activeSwitchPayload({
           durationMs: round(nowMs() - grabStartedAt),
           frameFormat: frame._format ?? null,
           frameNumber: frame._frameNumber ?? null,
           height: frame.height,
           width: frame.width,
+        }));
+        const activeSwitch = cameraSwitchTraceRef.current;
+        if (activeSwitch && !activeSwitch.sawFirstFrame) {
+          activeSwitch.sawFirstFrame = true;
+          traceNeuralLens('neural-camera-switch-first-frame', activeSwitchPayload({
+            frameFormat: frame._format ?? null,
+            frameNumber: frame._frameNumber ?? null,
+            height: frame.height,
+            width: frame.width,
+          }));
+        }
+        setCameraInferenceStage('paint-before-detect', {
+          frameNumber: frame._frameNumber ?? null,
         });
         await waitForNextPaint();
         if (!isCurrentCapture()) return;
-        traceNeuralLens('neural-camera-detect-start', {
+        setCameraInferenceStage('tfjs-start', {
+          frameNumber: frame._frameNumber ?? null,
+          modelStatus: cacheModelStatus,
+        });
+        traceNeuralLens('neural-camera-detect-start', activeSwitchPayload({
           frameFormat: frame._format ?? null,
           frameNumber: frame._frameNumber ?? null,
           modelLoadCount: cacheModelLoadCount,
           modelLoadPhase: cacheModelPhase,
           modelStatus: cacheModelStatus,
-        });
+        }));
         const next = await detectTfjsCameraFrame(frame, {
+          onStage: (stage) => setCameraInferenceStage(`tfjs-${stage}`, {
+            frameNumber: frame?._frameNumber ?? null,
+          }),
           rotateForPortrait,
           signal: controller.signal,
         });
         if (cancelled || detectSeqRef.current !== seq) return;
-        traceNeuralLens('neural-camera-detect-done', {
+        traceNeuralLens('neural-camera-detect-done', activeSwitchPayload({
           detections: next.detections.length,
           detectMs: next.detectMs,
           modelLoadCount: next.cache.modelLoadCount,
           modelLoadMs: next.modelLoadMs,
           totalMs: round(nowMs() - frameStartedAt),
           tensorMs: next.tensorMs,
-        });
+        }));
+        const completedSwitch = cameraSwitchTraceRef.current;
+        if (completedSwitch && !completedSwitch.sawFirstDetection) {
+          completedSwitch.sawFirstDetection = true;
+          traceNeuralLens('neural-camera-switch-first-detection', activeSwitchPayload({
+            detections: next.detections.length,
+            detectMs: next.detectMs,
+            modelLoadCount: next.cache.modelLoadCount,
+            tensorMs: next.tensorMs,
+          }));
+          cameraSwitchTraceRef.current = null;
+        }
         setCacheInfo(next.cache);
         publishSmoke(makeReadySmoke('camera', next));
         setDetection({ error: null, result: next, source: 'camera', status: 'ready' });
+        setCameraInferenceStage('idle', {
+          reason: 'detect-done',
+        });
         schedule(CAMERA_INFERENCE_INTERVAL_MS);
       } catch (e: unknown) {
-        if (cancelled || detectSeqRef.current !== seq) return;
         if (isAbortError(e)) {
-          traceNeuralLens('neural-camera-detect-abort', {
+          traceNeuralLens('neural-camera-detect-abort', activeSwitchPayload({
+            cancelled,
+            currentSeq: detectSeqRef.current === seq,
             totalMs: round(nowMs() - frameStartedAt),
+          }));
+          if (cancelled || detectSeqRef.current !== seq) return;
+          setCameraInferenceStage('idle', {
+            reason: 'abort',
           });
           publishWaiting('camera settling');
           schedule(CAMERA_WAIT_RETRY_MS);
           return;
         }
+        if (cancelled || detectSeqRef.current !== seq) return;
         const message = formatError(e);
-        traceNeuralLens('neural-camera-detect-error', {
+        traceNeuralLens('neural-camera-detect-error', activeSwitchPayload({
           error: message,
           totalMs: round(nowMs() - frameStartedAt),
-        });
+        }));
         setCacheInfo(getTfjsObjectCacheInfo());
         if (isTransientCameraFrameError(message)) {
+          setCameraInferenceStage('idle', {
+            reason: 'transient-error',
+          });
           publishWaiting(message);
           schedule(CAMERA_WAIT_RETRY_MS);
         } else {
+          setCameraInferenceStage('idle', {
+            reason: 'error',
+          });
           publishError(message);
           schedule(CAMERA_ERROR_RETRY_MS);
         }
@@ -536,6 +808,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
       if (timer) clearTimeout(timer);
     };
   }, [
+    activeSwitchPayload,
     cacheModelLoadCount,
     cacheModelPhase,
     cacheModelStatus,
@@ -544,6 +817,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
     cameraStatus,
     rotateForPortrait,
     screenFocused,
+    setCameraInferenceStage,
     source,
     stream,
   ]);
@@ -561,29 +835,56 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
     (facingMode: 'user' | 'environment'): void => {
       if (facingMode === cameraFacing) return;
       if (facingMode === 'environment' && backFacingDisabled) return;
-      traceNeuralLens('neural-camera-switch-request', {
+      cameraSwitchTraceSeqRef.current += 1;
+      cameraSwitchTraceRef.current = {
+        fromFacingMode: cameraFacing,
+        id: cameraSwitchTraceSeqRef.current,
+        sawFirstDetection: false,
+        sawFirstFrame: false,
+        sawImageCapture: false,
+        sawPlaying: false,
+        startedAt: nowMs(),
+        toFacingMode: facingMode,
+      };
+      traceNeuralLens('neural-camera-switch-request', activeSwitchPayload({
         cameraStatus,
         fromFacingMode: cameraFacing,
         modelLoadCount: cacheModelLoadCount,
         modelLoadPhase: cacheModelPhase,
         modelStatus: cacheModelStatus,
         toFacingMode: facingMode,
-      });
-      cameraInferencePausedUntilRef.current = Date.now() + CAMERA_SWITCH_CLASSIFIER_PAUSE_MS;
+      }));
       cameraInferenceAbortRef.current?.abort();
       cameraInferenceAbortRef.current = null;
       imageCaptureRef.current = null;
       imageCaptureAcceptAfterRef.current = 0;
       detectSeqRef.current += 1;
+      traceNeuralLens('neural-camera-switch-before-apply-constraints', activeSwitchPayload({
+        classifierPauseMs: 0,
+        classifierStrategy: 'image-capture-readiness',
+      }));
       setDetection(() => ({
         error: null,
         result: null,
         source: 'camera',
         status: 'waiting',
       }));
+      const applyStartedAt = nowMs();
       applyConstraints({ facingMode });
+      traceNeuralLens('neural-camera-switch-apply-constraints-returned', activeSwitchPayload({
+        durationMs: round(nowMs() - applyStartedAt),
+      }));
     },
-    [applyConstraints, backFacingDisabled, cacheModelLoadCount, cacheModelPhase, cacheModelStatus, cameraFacing, cameraStatus]
+    [
+      activeSwitchPayload,
+      applyConstraints,
+      backFacingDisabled,
+      cacheModelLoadCount,
+      cacheModelPhase,
+      cacheModelStatus,
+      cameraFacing,
+      cameraStatus,
+    ]
   );
 
   const result = detection.source === source ? detection.result : null;
@@ -787,7 +1088,7 @@ export default function TfjsSceneLensScreen(): React.JSX.Element {
 
 function publishSmoke(smoke: SmokeState, log = false): void {
   globalThis.__TFJS_SCENE_SMOKE__ = smoke;
-  if (__DEV__ && log) {
+  if (__DEV__ && log && isNeuralLensTraceEnabled()) {
     console.log(`TFJS_SCENE_SMOKE ${JSON.stringify(smoke)}`);
   }
 }

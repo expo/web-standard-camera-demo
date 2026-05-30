@@ -10,6 +10,7 @@ import { SymbolView, type AndroidSymbol, type SFSymbol } from 'expo-symbols';
 import { Pressable, StyleSheet, Text, useColorScheme, useWindowDimensions, View } from 'react-native';
 
 import { Colors } from '@/constants/theme';
+import { notifyAppTabPress } from '@/lib/app-tab-events';
 
 type ThemeColors = (typeof Colors)[keyof typeof Colors];
 
@@ -141,6 +142,7 @@ function TabButton({
   icon,
   isFocused,
   label,
+  onPress,
   ...props
 }: TabTriggerSlotProps & {
   colors: ThemeColors;
@@ -153,6 +155,10 @@ function TabButton({
     <Pressable
       {...props}
       accessibilityLabel={label}
+      onPress={(event) => {
+        notifyAppTabPress(label);
+        onPress?.(event);
+      }}
       style={({ pressed }) => [
         styles.tabButton,
         compact ? styles.tabButtonCompact : null,
