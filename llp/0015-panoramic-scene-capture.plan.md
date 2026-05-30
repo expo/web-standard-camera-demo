@@ -77,11 +77,8 @@ Implemented:
   startup frames with `.limited` tracking or non-mapped world-mapping buckets may
   still return a pose when ARKit provides a camera transform. This avoids
   starving the panorama route of surfels on devices that already deliver scene
-  depth while world mapping remains `notAvailable`. The WebXR runtime may log
-  throttled `PANORAMIC_XR_POSE_PROFILE` diagnostics for null-pose and
-  degraded-pose paths, keeping native tracking and mapping state out of the
-  app-facing WebXR objects while making physical logs actionable when a scan
-  records pose misses or startup-quality poses.
+  depth while world mapping remains `notAvailable`. The WebXR runtime keeps
+  native tracking and mapping state out of the app-facing WebXR objects.
 - Basic voxel fusion: repeated world-space samples are merged into 4.5 cm
   voxel surfels with weighted position/radius averages, lower weights for
   distant samples, lower weights for samples whose local depth neighborhood
@@ -124,96 +121,39 @@ Implemented:
 - Capture telemetry: model view reports fusion, camera-color, normal-estimate,
   and build-time metrics, and final Capture logs a
   `PANORAMIC_CAPTURE_METRICS` JSON line for physical-device validation.
-- Scan-loop profiling and live preview: accepted keyframes log
-  `PANORAMIC_KEYFRAME_PROFILE` with phase timings for depth payload access,
-  depth preflight, native camera-image access, sampling, fusion, live publish,
-  projection scale/offset, projection-derived focal/principal pixels in the
-  depth buffer, sample phase/offset, unprojection mode, new-versus-updated voxel
-  contribution, same-voxel plane-projection count, mature-overlap skip count,
-  and camera basis vectors. The first
-  accepted keyframe, every fifth accepted keyframe, and the
-  terminal keyframe SHOULD include detailed sample-loop phase timings for depth
-  lookup, unprojection, normal estimation, color sampling, and sample
-  consumption/fusion. Those detailed timers SHOULD sample a fixed stride of
-  surfels and report both the total profiled surfels and the number of timed
-  surfels so physical-device profiling can identify hot phases without adding a
-  `performance.now()` call around every surfel operation. Accepted-keyframe
-  telemetry also separates initial depth append time, no-mutation mesh preflight
-  time, and depth recovery append time when mesh surfels rescue a sparse or
-  redundant candidate, so physical logs can distinguish true depth sampling cost
-  from mesh-gate recovery double work. If depth contributes no new voxels and
-  the mesh preflight alone satisfies the current surfel and new-voxel gates,
-  the route SHOULD skip the second depth append entirely, zero out the
-  preflight-only depth contribution before updating retained-sample counts, and
-  report `depthRecoverySkipped`, because WebXR mesh geometry alone is carrying
-  the accepted keyframe. The keyframe density gate SHOULD compare
+- Scan-loop and live preview: scan mode maintains an incremental voxel-fusion
+  map and publishes throttled live model snapshots plus periodic
+  `PANORAMIC_SCAN_STATS` summaries for realtime WebGPU feedback. If depth
+  contributes no new voxels and the mesh preflight alone satisfies the current
+  surfel and new-voxel gates, the route SHOULD skip the second depth append
+  entirely and zero out the preflight-only depth contribution before updating
+  retained-sample counts, because WebXR mesh geometry alone is carrying the
+  accepted keyframe. The keyframe density gate SHOULD compare
   `MIN_KEYFRAME_SURFELS` against the larger of actually appended depth surfels
   and preflight-observed depth surfels, because mature-overlap skips can
   intentionally avoid fusing duplicate voxels even when the WebXR depth frame
-  contains enough surface to accept.
-  Keeping detailed timers periodic instead of per-keyframe preserves normal
-  scan responsiveness while still making physical-device logs actionable when a
-  keyframe append budget is missed. Scan mode maintains an incremental
-  voxel-fusion map and publishes throttled
-  `PANORAMIC_LIVE_MODEL_PROFILE` snapshots plus periodic `PANORAMIC_SCAN_STATS`
-  summaries for realtime WebGPU feedback. Each non-empty live, preview, or
-  capture model publish SHOULD also log `PANORAMIC_MODEL_PUBLISH_PROFILE` with
-  source, model revision, raw-sample/fused-surface counts, and whether the WebGPU
-  render requester was installed when publication happened. This lets copied logs
-  separate a stale display caused before model publication from one caused in GPU
-  upload/render. The full model is not rebuilt on every XR frame, so live capture
-  work avoids the earlier quadratic point-history path. The first few accepted
-  keyframes SHOULD still publish immediately even when an earlier build was slow,
-  because the scan surface is small and the display must not appear stuck on the
-  first keyframe while the user begins a 180-degree sweep. Periodic scan stats
-  MUST also be emitted on the scan loop before any keyframe is accepted and again
-  when the user stops scanning, so a profile-only physical-device run can diagnose
-  pose misses, depth misses, precheck skips, and rejection reasons even when
-  Preview/Capture is never reached. Scan-loop and keyframe telemetry MUST report accepted raw sample
-  counts separately from the fused/displayed surfel count, because later
-  keyframes can update existing voxels without increasing the rendered surfel
-  count; device logs need to distinguish "no post-first frames accepted" from
-  "post-first samples collapsed into the first frame's fused voxels" and from a
-  stale live model publish. Route-side panorama telemetry SHOULD also include a
-  monotonically increasing `scanId`, and the WebXR profile SHOULD copy that
-  context onto native pose, frame-pump, payload, and mesh-payload diagnostics.
-  Copied-log parsing SHOULD keep the latest observed scan, so repeated manual
-  attempts in one device-log paste do not merge a previous full scan with a later
-  one-frame failure. Validator summaries SHOULD compare WebXR depth-frame
-  counters with ARKit frame counters so a one-keyframe scan can be classified as
-  JS keyframe rejection, full native frame-pump starvation, or native scene-depth
-  starvation while ARKit camera frames continue. If a capture log shows a
-  saveable model sealed with only one accepted keyframe and no later scan-loop
-  evidence, the validator SHOULD call out an early Capture action separately
-  from native or keyframe-gate failures. If Capture is requested before enough
-  keyframes exist, the route SHOULD emit `PANORAMIC_CAPTURE_BLOCKED_PROFILE`
-  with keyframe, sample, status, and in-flight counters so physical logs prove
-  the scan stayed open instead of sealing a one-frame model. Native payload
-  summaries SHOULD include raw/smoothed-depth confidence fallback reasons,
-  because high/medium-confidence filtering can leave an empty or too-sparse
-  depth payload that still fails the panorama surfel gate after the first frame.
-  If a later scan resets non-empty panorama state, the route SHOULD emit
-  `PANORAMIC_SCAN_RESET_PROFILE` with the previous scan counts and reset reason,
-  so copied multi-attempt logs can distinguish a current one-frame scan from an
-  earlier discarded multi-keyframe scan. The WebXR
-  frame-pump profiler SHOULD emit its first sample immediately instead of
-  waiting for its periodic interval, because first-frame-only failures often
-  happen before a second profile window opens. If ARKit frames arrive before the
-  first scene-depth snapshot, native SHOULD expose a non-deliverable
-  frame-number-zero diagnostic so logs can distinguish pre-first-depth
-  starvation from total ARKit startup failure. If the JS frame pump throws before it can invoke the route's XR frame
-  callback, for example while fetching the latest native frame, it SHOULD keep
-  polling and emit a frame-pump error reason with the exception name/message
-  because route-level scan-loop diagnostics cannot observe pre-callback
-  failures. If the app's recursive XR scan loop elects not to request the next
-  frame, it SHOULD emit `PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE` with the stop
-  reason, status, session-match, session-ended, capture-in-flight, and retained
-  sample counters so one-keyframe logs can distinguish native starvation from an
-  app-side scheduling guard. The route accepts `?autorun=1`, `?depth=raw`,
-  `?depth=smooth`, and `?mesh=0` for physical-device profiling runs so
-  the validator can deep-link directly into an active WebXR scan while keeping
-  the normal nav Start Scan control for manual use, and so profile-only logs can
-  isolate raw-depth, smooth-depth, and mesh-reconstruction effects on frame continuity. Live
+  contains enough surface to accept. The full model is not rebuilt on every XR
+  frame, so live capture work avoids the earlier quadratic point-history path.
+  The first few accepted keyframes SHOULD still publish immediately even when
+  an earlier build was slow, because the scan surface is small and the display
+  must not appear stuck on the first keyframe while the user begins a
+  180-degree sweep. Periodic scan stats MUST also be emitted on the scan loop
+  before any keyframe is accepted and again when the user stops scanning, so a
+  physical-device run can diagnose pose misses, depth misses, precheck skips,
+  and rejection reasons even when Preview/Capture is never reached. Scan stats
+  MUST report accepted raw sample counts separately from the fused/displayed
+  surfel count, because later keyframes can update existing voxels without
+  increasing the rendered surfel count; device logs need to distinguish "no
+  post-first frames accepted" from "post-first samples collapsed into the first
+  frame's fused voxels". Route-side panorama telemetry SHOULD also include a
+  monotonically increasing `scanId`. If the JS frame pump throws before it can
+  invoke the route's XR frame callback, for example while fetching the latest
+  native frame, it SHOULD keep polling so a single transient callback error
+  does not leave the visible preview stuck on the first accepted surfel batch.
+  The route accepts `?autorun=1`, `?depth=raw`, `?depth=smooth`, and `?mesh=0`
+  so physical-device runs can deep-link directly into an active WebXR scan
+  while keeping the normal nav Start Scan control for manual use, and so the
+  raw-depth, smooth-depth, and mesh-reconstruction paths can be isolated. Live
   snapshot publishing uses adaptive backoff after 10k retained samples and
   reports the selected refresh interval in telemetry; manual Preview and final
   Capture still force full model builds. Manual Preview yields a frame and
@@ -244,24 +184,9 @@ Implemented:
   `XRCPUDepthInformation.data` or `XRCamera` payload just because a previous JS
   phase took longer than a frame interval, while staying small enough that
   retained ARKit `CVPixelBuffer`s do not starve the camera/depth buffer pools
-  and halt later `ARSession.didUpdate` delivery. The WebXR
-  implementation logs internal `PANORAMIC_NATIVE_PAYLOAD_PROFILE` telemetry for
-  depth and camera payload requests, including bridge-request time and native
-  copy/render time, depth validity percentage, the selected confidence
-  threshold, and the percentage of depth pixels rejected by that threshold. It
-  also reports whether an ARKit confidence map was used and the low/medium/high
-  confidence distribution. The same internal telemetry SHOULD include the
-  captured camera-image size, the `ARCamera.imageResolution` basis used for
-  intrinsics scaling, and both depth-to-captured-image and depth-to-projection
-  scale factors so physical-device logs can catch depth/camera orientation or
-  scaling mistakes without exposing raw native intrinsics to app code. If the
-  lazy native payload bridge is missing, throws, or returns no payload, the same
-  profile SHOULD mark `payloadUnavailable`, include a `fallbackReason`, and
-  preserve native error details when available. Camera payload failure should
-  degrade to a missing camera image so depth surfels can still use fallback
-  colors; depth payload failure remains fatal for that frame's depth samples but
-  must be explicit in logs rather than appearing only as a generic scan-loop
-  exception.
+  and halt later `ARSession.didUpdate` delivery. Camera payload failure
+  degrades to a missing camera image so depth surfels can still use fallback
+  colors; depth payload failure remains fatal for that frame's depth samples.
 - Geometry telemetry: final capture logs `PANORAMIC_CAPTURE_GEOMETRY` with
   bounds min/max/center, height-to-horizontal ratio, weighted centroid, average
   accepted scan direction, and normal-projected span/RMS thickness. The
@@ -296,33 +221,21 @@ Implemented:
   current depth candidate's missing surfel and new-voxel thresholds are met,
   because a rescue gate only needs an accept/reject answer and rejected frames
   can otherwise spend scan-loop time walking mesh samples that cannot
-  change the decision. `PANORAMIC_MESH_PROFILE` reports available mesh size,
-  and `PANORAMIC_KEYFRAME_PROFILE` reports how many mesh surfels were
-  projected, colored, skipped, fused, whether mesh preflight recovered a depth
-  gate, which normal-buffer mode was used (`face`, `vertex`, `mixed`, `other`,
-  or `none`), whether the current camera image was requested for mesh color,
-  and whether the no-mutation preflight exited after satisfying
-  those rescue thresholds. `PANORAMIC_KEYFRAME_PROFILE` also reports `meshFetchMs`,
-  the elapsed time to read `XRFrame.detectedMeshes`, so physical logs can
-  separate native mesh bridge/buffer marshaling from mesh surfel projection.
-  If the current depth keyframe already satisfies the surfel and new-voxel
-  gates, the route SHOULD defer `XRFrame.detectedMeshes` summary reads unless
-  this is the first/periodic mesh supplement check, the keyframe covers a new
-  180-degree scan sector, a supplement refresh is due, or mesh preflight
-  already recovered the current depth gate. New scan sectors are the moments
-  most likely to expose fresh ARKit reconstruction, while `detectedMeshes`
-  summary reads remain cheap and do not copy full geometry buffers. When metadata
-  is read, the route SHOULD avoid full mesh-buffer projection unless
-  `XRFrame.detectedMeshes` summaries show the mesh set's `lastChangedTime`
-  values changed, the mesh supplement has not refreshed for several accepted
-  keyframes, or mesh preflight recovered the current depth gate. This keeps
-  repeated ARMeshAnchor geometry from being fetched or reprojected on every
-  accepted depth keyframe while still letting standard `XRMesh` geometry
-  improve scene shape when the mesh appears, changes, or is needed for
-  acceptance. `PANORAMIC_KEYFRAME_PROFILE` reports whether the mesh append was
-  skipped and why; `meshAppendReason: "mesh-check-deferred"` means the accepted
-  depth keyframe intentionally skipped the mesh metadata read. Periodic
-  `PANORAMIC_MESH_PROFILE` availability telemetry uses
+  change the decision. If the current depth keyframe already satisfies the
+  surfel and new-voxel gates, the route SHOULD defer `XRFrame.detectedMeshes`
+  summary reads unless this is the first/periodic mesh supplement check, the
+  keyframe covers a new 180-degree scan sector, a supplement refresh is due,
+  or mesh preflight already recovered the current depth gate. New scan sectors
+  are the moments most likely to expose fresh ARKit reconstruction, while
+  `detectedMeshes` summary reads remain cheap and do not copy full geometry
+  buffers. When metadata is read, the route SHOULD avoid full mesh-buffer
+  projection unless `XRFrame.detectedMeshes` summaries show the mesh set's
+  `lastChangedTime` values changed, the mesh supplement has not refreshed for
+  several accepted keyframes, or mesh preflight recovered the current depth
+  gate. This keeps repeated ARMeshAnchor geometry from being fetched or
+  reprojected on every accepted depth keyframe while still letting standard
+  `XRMesh` geometry improve scene shape when the mesh appears, changes, or is
+  needed for acceptance. Periodic mesh-availability checks use
   `XRFrame.detectedMeshes` and standard `XRMesh` fields rather than app-facing
   native frame metadata; the WebXR runtime may satisfy mesh-space and
   `lastChangedTime` reads from lightweight summaries and lazily fetch full
@@ -333,22 +246,15 @@ Implemented:
   mesh payloads are fetched for accepted-keyframe reconstruction, the WebXR
   route samples dense mesh candidates by stride and should jump over unsampled
   triangle/vertex candidates rather than running centroid, projection, color,
-  or fusion work for each discarded candidate; keyframe telemetry reports the
-  stride-skipped mesh candidates for both append and preflight so device logs
-  can distinguish intentional mesh decimation from geometric rejection. The
-  WebXR runtime may also compact very dense native `ARMeshGeometry` anchors
-  into lower-detail `XRMesh` vertex/index/normal payloads before crossing the
-  bridge, because the app consumes standard UA-provided WebXR mesh geometry
-  rather than ARKit buffer identity. `PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE`
-  reports both returned payload counts and native source mesh counts, plus how
-  many anchors were decimated, so physical logs can show whether mesh bridge
-  bytes are still a bottleneck. The WebXR runtime logs
-  `PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE` with request time plus mesh, vertex,
-  index, triangle, normal, byte counts, and how many returned mesh payloads
-  reused a native per-anchor cache keyed by `lastChangedTime`. The cache is
-  internal to the WebXR runtime: `XRMesh` still exposes the current frame's
-  mesh-space pose and cached geometry is reused only while the native
-  geometry-change timestamp is unchanged. The ARKit bridge should not bump
+  or fusion work for each discarded candidate. The WebXR runtime may also
+  compact very dense native `ARMeshGeometry` anchors into lower-detail
+  `XRMesh` vertex/index/normal payloads before crossing the bridge, because
+  the app consumes standard UA-provided WebXR mesh geometry rather than ARKit
+  buffer identity. Returned mesh payloads reuse a native per-anchor cache
+  keyed by `lastChangedTime`. The cache is internal to the WebXR runtime:
+  `XRMesh` still exposes the current frame's mesh-space pose and cached
+  geometry is reused only while the native geometry-change timestamp is
+  unchanged. The ARKit bridge should not bump
   `XRMesh.lastChangedTime` for pose-only `ARMeshAnchor` updates; those updates
   should refresh `frame.getPose(mesh.meshSpace, localReferenceSpace)` while
   preserving the cached vertex, normal, and index buffers. This lets the
@@ -374,20 +280,12 @@ Implemented:
   frame timing buckets. Capture MUST transition the route to `captured` before
   publishing the captured model revision, so the render scheduled by publication
   is eligible to emit `PANORAMIC_RENDER_METRICS` instead of drawing under the
-  transient `building-model` status. Each new live, preview, or captured model revision also
-  logs `PANORAMIC_RENDER_FRAME_PROFILE` with render-frame, command-encode, and
-  submit/present timings; active one-finger orbit and two-finger pan/pinch
-  interactions log the same profile at a throttled cadence. Physical logs can
-  therefore separate slow WebGPU drawing during direct manipulation from model
-  build or upload work.
+  transient `building-model` status.
 - Preview telemetry: manual Preview logs `PANORAMIC_PREVIEW_METRICS` with
   fused-model build time, keyframe/sample/surfel counts, camera-color coverage,
   multi-observation coverage, and normal coverage, so a physical-device run can
-  separate a slow Preview tap from final Capture, scan overlap, WebGPU upload,
-  or render bottlenecks.
-- WebGPU upload telemetry: model revisions log `PANORAMIC_MODEL_UPLOAD_PROFILE`
-  with upload time, keyframe/sample/surfel counts, surfel byte count, and
-  whether a larger reusable vertex buffer had to be allocated.
+  separate a slow Preview tap from final Capture, scan overlap, or render
+  bottlenecks.
 - Export telemetry: successful Save logs `PANORAMIC_EXPORT_METRICS` with the
   Files-visible path, file URI, byte count, keyframe count, raw sample count,
   and surfel count only after the Documents file exists and reports a nonzero
@@ -791,9 +689,6 @@ position onto the voxel's local fused plane before updating the coordinate
 average. This keeps repeated wall or tabletop observations from pulling the
 fused surfel along the surface normal because of small depth jitter, while the
 voxel grid still bounds how much sub-voxel detail can be collapsed.
-`PANORAMIC_KEYFRAME_PROFILE` SHOULD report how many depth and mesh samples were
-plane-projected so physical-device logs can distinguish the stabilization path
-from ordinary same-voxel averaging and relate it to `sampleConsumeMs`.
 
 Dynamic or reflective objects will still create ghosts. The MVP should not
 promise metrology-grade scans; it is a panoramic scene capture suitable for
@@ -847,9 +742,9 @@ normal/color work for samples that survive that cheap overlap gate. Accepted
 keyframes SHOULD cache the `XRView.transform` camera-to-world axes once, then
 reuse that cache for per-surfel point placement and normal rotation instead of
 repeatedly indexing the same matrix through generic helpers. This keeps the
-implementation transparent and WebXR-only while reducing the
-`PANORAMIC_KEYFRAME_PROFILE` `appendMs` bucket enough to decide whether
-native-side reconstruction is still needed after physical-device profiling. The
+implementation transparent and WebXR-only while reducing per-keyframe append
+time enough to decide whether native-side reconstruction is still needed
+after physical-device profiling. The
 route SHOULD reject pose-only
 non-keyframes before calling `XRFrame.getDepthInformation(view)`, so frames that
 are too soon, too similar, too fast, outside scan mode, or rotation-only
@@ -892,19 +787,13 @@ during slow scans and should not allocate a fresh key set on each XR frame.
 Accepted keyframes also maintain a per-keyframe sparse-depth cache so
 the valid-depth preflight, center samples, and neighboring samples used for
 normal estimation do not repeatedly resample the same WebXR depth-grid
-locations. `PANORAMIC_KEYFRAME_PROFILE` reports the actual cached depth-grid
-sample count. It also reports how many retained samples created new voxels
-versus updated existing voxels for the current keyframe, while
-`PANORAMIC_SCAN_STATS` reports scan-wide new and updated voxel contribution, so
-a physical-device log can distinguish useful 180-degree scan coverage from
-redundant keyframes. The incremental fusion accumulator SHOULD retain the
-sparse-depth cache backing arrays across accepted keyframes and report
-`depthCacheReused` so physical-device logs can distinguish sample work from
-allocation churn. The sparse cache SHOULD also retain camera-space points
-unprojected from `XRView.projectionMatrix` for each sampled depth-grid location
-within the accepted keyframe, and report `cameraPointCacheHits` and
-`cameraPointSamples` so normal-estimation cost can be separated from repeated
-unprojection work. For the common intrinsics-derived WebXR projection matrix,
+locations. `PANORAMIC_SCAN_STATS` reports scan-wide new and updated voxel
+contribution, so a physical-device log can distinguish useful 180-degree scan
+coverage from redundant keyframes. The incremental fusion accumulator SHOULD
+retain the sparse-depth cache backing arrays across accepted keyframes. The
+sparse cache SHOULD also retain camera-space points unprojected from
+`XRView.projectionMatrix` for each sampled depth-grid location within the
+accepted keyframe. For the common intrinsics-derived WebXR projection matrix,
 the cache SHOULD also precompute per-axis camera ray coefficients once per
 accepted keyframe so surfel and normal-neighbor unprojection only multiplies
 those coefficients by depth in the scan hot loop. The cache SHOULD precompute
@@ -917,9 +806,7 @@ falling back to the projective normalized transform only when needed. For the
 common identity transform, the cache SHOULD also precompute per-axis depth pixel
 indices and bilinear weights once per accepted keyframe, preserving the WebXR
 normalized-coordinate behavior while removing repeated floor/clamp/weight work
-from each sparse-grid sample. `PANORAMIC_KEYFRAME_PROFILE` reports
-`depthGridSampleMode` so physical-device validation can distinguish the cheap
-precomputed identity path from normalized-transform fallback sampling. When
+from each sparse-grid sample. When
   converting the fusion map into a renderable `Float32Array`, the accumulator
   SHOULD retain reusable CPU backing storage and return exact-length views for
   each published model. This keeps WebGPU uploads exact while avoiding a fresh
@@ -947,10 +834,7 @@ per accepted keyframe, then use an identity, affine, or projective sampler for
 the per-surfel bilinear read. When that standard WebXR transform is
 axis-aligned, the sampler SHOULD precompute sparse-grid camera pixel indices and
 bilinear weights once per accepted keyframe, then reuse them for every surfel
-color lookup. `PANORAMIC_KEYFRAME_PROFILE` reports `cameraTransformMode` and
-`cameraSampleMode` so physical-device logs show whether color sampling is
-staying on the cheap precomputed path or paying for per-sample normalized
-transform work. This remains a WebXR-shaped app contract because the sampler
+color lookup. This remains a WebXR-shaped app contract because the sampler
 consumes the standard normalized camera image transform exposed by
 `XRWebGLBinding`/the repo-local CPU binding analog.
 
@@ -960,14 +844,12 @@ places each depth-map value in camera space with camera intrinsics, and the
 panorama route needs current-frame depth delivery so a deliberate 180-degree
 sweep can keep accepting surfels after the startup frame. The first choice
 therefore favors high-confidence raw scene depth, with smoothed scene depth as
-the fallback when raw scene depth is unavailable. A profile-only deep link MAY
-request `["smooth", "raw"]` to test whether smoothed scene depth is causing
-WebXR to deliver only one useful surfel batch or lagged geometry. The keyframe
-policy still rejects fast camera motion to limit stale samples.
-`PANORAMIC_KEYFRAME_PROFILE` reports the selected `depthType` so
-physical-device logs can confirm which standard WebXR depth mode was active.
-This preference remains a standard WebXR request option; the app MUST NOT call a
-custom native depth-type API directly.
+the fallback when raw scene depth is unavailable. A `?depth=smooth` deep link
+MAY request `["smooth", "raw"]` to test whether smoothed scene depth is
+causing WebXR to deliver only one useful surfel batch or lagged geometry. The keyframe
+policy still rejects fast camera motion to limit stale samples. This preference
+remains a standard WebXR request option; the app MUST NOT call a custom native
+depth-type API directly.
 
 The model format should store:
 
@@ -1184,7 +1066,7 @@ The first version should optimize for predictable device behavior:
   revision
 - reuse the small uniform array across WebGPU draws instead of allocating it on
   every animation frame.
-- profile on a physical LiDAR device with `WEBGPU_DEMO_PROFILE`-style logs
+- profile on a physical LiDAR device with the WebGPU perf probe counters
 
 Suggested first caps:
 
@@ -1217,13 +1099,6 @@ Implementation tests:
 - model stats stay within configured caps
 - PLY export includes vertex positions, normals, and uchar colors
   (`bun test src/lib/panoramic-scene-model.test.ts`)
-- the panorama route keeps AR access behind WebXR-shaped
-  `immersive-ar`/`depth-sensing`/`camera-access` calls and does not call direct
-  native LiDAR helpers (`bun test src/lib/panoramic-scene-capture-route.test.ts`)
-- the panorama route keeps the capture, WebGPU render, and Files export
-  telemetry wired in the order expected by the physical validator
-  (`bun test src/lib/panoramic-scene-capture-route.test.ts`)
-
 Manual/device validation:
 
 - non-LiDAR device reports unsupported
@@ -1255,148 +1130,22 @@ Before requesting review for implementation, run:
 bun run test:ios
 ```
 
-For physical-device proof of the panorama flow, run:
-
-```sh
-bun run validate:panorama:ios -- \
-  --device <device-name-or-id> \
-  --install-app ./.build/ios-device/standardcameraapp.app \
-  --metro-url <lan-metro-url>
-```
-
-The `--install-app` flag is optional, but it should be used after a successful
-physical-device build so launch/install retries reuse the cached `.app` instead
-of rebuilding native code. The validator launches the dev-client build through
-the `expo-development-client` URL with `disableOnboarding=1`, attaches
-`devicectl --console` to the launch, and tails the Expo/Metro client log bytes
-appended during the run so React Native `console.log` telemetry is collected
-even when device syslog does not include JS logs. It opens the panorama demo
-route only after handing the build its Metro URL, and then waits for the phone
-interaction. Use the phone's nav Start Scan action, pan slowly until surfels appear,
-Capture, and Save. The validator
-passes only after it sees nonzero keyframe, capture, WebGPU-render, and
-Files-export telemetry from the physical app logs, and the required
-capture/render/export metrics agree on the captured model's keyframe, sample,
-and surfel counts. Export telemetry must also name the Files-visible `.ply`
-path. The validator enforces explicit speed and quality budgets by default:
-keyframe append under 160 ms, capture/render model build under 2 seconds,
-camera color coverage at least 25%, normal coverage at least 20%, stable
-multi-observation coverage at least 20% on both capture and render, 180-degree
-scan coverage at least 25% when scan stats are present, nonzero scene bounds,
-no more than the configured sparse depth-grid sample budget per keyframe, and
-the expected `intrinsics-projection` unprojection mode when that field is
-present. When keyframe telemetry reports `depthType`, validation also
-expects `"raw"`. When scan-config telemetry is present, validation expects a
-raw-first `depthTypeRequest` and `sessionDepthType: "raw"` so a physical run
-proves the default current-frame depth path instead of silently testing
-smoothed-depth delivery. These budgets can be
-overridden with the validator's `--max-*`/`--min-*` flags when profiling a
-different device class. The validator
-prints optional profiling telemetry (`PANORAMIC_LIVE_MODEL_PROFILE`,
-`PANORAMIC_MODEL_UPLOAD_PROFILE`, `PANORAMIC_NATIVE_PAYLOAD_PROFILE`,
-`PANORAMIC_KEYFRAME_REJECTION_PROFILE`, `PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE`,
-`PANORAMIC_PREVIEW_METRICS`, `PANORAMIC_RENDER_FRAME_PROFILE`, `PANORAMIC_SCAN_STATS`,
-`PANORAMIC_XR_FRAME_PUMP_PROFILE`, `PANORAMIC_XR_POSE_PROFILE`, and
-`PANORAMIC_CAPTURE_GEOMETRY`) when those lines appear before the required
-end-to-end metrics complete, and derives `CAMERA_CONTEXT_PROFILE` from
-`CAMERA_CTX` camera-provider lines when copied logs include them. That derived
-camera profile should preserve standard-camera starts, successful or failed
-`getUserMedia` opens, starts blocked by the WebXR external lock, duplicate
-starts coalesced while a start is in flight, and ignored stale LiDAR terminal
-events so a one-frame scan can be checked for AVFoundation/ARKit ownership
-handoff races. Since `CAMERA_CTX` lines are process-level provider logs rather
-than scan-scoped `PANORAMIC_*` metrics, the validator should keep the derived
-camera context when a later `scanId` boundary resets scan-scoped metrics; losing
-those lines can hide the standard-camera ownership clue that explains a
-first-frame-only surfel run. The validator validates the optional preview/live
-build/upload budgets when present. `PANORAMIC_XR_FRAME_PUMP_PROFILE` reports
-whether the WebXR animation-frame loop is waiting on no native frame or a stale
-depth frame, plus periodic successful delivery counts and native AR
-frame/depth-miss counters, so physical logs can separate ARKit depth starvation
-from JavaScript keyframe gating. When the requested ARKit depth semantic is
-missing, native frame-pump telemetry SHOULD also report whether raw
-`sceneDepth` and smoothed scene depth were present on the latest AR frame and
-how many requested-depth misses had the alternate semantic available. This lets
-profile-only logs distinguish a selected-depth semantic stall, such as smoothed
-depth disappearing while raw depth still arrives, from total ARKit camera/depth
-ownership starvation. The same frame-pump line SHOULD carry native ARKit
-session state and reason fields so a repeated stale frame can be attributed to
-session interruption/stop versus `ARSession` `didUpdate` ceasing while the
-native session still reports running. It SHOULD also report the native app
-lifecycle state so a stale frame run can identify phone lock/backgrounding as
-the cause without inferring it from missing AR frames.
-`PANORAMIC_KEYFRAME_REJECTION_PROFILE` reports the latest throttled keyframe
-skip reason with pose motion, retained surfel count, depth/miss counters, and
-depth/mesh preflight density when available, so a run that captures no new
-surfels can be distinguished as pose gating, depth starvation, or sparse
-surface contribution. For post-append density/new-voxel rejections, the profile
-SHOULD also report raw-sample and fused-surface deltas since the candidate began,
-so copied logs can distinguish harmless preflight-only skips from rejected
-candidates that already mutated the fusion accumulator and can leave the
-accepted/live model stuck at the first keyframe. If the WebXR scan frame
-callback throws, the route SHOULD record a `scan-loop-error` rejection profile
-and keep scheduling frames while the same session is still scanning; a single
-transient callback error must not leave the visible preview stuck on the first
-accepted surfel batch.
-If optional mesh detection is enabled, the validator SHOULD treat a
-`scan-loop-error` with `TypeError: undefined is not a function` or a
-`PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE` with `meshPayloadUnavailable` as
-evidence that the optional WebXR mesh bridge may have thrown before post-first
-depth keyframe capture; mesh access is a supplement and must not be allowed to
-turn a depth-backed scan into a one-frame surfel model. The validator SHOULD
-also preserve `CAMERA_CTX` external-lock engagement/release lines, because
-profile-only autorun can otherwise hide whether `requestSession()` waited for
-the shared AVFoundation handoff before starting ARKit. The validator SHOULD
-also treat `PANORAMIC_NATIVE_PAYLOAD_PROFILE` with `payloadUnavailable` as
-evidence that lazy native frame bytes were unavailable after an XR frame was
-delivered, and should distinguish depth-payload unavailability from camera
-payload unavailability because only the former prevents depth surfels for that
-frame. Repeated keyframe, preview, live-model, model-publish, render-frame, upload, and
-native-payload telemetry is merged conservatively: the latest model counts are
-kept for
-capture/render/export consistency, while the worst observed timing, worst
-depth-grid sample count, lowest quality percentage, and any non-fast-path
-unprojection, depth-grid sampling, or camera-color sampling mode, plus any
-non-raw depth type, are kept for budget checks and profiling output.
-The validator SHOULD print a
-compact bottleneck summary that ranks observed timing buckets and includes
-fast-path, depth-type, projection-pixel, capture-quality, native depth-validity,
-native depth range, native depth/camera scale, native mesh payload size, and
-scan-loop context so a future device log can immediately distinguish slow
-native payload work, invalid or out-of-range depth, JS sample-loop work, model
-build, WebGPU upload, preview, render, export phases, and scan-quality misses
-from pose loss, missing depth, pose precheck skips, or keyframe rejection
-reasons. The scan-loop summary SHOULD include coverage percentage, scan-frame
-rate, accepted-keyframe rate, and retained sample count so a 180-degree scan
-that simply did not cover enough sectors is separable from one with slow model
-work or bad projection math. The summary SHOULD also include a capture/render/
-upload/export model-chain line with keyframe, raw-sample, and fused-surface
-counts so copied logs can show whether a full accepted scan reached the GPU and
-saved file or collapsed at one boundary. A stale live-preview snapshot SHOULD
-NOT be reported as the displayed-model bottleneck when a later render/upload/
-publish stage has already reached the accepted keyframe and raw-sample counts.
-When geometry telemetry is present, the
-summary SHOULD also include the normal-projected span/RMS thickness and normal
-coherence so a flat-wall scan can be checked for world-coordinate smear from
-logs alone. When only the first keyframe is accepted, the summary SHOULD also
-classify the likely first-frame failure mode as native frame starvation,
-native frame-fetch error, scan-loop callback failure, app-side scan-loop
-scheduling stop, or post-first keyframe-gate rejection. A
-`--out-json <path>` mode SHOULD write the same merged metrics,
-missing required metric list, validation/profile-only status, timestamp, and
-bottleneck summary to a durable JSON report so physical-device collections can
-be attached or reanalyzed without terminal scrollback. A `--log-file` mode MAY
-parse copied device logs through the same merger, budget checks, and bottleneck
-summary without connecting to the phone; this keeps pasted physical-device logs
-actionable while the device is unavailable. A `--profile-only` mode MAY skip
-the required end-to-end validation gate and collect whatever panorama telemetry
-appears within the timeout; this is for debugging broken or incomplete physical
-runs and must not replace the full validation command above when declaring the
-panorama flow done. Its parsing, consistency, budget checks, and bottleneck
-summary are covered by
-`bun test scripts/validate-panorama-ios.test.ts`. If CoreDevice refuses launch
-because the phone is locked, unlock the iPhone and rerun the same validator
-command.
+There is no automated physical-device validator. Manual device validation reads
+`PANORAMIC_CAPTURE_METRICS`, `PANORAMIC_CAPTURE_GEOMETRY`,
+`PANORAMIC_RENDER_METRICS`, `PANORAMIC_EXPORT_METRICS`, periodic
+`PANORAMIC_SCAN_STATS`, and `PANORAMIC_SCAN_CONFIG` lines from a copied device
+log to confirm that the captured model reached the GPU and the saved `.ply`
+file. Capture should report nonzero keyframes, surfels, camera color
+percentage, normal percentage, and bounds; render should report a nonzero
+surfel count and the expected canvas size and presentation format; export
+should report a nonzero byte count and a Files-visible `.ply` path. Capture,
+render, and export metrics should agree on the captured model's keyframe,
+sample, and surfel counts. Scan stats should show a 180-degree scan coverage
+of at least 25%, nonzero scene bounds, and no more than the configured sparse
+depth-grid sample budget per accepted keyframe. When `PANORAMIC_SCAN_CONFIG`
+is present, expect a raw-first `depthTypeRequest` and `sessionDepthType:
+"raw"` so the default current-frame depth path is exercised instead of
+silently testing smoothed-depth delivery.
 
 Also run the `ref-check` skill so any `@ref LLP 0015#...` annotations added in
 code point to real anchors.

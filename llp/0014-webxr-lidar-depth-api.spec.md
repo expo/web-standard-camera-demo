@@ -437,7 +437,7 @@ while scanning. That value MUST NOT be exposed as a request-session option or
 other caller-selectable camera resolution; callers only observe the actual
 returned image dimensions through `XRCPUCameraImage.width` and
 `XRCPUCameraImage.height`. Any further increase MUST be validated with
-physical-device `WEBGPU_DEMO_PROFILE` logs.
+physical-device profiling.
 
 ## `xr-session`
 

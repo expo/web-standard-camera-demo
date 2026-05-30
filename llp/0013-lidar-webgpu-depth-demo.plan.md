@@ -339,22 +339,17 @@ GPUCanvasContext.present()
 ```
 
 The route targets 30 fps uploads and renders every animation frame with the
-latest uploaded ARKit frame. In development builds it emits
-`WEBGPU_DEMO_PROFILE` records through the same system-log path as the LLP 0012
-camera demos, including WebXR frame callbacks, pose/depth/camera misses,
-depth/color upload preparation, `writeTexture()`, and render submit/present
-timings. The WebXR render callback must catch per-frame depth/camera/upload
-exceptions, log a throttled `WEBXR_DEMO_FRAME_ERROR`, and immediately request the
-next XR frame; one stale or missing native payload should make the profile
-visible without leaving the demo stuck on the development menu or a single
-rendered frame. The panorama validator's profile-only log parser also consumes
-`WEBGPU_DEMO_PROFILE` and `WEBXR_DEMO_FRAME_ERROR` records so copied physical
-device logs can summarize whether the WebXR demo is missing pose, depth, camera,
-upload, or render work. The same validator provides a `--webxr-demo` preset that
-deep-links to `lidar-depth-webxr?autorun=1&view=depth` and runs in profile-only
-mode so the physical-device trace targets this demo's Depth view rather than the
-panorama capture route. `WEBGPU_DEMO_PROFILE` records include the active
-`viewMode`/`viewModeLabel` so copied logs can prove which renderer was profiled.
+latest uploaded ARKit frame. It feeds the shared `createWebGpuPerfProbe`
+counters with WebXR frame callbacks, pose/depth/camera misses, depth/color
+upload preparation, `writeTexture()`, and render submit/present timings; those
+counters are accumulated for instrumentation but not emitted to `console.log`
+in shipping builds. The WebXR render callback must catch per-frame
+depth/camera/upload exceptions, log a throttled `WEBXR_DEMO_FRAME_ERROR`, and
+immediately request the next XR frame; one stale or missing native payload
+should not leave the demo stuck on the development menu or a single rendered
+frame. The route also deep-links via
+`lidar-depth-webxr?autorun=1&view=depth` so physical-device traces can target
+the Depth view rather than the panorama capture route.
 
 ### Depth payload before camera
 
@@ -458,16 +453,8 @@ handoff: a `stopped` or `failed` event from an older ARKit session MUST NOT
 clear a newly acquired external lock before the new `starting`/`running` event
 has established its session id. The WebXR explicit `end()` path MUST mark the
 session ended and cancel callbacks immediately, but it MUST keep the external
-camera lock acquired for that session until the native ARKit stop promise resolves. Runtime logs SHOULD
-keep camera ownership clues visible: standard-camera start attempts, successful
-`getUserMedia` opens, explicit external-lock engagement/release, starts blocked
-by the external lock, duplicate starts coalesced while one is in flight, and
-ignored stale LiDAR terminal events. Because provider logs do not carry a
-panorama `scanId`, the panorama validator should preserve the derived
-camera-ownership profile across scan-id boundaries in a pasted log. That lets a
-one-frame WebXR scan be distinguished from an AVFoundation/ARKit ownership race
-even when the relevant `CAMERA_CTX` lines precede the first current-scan
-`PANORAMIC_*` metric.
+camera lock acquired for that session until the native ARKit stop promise
+resolves.
 
 Runtime ARKit failures and interruptions are native session-state transitions,
 not merely missing frames. The native sidecar reports `starting`, `running`,
