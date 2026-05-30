@@ -163,6 +163,7 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
   }
 
   let stream = MediaStream(id: UUID().uuidString, tracks: tracks)
+  source.startSessionIfNeeded(reason: "getUserMedia", streamId: stream.id)
   standardCameraTrace("native-gum-done", [
     "durationMs": (CFAbsoluteTimeGetCurrent() - gumStartedAt) * 1000,
     "tracks": tracks.count,
@@ -490,18 +491,6 @@ private func buildCaptureSession(
       }
 
       session.commitConfiguration()
-      let startRunningStartedAt = CFAbsoluteTimeGetCurrent()
-      standardCameraTrace("native-session-start-running-start", [
-        "audio": audioDevice != nil,
-        "video": videoDevice != nil,
-        "videoDevice": videoDevice?.localizedName
-      ])
-      session.startRunning()
-      standardCameraTrace("native-session-start-running-done", [
-        "durationMs": (CFAbsoluteTimeGetCurrent() - startRunningStartedAt) * 1000,
-        "isRunning": session.isRunning,
-        "videoDevice": videoDevice?.localizedName
-      ])
 
       continuation.resume(returning: SessionBuildResult(
         session: session,

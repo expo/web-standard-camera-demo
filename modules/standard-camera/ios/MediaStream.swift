@@ -131,7 +131,11 @@ internal final class MediaStream: SharedObject {
   // with no getUserMedia tracks).
   // @ref LLP 0004#stream-construction
   var captureSession: AVCaptureSession? {
-    return tracks.first(where: { $0.kind == "video" })?.source?.session
+    return captureSource?.session
+  }
+
+  var captureSource: CaptureSource? {
+    return tracks.first(where: { $0.kind == "video" })?.source
   }
 
   // Test hook — posts the same notifications iOS would, so WPT tests can

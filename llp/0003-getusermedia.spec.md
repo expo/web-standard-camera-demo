@@ -89,11 +89,20 @@ Done on iOS, on the dedicated session queue `dev.ide.standardcamera.session`. Si
 5. `canAddInput / addInput`. Couldn't add → `NotReadableError`.
 6. Add the hidden `FrameSink` (an `AVCaptureVideoDataOutput`) so frames are actively pulled and a delegate fires on the first sample. See [LLP 0006#first-frame-detection](./0006-ios-native-mapping.decision.md).
 7. `session.commitConfiguration()`
-8. `session.startRunning()`
-9. Snapshot the device's active format (`activeFormat.formatDescription`) for `track.getSettings()`: `deviceId`, `groupId` (= deviceId in v1), `facingMode`, `width`, `height`, `frameRate`, `aspectRatio`.
-10. Capture `frameSink.output.connection(with: .video)` as the track's `AVCaptureConnection` — this is what `track.enabled = false` toggles.
+8. Snapshot the device's active format (`activeFormat.formatDescription`) for `track.getSettings()`: `deviceId`, `groupId` (= deviceId in v1), `facingMode`, `width`, `height`, `frameRate`, `aspectRatio`.
+9. Capture `frameSink.output.connection(with: .video)` as the track's `AVCaptureConnection` — this is what `track.enabled = false` toggles.
+10. Return the `MediaStream`, then ask its `CaptureSource` to start the session on `MediaStream.sessionQueue` without awaiting `startRunning()`.
 
 The atomic configuration matters: we add input and output in the *same* `beginConfiguration` / `commitConfiguration` block so the auto-created connection between them comes up in one step. We did this differently in an earlier revision and the connection was `nil` when the track was constructed.
+
+`AVCaptureSession.startRunning()` is a blocking AVFoundation call. It must stay
+off the main thread, but resolving `getUserMedia()` only after it completes also
+means React cannot attach the `<Video>` preview layer until the session is
+already hot. That made tab-return and front/back switch UI animations compete
+with a main-thread preview attachment to a running capture graph. The current
+shape returns the stream after the graph is configured, lets the preview attach
+to a cold session, and coalesces `getUserMedia()`, `<Video srcObject>`, and
+`play()` start requests through `CaptureSource.startSessionIfNeeded()`.
 
 ## `gum-error-mapping`
 

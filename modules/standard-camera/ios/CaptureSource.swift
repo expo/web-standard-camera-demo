@@ -76,6 +76,7 @@ internal final class CaptureSource {
   // Strict count, decremented from MediaStreamTrack.stop(). When this hits
   // zero the session is stopped; see LLP 0004#track-stop step 4.
   private var liveTrackCount = 0
+  private var startQueued = false
   private let lock = NSLock()
 
   init(
@@ -167,6 +168,80 @@ internal final class CaptureSource {
     }
   }
 
+  // @ref LLP 0003#gum-build-session — `getUserMedia()` builds and returns the
+  // MediaStream before the blocking AVFoundation start completes. Consumers
+  // can attach a preview layer to the cold session, while this source
+  // coalesces all startup requests onto the serialized session queue.
+  // @ref LLP 0006#concurrency — `AVCaptureSession.startRunning()` must never
+  // run on the main thread.
+  func startSessionIfNeeded(reason: String, streamId: String? = nil) {
+    lock.lock()
+    if startQueued || session.isRunning {
+      lock.unlock()
+      standardCameraTrace("native-session-start-running-skip", [
+        "isRunning": session.isRunning,
+        "reason": reason,
+        "startQueued": startQueued,
+        "streamId": streamId
+      ])
+      return
+    }
+    startQueued = true
+    lock.unlock()
+
+    let source = self
+    MediaStream.sessionQueue.async {
+      let startedAt = CFAbsoluteTimeGetCurrent()
+      let hasLiveTracks = source.hasLiveTracks
+      standardCameraTrace("native-session-start-running-start", [
+        "audio": source.audioDevice != nil,
+        "hasLiveTracks": hasLiveTracks,
+        "reason": reason,
+        "streamId": streamId,
+        "video": source.device != nil,
+        "videoDevice": source.device?.localizedName
+      ])
+      if hasLiveTracks && !source.session.isRunning {
+        source.session.startRunning()
+      }
+      source.lock.lock()
+      source.startQueued = false
+      source.lock.unlock()
+      standardCameraTrace("native-session-start-running-done", [
+        "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+        "hasLiveTracks": source.hasLiveTracks,
+        "isRunning": source.session.isRunning,
+        "reason": reason,
+        "streamId": streamId,
+        "videoDevice": source.device?.localizedName
+      ])
+    }
+  }
+
+  // @ref LLP 0005#srcobject-play-pause — `pause()` stops the underlying
+  // AVCaptureSession without ending the tracks.
+  func stopSessionForPause(reason: String) {
+    let source = self
+    MediaStream.sessionQueue.async {
+      let startedAt = CFAbsoluteTimeGetCurrent()
+      standardCameraTrace("native-session-pause-stop-start", [
+        "isRunning": source.session.isRunning,
+        "reason": reason
+      ])
+      if source.session.isRunning {
+        source.session.stopRunning()
+      }
+      source.lock.lock()
+      source.startQueued = false
+      source.lock.unlock()
+      standardCameraTrace("native-session-pause-stop-done", [
+        "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+        "isRunning": source.session.isRunning,
+        "reason": reason
+      ])
+    }
+  }
+
   // Called from MediaStreamTrack.stop() and .endByRuntimeError().
   // @ref LLP 0004#track-stop — notify the source; if no live tracks
   // remain, stop the underlying AVCaptureSession.
@@ -214,6 +289,9 @@ internal final class CaptureSource {
     if session.isRunning {
       session.stopRunning()
     }
+    lock.lock()
+    startQueued = false
+    lock.unlock()
     // @ref LLP 0008#audio-session-configuration — release the system audio
     // session so other apps can resume playback when the last reference goes.
     if audioDevice != nil {

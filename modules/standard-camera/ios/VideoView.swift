@@ -297,23 +297,11 @@ internal final class VideoView: ExpoView {
       }
     }
 
-    // @ref LLP 0005#srcobject-play-pause — Start the session if not running
-    if !session.isRunning {
-      MediaStream.sessionQueue.async {
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        standardCameraTrace("native-preview-start-running-start", [
-          "reason": "attachStream",
-          "streamId": stream.id
-        ])
-        session.startRunning()
-        standardCameraTrace("native-preview-start-running-done", [
-          "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-          "isRunning": session.isRunning,
-          "reason": "attachStream",
-          "streamId": stream.id
-        ])
-      }
-    }
+    // @ref LLP 0005#srcobject-play-pause — Start the session if not running.
+    // @ref LLP 0003#gum-build-session — The stream may be returned before
+    // AVFoundation has completed startRunning(), so preview attachment asks
+    // the source to coalesce startup rather than touching the session here.
+    videoTrack?.source?.startSessionIfNeeded(reason: "attachStream", streamId: stream.id)
   }
 
   // @ref LLP 0006#preview-orientation-and-mirroring — Use Apple's rotation
@@ -376,37 +364,20 @@ internal final class VideoView: ExpoView {
   }
 
   func play() {
-    guard let session = srcObject?.captureSession else { return }
-    MediaStream.sessionQueue.async { [weak self] in
-      if !session.isRunning {
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        standardCameraTrace("native-preview-start-running-start", [
-          "reason": "play"
-        ])
-        session.startRunning()
-        standardCameraTrace("native-preview-start-running-done", [
-          "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-          "isRunning": session.isRunning,
-          "reason": "play"
-        ])
-      }
-      DispatchQueue.main.async {
-        self?.previewLayer.connection?.isEnabled = true
-        self?.onPlay()
-      }
+    guard let stream = srcObject else { return }
+    stream.captureSource?.startSessionIfNeeded(reason: "play", streamId: stream.id)
+    DispatchQueue.main.async { [weak self] in
+      self?.previewLayer.connection?.isEnabled = true
+      self?.onPlay()
     }
   }
 
   // @ref LLP 0005#srcobject-play-pause — pause() stops the session
   func pause() {
-    guard let session = srcObject?.captureSession else { return }
-    MediaStream.sessionQueue.async { [weak self] in
-      if session.isRunning {
-        session.stopRunning()
-      }
-      DispatchQueue.main.async {
-        self?.onPause()
-      }
+    guard let stream = srcObject else { return }
+    stream.captureSource?.stopSessionForPause(reason: "pause")
+    DispatchQueue.main.async { [weak self] in
+      self?.onPause()
     }
   }
 }

@@ -88,7 +88,10 @@ layer so the focused route is the only live preview consumer of the shared
 `MediaStream`. When the Home tab regains focus it reattaches `null → stream`
 instead of relying on a stale offscreen native view. Home also keys its native
 preview by a focus serial so a tab return creates a fresh native `<Video>` view
-even when the shared `MediaStream` object itself has not changed.
+even when the shared `MediaStream` object itself has not changed. Home waits a
+short focus-settle window before preview reattachment or auto-start so the iOS
+native tab animation is not sharing its first frames with AVFoundation preview
+startup work.
 
 ## Frame-bound demo mirroring
 
