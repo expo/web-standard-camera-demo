@@ -86,7 +86,6 @@ import {
 import {
   installWebXRDepthProfile,
   runWithWebXRUserActivation,
-  setWebXRDepthProfileTelemetryContext,
   WebXRCPUCameraBinding,
   type WebXRCPUDepthInformation,
   type WebXRCPUCameraImage,
@@ -436,16 +435,13 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
       return () => {
         cancelXRLoop();
         void sessionRef.current?.end();
-        setWebXRDepthProfileTelemetryContext(null);
       };
     }, [])
   );
 
-  function resetCapture(reason: ScanResetReason = 'manual-reset'): void {
+  function resetCapture(_reason: ScanResetReason = 'manual-reset'): void {
     const nextScanId = scanIdRef.current + 1;
-    logScanResetProfile(reason, nextScanId);
     scanIdRef.current = nextScanId;
-    setWebXRDepthProfileTelemetryContext({ scanId: scanIdRef.current });
     fusionRef.current = createSurfelFusionAccumulator();
     coverageSectorsRef.current = new Set();
     keyframeRef.current = null;
@@ -521,96 +517,11 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
   }
 
   function maybeLogKeyframeRejectionProfile(
-    reason: string | null,
-    fields: Record<string, unknown> = {}
-  ): void {
-    const now = performanceNow();
-    if (
-      lastKeyframeRejectionProfileLoggedAtMsRef.current > 0 &&
-      now - lastKeyframeRejectionProfileLoggedAtMsRef.current < KEYFRAME_REJECTION_PROFILE_INTERVAL_MS
-    ) {
-      return;
-    }
-    lastKeyframeRejectionProfileLoggedAtMsRef.current = now;
-    const stats = scanStatsRef.current;
-    // @ref LLP 0015#testing-and-validation - Rejection profiles explain why a
-    // physical scan can appear to capture no surfels even though the XR loop is
-    // running, without forcing CPU depth/camera work on pose-only rejects.
-    console.log('PANORAMIC_KEYFRAME_REJECTION_PROFILE', JSON.stringify({
-      coveragePercent: roundMetric(panoramicCoveragePercent(coverageSectorsRef.current), 1),
-      depthInfoRequests: stats.depthInfoRequests,
-      depthMisses: stats.depthMisses,
-      depthPrecheckSkips: stats.depthPrecheckSkips,
-      depthType: sessionRef.current?.depthType ?? null,
-      frameCount: stats.frameCount,
-      fusedSurfelCount: fusionRef.current.voxels.size,
-      keyframes: keyframeCountRef.current,
-      rawSampleCount: fusionRef.current.rawSampleCount,
-      reason: reason ?? 'unknown',
-      retainedSamples: surfelCountRef.current,
-      scanId: scanIdRef.current,
-      status: statusRef.current,
-      ...fields,
-    }));
-  }
+    _reason: string | null,
+    _fields: Record<string, unknown> = {}
+  ): void {}
 
-  function logCaptureBlockedProfile(reason: CaptureBlockedReason): void {
-    const stats = scanStatsRef.current;
-    // @ref LLP 0015#testing-and-validation - Capture is disabled until enough
-    // keyframes exist, but stale taps or programmatic calls still need a copied
-    // device-log breadcrumb that proves the scan was not sealed at one frame.
-    console.log('PANORAMIC_CAPTURE_BLOCKED_PROFILE', JSON.stringify({
-      acceptedKeyframes: stats.acceptedKeyframes,
-      captureInFlight: captureInFlightRef.current,
-      coveragePercent: roundMetric(panoramicCoveragePercent(coverageSectorsRef.current), 1),
-      frameCount: stats.frameCount,
-      fusedSurfelCount: fusionRef.current.voxels.size,
-      keyframes: keyframeCountRef.current,
-      liveSurfelCount,
-      previewBuildInFlight: previewBuildInFlightRef.current,
-      rawSampleCount: fusionRef.current.rawSampleCount,
-      reason,
-      requiredKeyframes: MIN_CAPTURE_KEYFRAMES,
-      retainedSamples: surfelCountRef.current,
-      scanId: scanIdRef.current,
-      status: statusRef.current,
-    }));
-  }
-
-  function logScanResetProfile(reason: ScanResetReason, nextScanId: number): void {
-    const stats = scanStatsRef.current;
-    const previousKeyframes = Math.max(keyframeCountRef.current, stats.acceptedKeyframes);
-    const previousRawSampleCount = fusionRef.current.rawSampleCount;
-    const previousFusedSurfelCount = fusionRef.current.voxels.size;
-    const previousModelSurfelCount = modelRef.current?.surfelCount ?? 0;
-    const hasPreviousScan =
-      previousKeyframes > 0 ||
-      stats.frameCount > 0 ||
-      previousRawSampleCount > 0 ||
-      previousFusedSurfelCount > 0 ||
-      previousModelSurfelCount > 0 ||
-      surfelCountRef.current > 0;
-    if (!hasPreviousScan) return;
-    // @ref LLP 0015#testing-and-validation - Multi-attempt device logs must show
-    // when a later one-frame capture belongs to a fresh scan that discarded an
-    // earlier multi-keyframe model.
-    console.log('PANORAMIC_SCAN_RESET_PROFILE', JSON.stringify({
-      nextScanId,
-      previousAcceptedKeyframes: stats.acceptedKeyframes,
-      previousFrameCount: stats.frameCount,
-      previousFusedSurfelCount,
-      previousKeyframes,
-      previousLiveSurfelCount: liveSurfelCount,
-      previousModelSurfelCount,
-      previousRawSampleCount,
-      previousRetainedSamples: surfelCountRef.current,
-      previousScanId: scanIdRef.current,
-      reason,
-      scanId: nextScanId,
-      sessionActive: sessionRef.current !== null,
-      status: statusRef.current,
-    }));
-  }
+  function logCaptureBlockedProfile(_reason: CaptureBlockedReason): void {}
 
   function logScanStats(reason: string): void {
     const stats = scanStatsRef.current;
@@ -651,28 +562,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     }));
   }
 
-  function logXRScanLoopStopProfile(reason: string, session: WebXRSession): void {
-    const stats = scanStatsRef.current;
-    // @ref LLP 0015#testing-and-validation - If recursive XR frame scheduling
-    // stops after a first keyframe, logs need to show whether the app stopped
-    // intentionally or the session/status guard rejected the next frame.
-    console.log('PANORAMIC_XR_SCAN_LOOP_STOP_PROFILE', JSON.stringify({
-      acceptedKeyframes: stats.acceptedKeyframes,
-      captureInFlight: captureInFlightRef.current,
-      depthMisses: stats.depthMisses,
-      frameCount: stats.frameCount,
-      fusedSurfelCount: fusionRef.current.voxels.size,
-      keyframes: keyframeCountRef.current,
-      poseMisses: stats.poseMisses,
-      rawSampleCount: fusionRef.current.rawSampleCount,
-      reason,
-      retainedSamples: surfelCountRef.current,
-      scanId: scanIdRef.current,
-      sessionEnded: session.ended,
-      sessionMatches: sessionRef.current === session,
-      status: statusRef.current,
-    }));
-  }
+  function logXRScanLoopStopProfile(_reason: string, _session: WebXRSession): void {}
 
   function logScanConfig(
     session: WebXRSession,
@@ -704,31 +594,7 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     logScanStats('periodic');
   }
 
-  function maybeLogMeshProfile(frame: WebXRFrame): void {
-    const now = performanceNow();
-    if (now - lastMeshProfileLoggedAtMsRef.current < MESH_PROFILE_INTERVAL_MS) {
-      return;
-    }
-    const detectedMeshes = frame.detectedMeshes;
-    const meshCount = detectedMeshes.size;
-    lastMeshProfileLoggedAtMsRef.current = now;
-    let latestChangedTime = 0;
-    for (const mesh of detectedMeshes) {
-      latestChangedTime = Math.max(latestChangedTime, mesh.lastChangedTime);
-    }
-    // @ref LLP 0015#v2-arkit-mesh-snapshot - Mesh telemetry lets physical-device logs
-    // show whether the WebXR mesh-backed surfel path has enough geometry to
-    // improve scan quality on the real device. It stays on
-    // `XRFrame.detectedMeshes` summary fields so periodic rejected frames do
-    // not force full mesh-buffer marshaling.
-    console.log('PANORAMIC_MESH_PROFILE', JSON.stringify({
-      frameTimeMs: roundMetric(frame.predictedDisplayTime),
-      lastChangedTime: roundMetric(latestChangedTime),
-      meshCount,
-      normalCount: 0,
-      scanId: scanIdRef.current,
-    }));
-  }
+  function maybeLogMeshProfile(_frame: WebXRFrame): void {}
 
   async function startSession(): Promise<void> {
     if (sessionRef.current) return;
@@ -2162,49 +2028,6 @@ export default function PanoramicSceneCaptureScreen(): React.JSX.Element {
     const livePublished = maybePublishLiveModel();
     const livePublishMs = performanceNow() - livePublishStart;
     stats.livePublishMsTotal += livePublishMs;
-    logKeyframeProfile({
-      appendProfile,
-      appendMs: appendMs + meshAppendMs,
-      cameraColoredSurfels: totalCameraColoredSurfels,
-      coveragePercent: panoramicCoveragePercent(coverageSectorsRef.current),
-      depthAppendMs: appendMs,
-      depthInitialAppendMs,
-      depthRecoveryAppendMs,
-      depthRecoverySkipped,
-      depthType: sessionRef.current?.depthType ?? null,
-      fusionMs,
-      keyframes: keyframeCountRef.current,
-      livePublished,
-      livePublishMs,
-      meshAdded,
-      meshAppendMs,
-      meshAppendReason,
-      meshAppendSkipped,
-      meshFetchMs,
-      meshSignature,
-      meshProfile,
-      meshPreflight,
-      meshPreflightMs,
-      meshRecoveredDepthGate,
-      newVoxelCount: totalNewVoxelCount,
-      observedDepthNewVoxels,
-      observedDepthSurfels,
-      position,
-      preSampleMs,
-      projectionMatrix,
-      rawSampleCount,
-      retainedSamples: surfelCountRef.current,
-      rotationDeg: sampleDecision.rotationDeg,
-      rotationSpeedDegPerSec: sampleDecision.rotationSpeedDegPerSec,
-      sampleDecisionMs,
-      scanId: scanIdRef.current,
-      transform: cameraToWorld,
-      surfelCount: totalSurfelCount,
-      fusedSurfelCount,
-      translationM: sampleDecision.translationM,
-      translationSpeedMPerSec: sampleDecision.translationSpeedMPerSec,
-      updatedVoxelCount: totalUpdatedVoxelCount,
-    });
     if (keyframeCountRef.current % 5 === 0 || keyframeCountRef.current >= MAX_KEYFRAMES) {
       logScanStats('accepted-keyframe');
     }
@@ -2384,336 +2207,42 @@ function logRenderMetrics(
 }
 
 function logRenderFrameProfile(
-  model: CaptureModel,
-  modelRevision: number,
-  canvasWidth: number,
-  canvasHeight: number,
-  presentationFormat: GPUTextureFormat,
-  modelViewMode: ModelViewMode,
-  status: PanoramicCaptureStatus,
-  renderFrameProfile: RenderFrameProfile,
-  reason: 'gesture' | 'model-change',
-  scanId: number
-): void {
-  console.log('PANORAMIC_RENDER_FRAME_PROFILE', JSON.stringify({
-    canvasHeight,
-    canvasWidth,
-    commandEncodeMs: roundMetric(renderFrameProfile.commandEncodeMs),
-    keyframes: model.keyframes,
-    modelRevision,
-    presentationFormat,
-    rawSampleCount: model.rawSampleCount,
-    reason,
-    renderFrameMs: roundMetric(renderFrameProfile.renderFrameMs),
-    scanId,
-    status,
-    submitPresentMs: roundMetric(renderFrameProfile.submitPresentMs),
-    surfelCount: model.surfelCount,
-    viewMode: MODEL_VIEW_MODES.find((mode) => mode.value === modelViewMode)?.label ?? modelViewMode,
-  }));
-}
+  _model: CaptureModel,
+  _modelRevision: number,
+  _canvasWidth: number,
+  _canvasHeight: number,
+  _presentationFormat: GPUTextureFormat,
+  _modelViewMode: ModelViewMode,
+  _status: PanoramicCaptureStatus,
+  _renderFrameProfile: RenderFrameProfile,
+  _reason: 'gesture' | 'model-change',
+  _scanId: number
+): void {}
 
 function logLiveModelProfile(
-  model: CaptureModel,
-  publishDecision: LiveModelSnapshotPublishDecision,
-  build: PreviewModelBuildResult,
-  scanId: number
-): void {
-  console.log('PANORAMIC_LIVE_MODEL_PROFILE', JSON.stringify({
-    buildMs: roundMetric(build.buildMs),
-    intervalMs: publishDecision.intervalMs,
-    keyframes: model.keyframes,
-    modelBuildMs: roundMetric(model.buildMs),
-    multiObservationPercent: roundMetric(100 * model.multiObservedSurfels / Math.max(model.surfelCount, 1), 1),
-    multiObservedSurfels: model.multiObservedSurfels,
-    reason: publishDecision.reason,
-    rawSampleCount: model.rawSampleCount,
-    reusedModel: build.reusedModel,
-    scanId,
-    surfelCount: model.surfelCount,
-  }));
-}
+  _model: CaptureModel,
+  _publishDecision: LiveModelSnapshotPublishDecision,
+  _build: PreviewModelBuildResult,
+  _scanId: number
+): void {}
 
 function logModelPublishProfile(
-  model: CaptureModel,
-  modelRevision: number,
-  source: ModelPublishSource,
-  renderRequesterReady: boolean,
-  recenter: boolean,
-  scanId: number
-): void {
-  // @ref LLP 0015#testing-and-validation - Publish telemetry proves that a fresh
-  // live/preview/capture model reached React state before WebGPU upload/render
-  // telemetry, isolating stale display from keyframe capture.
-  console.log('PANORAMIC_MODEL_PUBLISH_PROFILE', JSON.stringify({
-    keyframes: model.keyframes,
-    modelRevision,
-    rawSampleCount: model.rawSampleCount,
-    recenter,
-    renderRequesterReady,
-    scanId,
-    source,
-    surfelCount: model.surfelCount,
-  }));
-}
+  _model: CaptureModel,
+  _modelRevision: number,
+  _source: ModelPublishSource,
+  _renderRequesterReady: boolean,
+  _recenter: boolean,
+  _scanId: number
+): void {}
 
 function logModelUploadProfile(
-  model: CaptureModel,
-  modelRevision: number,
-  uploadMs: number,
-  allocated: boolean,
-  capacityBytes: number,
-  scanId: number
-): void {
-  console.log('PANORAMIC_MODEL_UPLOAD_PROFILE', JSON.stringify({
-    allocated,
-    capacityBytes,
-    keyframes: model.keyframes,
-    modelRevision,
-    rawSampleCount: model.rawSampleCount,
-    scanId,
-    surfelBytes: model.surfels.byteLength,
-    surfelCount: model.surfelCount,
-    uploadMs: roundMetric(uploadMs),
-  }));
-}
-
-function logKeyframeProfile({
-  appendProfile,
-  appendMs,
-  cameraColoredSurfels,
-  coveragePercent,
-  depthAppendMs,
-  depthInitialAppendMs,
-  depthRecoveryAppendMs,
-  depthRecoverySkipped,
-  depthType,
-  fusedSurfelCount,
-  fusionMs,
-  keyframes,
-  livePublished,
-  livePublishMs,
-  meshAdded,
-  meshAppendMs,
-  meshAppendReason,
-  meshAppendSkipped,
-  meshFetchMs,
-  meshSignature,
-  meshProfile,
-  meshPreflight,
-  meshPreflightMs,
-  meshRecoveredDepthGate,
-  newVoxelCount,
-  observedDepthNewVoxels,
-  observedDepthSurfels,
-  position,
-  preSampleMs,
-  projectionMatrix,
-  rawSampleCount,
-  retainedSamples,
-  rotationDeg,
-  rotationSpeedDegPerSec,
-  sampleDecisionMs,
-  scanId,
-  transform,
-  surfelCount,
-  translationM,
-  translationSpeedMPerSec,
-  updatedVoxelCount,
-}: {
-  appendProfile: AppendDepthSurfelsProfile;
-  appendMs: number;
-  cameraColoredSurfels: number;
-  coveragePercent: number;
-  depthAppendMs: number;
-  depthInitialAppendMs: number;
-  depthRecoveryAppendMs: number;
-  depthRecoverySkipped: boolean;
-  depthType: string | null;
-  fusedSurfelCount: number;
-  fusionMs: number;
-  keyframes: number;
-  livePublished: boolean;
-  livePublishMs: number;
-  meshAdded: AppendDepthSurfelsResult;
-  meshAppendMs: number;
-  meshAppendReason: string;
-  meshAppendSkipped: boolean;
-  meshFetchMs: number;
-  meshSignature: string;
-  meshProfile: AppendMeshSurfelsProfile;
-  meshPreflight: MeshSurfelPreflightResult | null;
-  meshPreflightMs: number;
-  meshRecoveredDepthGate: boolean;
-  newVoxelCount: number;
-  observedDepthNewVoxels: number;
-  observedDepthSurfels: number;
-  position: Vec3;
-  preSampleMs: number;
-  projectionMatrix: Float32Array;
-  rawSampleCount: number;
-  retainedSamples: number;
-  rotationDeg: number;
-  rotationSpeedDegPerSec: number;
-  sampleDecisionMs: number;
-  scanId: number;
-  transform: Float32Array;
-  surfelCount: number;
-  translationM: number;
-  translationSpeedMPerSec: number;
-  updatedVoxelCount: number;
-}): void {
-  const projectionPixels = projectionPixelGeometry(
-    projectionMatrix,
-    appendProfile.depthWidth ?? 0,
-    appendProfile.depthHeight ?? 0
-  );
-  console.log('PANORAMIC_KEYFRAME_PROFILE', JSON.stringify({
-    appendMs: roundMetric(appendMs),
-    cameraBytes: appendProfile.cameraBytes ?? 0,
-    cameraColorPercent: roundMetric(100 * cameraColoredSurfels / Math.max(surfelCount, 1), 1),
-    cameraForward: roundVec3([-(transform[8] ?? 0), -(transform[9] ?? 0), -(transform[10] ?? 1)]),
-    cameraImageMs: roundMetric(appendProfile.cameraImageMs ?? 0),
-    cameraPointCacheHits: appendProfile.cameraPointCacheHits ?? 0,
-    cameraPointSamples: appendProfile.cameraPointSamples ?? 0,
-    cameraPosition: roundVec3(position),
-    cameraRequested: appendProfile.cameraRequested ?? false,
-    cameraSampleMode: appendProfile.cameraSampleMode ?? 'unknown',
-    cameraSize: [appendProfile.cameraWidth ?? 0, appendProfile.cameraHeight ?? 0],
-    cameraTransformMode: appendProfile.cameraTransformMode ?? 'unknown',
-    cameraUp: roundVec3([transform[4] ?? 0, transform[5] ?? 1, transform[6] ?? 0]),
-    centerCameraMeters: appendProfile.centerCameraMeters ? roundVec3(appendProfile.centerCameraMeters) : null,
-    centerDepthMeters: roundMetric(appendProfile.centerDepthMeters ?? 0, 3),
-    centerDepthValid: appendProfile.centerDepthValid ?? false,
-    centerWorldMeters: appendProfile.centerWorldMeters ? roundVec3(appendProfile.centerWorldMeters) : null,
-    coveragePercent: roundMetric(coveragePercent, 1),
-    depthAppendMs: roundMetric(depthAppendMs),
-    depthBytes: appendProfile.depthBytes ?? 0,
-    depthCacheReused: appendProfile.depthCacheReused ?? false,
-    depthDataMs: roundMetric(appendProfile.depthDataMs ?? 0),
-    depthGridSamples: appendProfile.depthGridSampleCount ?? 0,
-    depthGridSampleMode: appendProfile.depthGridSampleMode ?? 'unknown',
-    depthLookupMs: roundMetric(appendProfile.depthLookupMs ?? 0),
-    depthPreflightMs: roundMetric(appendProfile.depthPreflightMs ?? 0),
-    depthSize: [appendProfile.depthWidth ?? 0, appendProfile.depthHeight ?? 0],
-    depthInitialAppendMs: roundMetric(depthInitialAppendMs),
-    depthRecoveryAppendMs: roundMetric(depthRecoveryAppendMs),
-    depthRecoverySkipped,
-    depthTransformMode: appendProfile.depthTransformMode ?? 'unknown',
-    depthType: depthType ?? 'unknown',
-    detailedTiming: appendProfile.detailedTiming ?? false,
-    fusedSurfelCount,
-    fusionMs: roundMetric(fusionMs),
-    fusionMode: 'inline',
-    keyframes,
-    livePublished,
-    livePublishMs: roundMetric(livePublishMs),
-    meshAppendReason,
-    meshAppendSkipped,
-    meshAppendMs: roundMetric(meshAppendMs),
-    meshCameraColorPercent: roundMetric(100 * meshAdded.cameraColoredSurfels / Math.max(meshAdded.surfelCount, 1), 1),
-    meshCameraColoredSurfels: meshAdded.cameraColoredSurfels,
-    meshCameraImageMs: roundMetric(meshProfile.cameraImageMs ?? 0),
-    meshCameraRequested: meshProfile.cameraRequested ?? false,
-    meshCameraSampleMode: meshProfile.cameraSampleMode ?? 'unknown',
-    meshCount: meshProfile.meshCount ?? 0,
-    meshFetchMs: roundMetric(meshFetchMs),
-    meshMaxSurfels: meshProfile.maxSurfels ?? 0,
-    meshNewVoxelCount: meshAdded.newVoxelCount,
-    meshNormalCount: meshProfile.meshNormalCount ?? 0,
-    meshNormalMode: meshProfile.meshNormalMode ?? 'none',
-    meshPoseMisses: meshProfile.poseMisses ?? 0,
-    meshPlaneProjectedSamples: meshProfile.planeProjectedSamples ?? 0,
-    meshPreflightEarlyStopped: meshPreflight?.earlyStopped ?? false,
-    meshPreflightMaxSurfels: meshPreflight?.maxSurfels ?? 0,
-    meshPreflightNewVoxelCount: meshPreflight?.newVoxelCount ?? 0,
-    meshPreflightMs: roundMetric(meshPreflightMs),
-    meshPreflightProjectedSurfels: meshPreflight?.projectedSurfels ?? 0,
-    meshPreflightSampleStride: meshPreflight?.meshSampleStride ?? 0,
-    meshPreflightSkippedSurfels: meshPreflight?.skippedSurfels ?? 0,
-    meshPreflightStrideSkippedCandidates: meshPreflight?.strideSkippedCandidates ?? 0,
-    meshPreflightStopAtNewVoxels: meshPreflight?.stopAtNewVoxels ?? 0,
-    meshPreflightStopAtSurfels: meshPreflight?.stopAtSurfels ?? 0,
-    meshPreflightSurfelCount: meshPreflight?.surfelCount ?? 0,
-    meshProjectedSurfels: meshProfile.projectedSurfels ?? 0,
-    meshRecoveredDepthGate,
-    meshSampleStride: meshProfile.meshSampleStride ?? 0,
-    meshSkippedSurfels: meshProfile.skippedSurfels ?? 0,
-    meshSignature,
-    meshStrideSkippedCandidates: meshProfile.strideSkippedCandidates ?? 0,
-    meshSurfelCount: meshAdded.surfelCount,
-    meshTriangles: meshProfile.meshTriangles ?? 0,
-    meshUpdatedVoxelCount: meshAdded.updatedVoxelCount,
-    meshVertices: meshProfile.meshVertices ?? 0,
-    minNewVoxelsForFusion: appendProfile.minNewVoxelsForFusion ?? 0,
-    matureVoxelSkips: appendProfile.matureVoxelSkips ?? 0,
-    newVoxelCount,
-    newVoxelPercent: roundMetric(100 * newVoxelCount / Math.max(surfelCount, 1), 1),
-    newVoxelPreflightMs: roundMetric(appendProfile.newVoxelPreflightMs ?? 0),
-    normalEstimateMs: roundMetric(appendProfile.normalEstimateMs ?? 0),
-    observedDepthNewVoxels,
-    observedDepthSurfels,
-    planeProjectedSamples: appendProfile.planeProjectedSamples ?? 0,
-    preSampleMs: roundMetric(preSampleMs),
-    projectionFocalPixels: projectionPixels.focalPixels,
-    projectionOffset: roundVec2([projectionMatrix[8] ?? 0, projectionMatrix[9] ?? 0]),
-    projectionPrincipalPixel: projectionPixels.principalPixel,
-    projectionScale: roundVec2([projectionMatrix[0] ?? 0, projectionMatrix[5] ?? 0]),
-    preflightNewVoxels: appendProfile.preflightNewVoxels ?? 0,
-    preflightSurfels: appendProfile.preflightSurfels ?? 0,
-    preflightUpdatedVoxels: appendProfile.preflightUpdatedVoxels ?? 0,
-    profiledSampleCount: appendProfile.profiledSampleCount ?? 0,
-    rawSampleCount,
-    retainedSamples,
-    rotationDeg: roundMetric(rotationDeg, 1),
-    rotationSpeedDegPerSec: roundMetric(rotationSpeedDegPerSec, 1),
-    colorSampleMs: roundMetric(appendProfile.colorSampleMs ?? 0),
-    sampleConsumeMs: roundMetric(appendProfile.sampleConsumeMs ?? 0),
-    sampleDecisionMs: roundMetric(sampleDecisionMs),
-    scanId,
-    sampleGrid: [appendProfile.sampleGridX ?? 0, appendProfile.sampleGridY ?? 0],
-    sampleOffset: [
-      roundMetric(appendProfile.sampleOffsetX ?? 0, 3),
-      roundMetric(appendProfile.sampleOffsetY ?? 0, 3),
-    ],
-    samplePhase: appendProfile.samplePhase ?? 0,
-    timedSampleCount: appendProfile.timedSampleCount ?? 0,
-    timingSampleStride: appendProfile.timingSampleStride ?? 0,
-    unprojectionMode: appendProfile.unprojectionMode ?? 'unknown',
-    unprojectMs: roundMetric(appendProfile.unprojectMs ?? 0),
-    sampleLoopMs: roundMetric(appendProfile.sampleLoopMs ?? 0),
-    surfelCount,
-    translationM: roundMetric(translationM, 3),
-    translationSpeedMPerSec: roundMetric(translationSpeedMPerSec, 3),
-    updatedVoxelCount,
-  }));
-}
-
-function projectionPixelGeometry(
-  projectionMatrix: Float32Array,
-  depthWidth: number,
-  depthHeight: number
-): { focalPixels: [number, number]; principalPixel: [number, number] } {
-  if (depthWidth <= 0 || depthHeight <= 0) {
-    return { focalPixels: [0, 0], principalPixel: [0, 0] };
-  }
-  const scaleX = projectionMatrix[0] ?? 0;
-  const scaleY = projectionMatrix[5] ?? 0;
-  const offsetX = projectionMatrix[8] ?? 0;
-  const offsetY = projectionMatrix[9] ?? 0;
-  return {
-    focalPixels: roundVec2([
-      scaleX * depthWidth / 2,
-      scaleY * depthHeight / 2,
-    ]),
-    // Native WebXR projection accounts for normalized texel centers. Convert
-    // back to integer depth-pixel-center units for device-log diagnostics.
-    principalPixel: roundVec2([
-      (1 - offsetX) * depthWidth / 2 - 0.5,
-      (offsetY + 1) * depthHeight / 2 - 0.5,
-    ]),
-  };
-}
+  _model: CaptureModel,
+  _modelRevision: number,
+  _uploadMs: number,
+  _allocated: boolean,
+  _capacityBytes: number,
+  _scanId: number
+): void {}
 
 function meshMetadataSignature(meshes: WebXRMeshSet): string {
   if (meshes.size <= 0) return '0';

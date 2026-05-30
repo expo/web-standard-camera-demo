@@ -231,7 +231,7 @@ internal final class MediaStreamTrack: SharedObject {
       // starts capture by itself. A frame accessor is a real consumer, so it
       // may request startup on the AVFoundation queue before polling pixels.
       let wasCold = !source.session.isRunning
-      source.startSessionIfNeeded(reason: "getLatestFrame", traceSkips: false)
+      source.startSessionIfNeeded()
       if wasCold {
         return nil
       }
@@ -283,7 +283,7 @@ internal final class MediaStreamTrack: SharedObject {
     if kind != "audio" || readyState == "ended" {
       return nil
     }
-    source?.startSessionIfNeeded(reason: "getLatestAudioBuffer", traceSkips: false)
+    source?.startSessionIfNeeded()
     guard let audioSink = source?.audioSink else {
       return nil
     }

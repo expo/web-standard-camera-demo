@@ -36,10 +36,6 @@ export interface WebXRCameraAccessStateInit {
 
 export type WebXRFrameRequestCallback = (time: DOMHighResTimeStamp, frame: WebXRFrame) => void;
 
-export interface WebXRDepthProfileTelemetryContext {
-  scanId?: number | null;
-}
-
 type CameraLockHandlers = {
   lockExternal: () => Promise<void>;
   unlockExternal: () => void;
@@ -54,10 +50,6 @@ function identityMatrix4(): Float32Array {
 }
 
 export function setWebXRDepthCameraLockHandlers(_handlers: CameraLockHandlers | null): void {}
-
-export function setWebXRDepthProfileTelemetryContext(
-  _context: WebXRDepthProfileTelemetryContext | null,
-): void {}
 
 export function runWithWebXRUserActivation<T>(callback: () => T): T {
   return callback();

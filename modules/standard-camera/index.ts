@@ -42,13 +42,11 @@ export {
   installWebXRDepthProfile,
   runWithWebXRUserActivation,
   setWebXRDepthCameraLockHandlers,
-  setWebXRDepthProfileTelemetryContext,
 } from './src/WebXRDepthProfile';
 export type {
   WebXRCameraAccessStateInit,
   WebXRCameraFormat,
   WebXRCameraUsage,
-  WebXRDepthProfileTelemetryContext,
   WebXRDepthDataFormat,
   WebXRDepthStateInit,
   WebXRDepthType,

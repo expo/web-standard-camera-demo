@@ -2,30 +2,6 @@ import Accelerate
 import AVFoundation
 import Foundation
 
-internal func standardCameraTrace(_ event: String, _ payload: [String: Any?] = [:]) {
-#if DEBUG
-  let environment = ProcessInfo.processInfo.environment
-  let enabled = environment["STANDARD_CAMERA_TRACE"] == "1"
-    || environment["NEURAL_LENS_TRACE"] == "1"
-  guard enabled else { return }
-  var body: [String: Any] = [
-    "event": event,
-    "ts": Int(Date().timeIntervalSince1970 * 1000)
-  ]
-  for (key, value) in payload {
-    body[key] = value ?? NSNull()
-  }
-  guard
-    let data = try? JSONSerialization.data(withJSONObject: body, options: []),
-    let json = String(data: data, encoding: .utf8)
-  else {
-    NSLog("NEURAL_LENS_TRACE {\"event\":\"%@\",\"serialization\":\"failed\"}", event)
-    return
-  }
-  NSLog("NEURAL_LENS_TRACE %@", json)
-#endif
-}
-
 // @ref LLP 0004#stream-clone — Reference-counted holder of the AVCaptureSession
 // @ref LLP 0004#track-clone — Cloned tracks share a CaptureSource and keep the
 //                              camera open as long as at least one track is live.
@@ -187,26 +163,12 @@ internal final class CaptureSource {
   // requests onto the serialized session queue.
   // @ref LLP 0006#concurrency — `AVCaptureSession.startRunning()` must never
   // run on the main thread.
-  func startSessionIfNeeded(
-    reason: String,
-    streamId: String? = nil,
-    traceSkips: Bool = true
-  ) {
+  func startSessionIfNeeded() {
     lock.lock()
     let alreadyRunning = session.isRunning
     desiredRunning = true
     if startQueued || (alreadyRunning && !stopQueued && desiredRunning) {
       lock.unlock()
-      if traceSkips {
-        standardCameraTrace("native-session-start-running-skip", [
-          "desiredRunning": desiredRunning,
-          "isRunning": alreadyRunning,
-          "reason": reason,
-          "startQueued": startQueued,
-          "stopQueued": stopQueued,
-          "streamId": streamId
-        ])
-      }
       return
     }
     startQueued = true
@@ -214,48 +176,24 @@ internal final class CaptureSource {
 
     let source = self
     MediaStream.sessionQueue.async {
-      let startedAt = CFAbsoluteTimeGetCurrent()
       let hasLiveTracks = source.hasLiveTracks
       let shouldRun = source.shouldRunSession
-      standardCameraTrace("native-session-start-running-start", [
-        "audio": source.audioDevice != nil,
-        "desiredRunning": shouldRun,
-        "hasLiveTracks": hasLiveTracks,
-        "reason": reason,
-        "streamId": streamId,
-        "video": source.device != nil,
-        "videoDevice": source.device?.localizedName
-      ])
       if hasLiveTracks && shouldRun && !source.session.isRunning {
         source.session.startRunning()
       }
       source.lock.lock()
       source.startQueued = false
       source.lock.unlock()
-      standardCameraTrace("native-session-start-running-done", [
-        "desiredRunning": source.shouldRunSession,
-        "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-        "hasLiveTracks": source.hasLiveTracks,
-        "isRunning": source.session.isRunning,
-        "reason": reason,
-        "streamId": streamId,
-        "videoDevice": source.device?.localizedName
-      ])
     }
   }
 
   // @ref LLP 0005#srcobject-play-pause — `pause()` stops the underlying
   // AVCaptureSession without ending the tracks.
-  func stopSessionForPause(reason: String) {
+  func stopSessionForPause() {
     lock.lock()
     desiredRunning = false
     if stopQueued {
       lock.unlock()
-      standardCameraTrace("native-session-pause-stop-skip", [
-        "isRunning": session.isRunning,
-        "reason": reason,
-        "stopQueued": true
-      ])
       return
     }
     stopQueued = true
@@ -263,25 +201,13 @@ internal final class CaptureSource {
 
     let source = self
     MediaStream.sessionQueue.async {
-      let startedAt = CFAbsoluteTimeGetCurrent()
       let shouldStop = !source.shouldRunSession
-      standardCameraTrace("native-session-pause-stop-start", [
-        "desiredRunning": !shouldStop,
-        "isRunning": source.session.isRunning,
-        "reason": reason
-      ])
       if shouldStop && source.session.isRunning {
         source.session.stopRunning()
       }
       source.lock.lock()
       source.stopQueued = false
       source.lock.unlock()
-      standardCameraTrace("native-session-pause-stop-done", [
-        "desiredRunning": source.shouldRunSession,
-        "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-        "isRunning": source.session.isRunning,
-        "reason": reason
-      ])
     }
   }
 
@@ -331,11 +257,6 @@ internal final class CaptureSource {
   }
 
   private func stopSessionAndDeactivateAudioIfNeeded() {
-    let startedAt = CFAbsoluteTimeGetCurrent()
-    standardCameraTrace("native-capture-source-stop-start", [
-      "hadAudio": audioDevice != nil,
-      "isRunning": session.isRunning
-    ])
     if session.isRunning {
       session.stopRunning()
     }
@@ -349,11 +270,6 @@ internal final class CaptureSource {
     if audioDevice != nil {
       try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
-    standardCameraTrace("native-capture-source-stop-done", [
-      "durationMs": (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-      "hadAudio": audioDevice != nil,
-      "isRunning": session.isRunning
-    ])
   }
 
   // MARK: - Notification observers

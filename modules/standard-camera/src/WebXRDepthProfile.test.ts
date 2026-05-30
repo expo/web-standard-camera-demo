@@ -21,7 +21,6 @@ import {
   WebXRView,
   runWithWebXRUserActivation,
   setWebXRDepthCameraLockHandlers,
-  setWebXRDepthProfileTelemetryContext,
 } from './WebXRDepthProfile';
 
 const PROJECTION = [
@@ -52,66 +51,6 @@ const IDENTITY = [
   0, 0, 0, 1,
 ];
 
-test('XRSession frame pump profiles native retained snapshot count', () => {
-  const originalAddListener = NativeStandardCamera.addListener;
-  const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
-  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
-  const originalConsoleLog = console.log;
-  const originalPerformance = globalThis.performance;
-  const callbacks: FrameRequestCallback[] = [];
-  const profileLogs: unknown[] = [];
-
-  try {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => ({
-      ...makeNativeFrame(4),
-      arFrameNumber: 4,
-      retainedFrameSnapshots: 3,
-    });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
-    };
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: { ...originalPerformance, now: () => 100 },
-    });
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }) as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
-
-    const session = new WebXRSession({
-      cameraAccessEnabled: false,
-      cameraFormat: 'bgra8unorm',
-      depthEnabled: true,
-      depthType: 'raw',
-      meshDetectionEnabled: false,
-      sessionId: 1,
-    });
-
-    session.requestAnimationFrame(() => {});
-    flushNextRaf(callbacks);
-
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      latestFrameNumber: 4,
-      reason: 'delivered-frame',
-      retainedFrameSnapshots: 3,
-    });
-  } finally {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
-    console.log = originalConsoleLog;
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: originalPerformance,
-    });
-    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
-  }
-});
-
 test('viewer pose accepts limited startup poses without exposing native tracking fields', () => {
   const { frame, referenceSpace } = makeXRFrame({
     trackingState: 'limited',
@@ -136,7 +75,6 @@ test('native WebXR camera preview uses direct YCbCr downsample before CoreImage 
   expect(swiftSource).toContain('return (dstWidth, dstHeight, data, "ycbcr-direct")');
   expect(swiftSource).toContain('makeCameraPreviewFrameWithCoreImage');
   expect(swiftSource).toContain('return (dstWidth, dstHeight, data, "core-image")');
-  expect(profileSource).toContain("cameraPreviewPath: payload.cameraPreviewPath ?? 'unknown'");
 });
 
 test('native ARKit mesh anchors stay behind WebXR mesh-detection objects', () => {
@@ -218,42 +156,20 @@ test('viewer and local reference spaces expose WebXR-shaped pose transforms', ()
 });
 
 test('XRFrame.getViewerPose returns null when native tracking has no camera pose', () => {
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
+  const limited = makeXRFrame({ trackingState: 'limited', worldMappingStatus: 'notAvailable' });
+  expect(limited.frame.getViewerPose(limited.referenceSpace)).toBeInstanceOf(WebXRViewerPose);
 
-  try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 7 });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_XR_POSE_PROFILE') profileLogs.push(payload);
-    };
-    const limited = makeXRFrame({ trackingState: 'limited', worldMappingStatus: 'notAvailable' });
-    expect(limited.frame.getViewerPose(limited.referenceSpace)).toBeInstanceOf(WebXRViewerPose);
+  for (const trackingState of ['notAvailable', 'unknown'] as const) {
+    const { frame, referenceSpace } = makeXRFrame({ trackingState });
 
-    for (const trackingState of ['notAvailable', 'unknown'] as const) {
-      const { frame, referenceSpace } = makeXRFrame({ trackingState });
-
-      expect(frame.getViewerPose(referenceSpace)).toBeNull();
-    }
-
-    const { frame, referenceSpace } = makeXRFrame({ trackingState: 'normal' });
-    const pose = frame.getViewerPose(referenceSpace);
-
-    expect(pose).toBeInstanceOf(WebXRViewerPose);
-    expect(pose?.views).toHaveLength(1);
-    const nullPoseLog = profileLogs
-      .map((payload) => JSON.parse(String(payload)))
-      .find((payload) => payload.returnedPose === false);
-    expect(nullPoseLog).toMatchObject({
-      frameNumber: 1,
-      returnedPose: false,
-      scanId: 7,
-      trackingState: 'notAvailable',
-      worldMappingStatus: 'mapped',
-    });
-  } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    console.log = originalConsoleLog;
+    expect(frame.getViewerPose(referenceSpace)).toBeNull();
   }
+
+  const { frame, referenceSpace } = makeXRFrame({ trackingState: 'normal' });
+  const pose = frame.getViewerPose(referenceSpace);
+
+  expect(pose).toBeInstanceOf(WebXRViewerPose);
+  expect(pose?.views).toHaveLength(1);
 });
 
 test('XRFrame.getViewerPose does not withhold startup poses for native world mapping buckets', () => {
@@ -281,10 +197,8 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
   const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
-  const originalConsoleLog = console.log;
   const originalPerformance = globalThis.performance;
   const callbacks: FrameRequestCallback[] = [];
-  const profileLogs: unknown[] = [];
   let nextHandle = 1;
   let nowMs = 2000;
   let nativeFrame: NativeLiDARDepthFrame = {
@@ -297,12 +211,8 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
   let delivered = 0;
 
   try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 8 });
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => nativeFrame;
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
-    };
     Object.defineProperty(globalThis, 'performance', {
       configurable: true,
       value: { ...originalPerformance, now: () => nowMs },
@@ -328,15 +238,6 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
     session.requestAnimationFrame(onFrame);
     flushNextRaf(callbacks);
     expect(delivered).toBe(1);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      appLifecycleState: 'active',
-      deliveredFramePolls: 1,
-      latestFrameNumber: 1,
-      nativeSessionId: 1,
-      nativeSessionState: 'running',
-      reason: 'delivered-frame',
-      scanId: 8,
-    });
 
     session.requestAnimationFrame(onFrame);
     nowMs = 2500;
@@ -353,227 +254,9 @@ test('XRSession.requestAnimationFrame skips duplicate native frame snapshots acr
     nowMs = 3600;
     flushNextRaf(callbacks);
     expect(delivered).toBe(2);
-    expect(JSON.parse(String(profileLogs[1]))).toMatchObject({
-      deliveredFramePolls: 1,
-      latestFrameNumber: 2,
-      reason: 'delivered-frame',
-      scanId: 8,
-      staleFramePolls: 1,
-    });
-  } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
-    console.log = originalConsoleLog;
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: originalPerformance,
-    });
-    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
-  }
-});
-
-test('XRSession.requestAnimationFrame logs the first native frame pump sample immediately', () => {
-  const originalAddListener = NativeStandardCamera.addListener;
-  const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
-  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
-  const originalConsoleLog = console.log;
-  const originalPerformance = globalThis.performance;
-  const callbacks: FrameRequestCallback[] = [];
-  const profileLogs: unknown[] = [];
-
-  try {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => ({
-      ...makeNativeFrame(1),
-      arFrameNumber: 1,
-    });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
-    };
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: { ...originalPerformance, now: () => 100 },
-    });
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }) as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
-
-    const session = new WebXRSession({
-      cameraAccessEnabled: false,
-      cameraFormat: 'bgra8unorm',
-      depthEnabled: true,
-      depthType: 'raw',
-      meshDetectionEnabled: false,
-      sessionId: 1,
-    });
-
-    session.requestAnimationFrame(() => {});
-    flushNextRaf(callbacks);
-
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      deliveredFramePolls: 1,
-      latestFrameNumber: 1,
-      reason: 'delivered-frame',
-    });
   } finally {
     (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
     (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
-    console.log = originalConsoleLog;
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: originalPerformance,
-    });
-    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
-  }
-});
-
-test('XRSession.requestAnimationFrame profiles pre-first-depth native misses without delivering a frame', () => {
-  const originalAddListener = NativeStandardCamera.addListener;
-  const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
-  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
-  const originalConsoleLog = console.log;
-  const originalPerformance = globalThis.performance;
-  const callbacks: FrameRequestCallback[] = [];
-  const profileLogs: unknown[] = [];
-  let delivered = 0;
-
-  try {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => ({
-      ...makeNativeFrame(0),
-      arFrameNumber: 7,
-      consecutiveDepthMisses: 7,
-      depthMisses: 7,
-      latestDepthMissRawDepthAvailable: true,
-      latestDepthMissRequestedType: 'smooth',
-      latestDepthMissSmoothDepthAvailable: false,
-      rawDepthAvailable: true,
-      requestedDepthMissesWithAlternateDepth: 7,
-      requestedDepthMissingButAlternateAvailable: true,
-      requestedDepthType: 'smooth',
-      smoothDepthAvailable: false,
-    });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
-    };
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: { ...originalPerformance, now: () => 100 },
-    });
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }) as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
-
-    const session = new WebXRSession({
-      cameraAccessEnabled: false,
-      cameraFormat: 'bgra8unorm',
-      depthEnabled: true,
-      depthType: 'raw',
-      meshDetectionEnabled: false,
-      sessionId: 1,
-    });
-
-    session.requestAnimationFrame(() => {
-      delivered += 1;
-    });
-    flushNextRaf(callbacks);
-
-    expect(delivered).toBe(0);
-    expect(callbacks.length).toBe(1);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      arFrameNumber: 7,
-      consecutiveDepthMisses: 7,
-      depthMisses: 7,
-      latestFrameNumber: 0,
-      latestDepthMissRawDepthAvailable: true,
-      latestDepthMissRequestedType: 'smooth',
-      latestDepthMissSmoothDepthAvailable: false,
-      rawDepthAvailable: true,
-      reason: 'stale-frame',
-      requestedDepthMissesWithAlternateDepth: 7,
-      requestedDepthMissingButAlternateAvailable: true,
-      requestedDepthType: 'smooth',
-      smoothDepthAvailable: false,
-      staleFramePolls: 1,
-    });
-  } finally {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
-    console.log = originalConsoleLog;
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: originalPerformance,
-    });
-    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
-  }
-});
-
-test('XRSession.requestAnimationFrame profiles native frame fetch errors without delivering a frame', () => {
-  const originalAddListener = NativeStandardCamera.addListener;
-  const originalLatestFrame = NativeStandardCamera.getLatestWebXRLiDARDepthFrame;
-  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
-  const originalConsoleLog = console.log;
-  const originalPerformance = globalThis.performance;
-  const callbacks: FrameRequestCallback[] = [];
-  const profileLogs: unknown[] = [];
-  let delivered = 0;
-
-  try {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = () => ({ remove() {} });
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = () => {
-      throw new TypeError('undefined is not a function');
-    };
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_XR_FRAME_PUMP_PROFILE') profileLogs.push(payload);
-    };
-    Object.defineProperty(globalThis, 'performance', {
-      configurable: true,
-      value: { ...originalPerformance, now: () => 100 },
-    });
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }) as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
-
-    const session = new WebXRSession({
-      cameraAccessEnabled: false,
-      cameraFormat: 'bgra8unorm',
-      depthEnabled: true,
-      depthType: 'raw',
-      meshDetectionEnabled: false,
-      sessionId: 1,
-    });
-
-    session.requestAnimationFrame(() => {
-      delivered += 1;
-    });
-    flushNextRaf(callbacks);
-
-    expect(delivered).toBe(0);
-    expect(callbacks.length).toBe(1);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      errorMessage: 'undefined is not a function',
-      errorName: 'TypeError',
-      latestFrameNumber: 0,
-      nativeFrameErrorPolls: 1,
-      reason: 'native-frame-error',
-    });
-  } finally {
-    (NativeStandardCamera as typeof NativeStandardCamera).addListener = originalAddListener;
-    (NativeStandardCamera as typeof NativeStandardCamera).getLatestWebXRLiDARDepthFrame = originalLatestFrame;
-    console.log = originalConsoleLog;
     Object.defineProperty(globalThis, 'performance', {
       configurable: true,
       value: originalPerformance,
@@ -902,8 +585,6 @@ test('XRSystem.requestSession rejects overlapping starts before taking or releas
 
 test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', () => {
   const originalMeshGetter = NativeStandardCamera.getWebXRLiDARDepthFrameMeshes;
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
   const vertexBuffer = new ArrayBuffer(9 * Float32Array.BYTES_PER_ELEMENT);
   new Float32Array(vertexBuffer).set([0, 0, 0, 1, 0, 0, 0, 1, 0]);
   const indexBuffer = new ArrayBuffer(3 * Uint32Array.BYTES_PER_ELEMENT);
@@ -925,10 +606,6 @@ test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', ()
   let fullMeshRequests = 0;
 
   try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 9 });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE') profileLogs.push(payload);
-    };
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFrameMeshes = () => {
       fullMeshRequests += 1;
       return [{
@@ -951,49 +628,20 @@ test('XRFrame.detectedMeshes exposes ARKit meshes through WebXR mesh spaces', ()
     expect(pose).not.toBeNull();
     expectMatrixClose(pose!.transform.matrix, VIEW_TRANSFORM);
     expect(fullMeshRequests).toBe(0);
-    expect(profileLogs).toHaveLength(0);
     expect(mesh?.vertices.buffer).toBe(vertexBuffer);
     expect(mesh?.indices.buffer).toBe(indexBuffer);
     expect(mesh?.vertices).toEqual(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]));
     expect(mesh?.indices).toEqual(new Uint32Array([0, 1, 2]));
     expect(fullMeshRequests).toBe(1);
-    expect(profileLogs).toHaveLength(1);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      cachedMeshCount: 1,
-      copiedMeshCount: 0,
-      decimatedMeshCount: 0,
-      frameNumber: 1,
-      indexBytes: 12,
-      indexCount: 3,
-      meshBytes: 60,
-      meshCount: 1,
-      normalBytes: 12,
-      normalCount: 1,
-      scanId: 9,
-      triangleCount: 1,
-      sourceIndexCount: 3,
-      sourceTriangleCount: 1,
-      sourceVertexCount: 3,
-      vertexBytes: 36,
-      vertexCount: 3,
-    });
   } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFrameMeshes = originalMeshGetter;
   }
 });
 
 test('XRFrame.detectedMeshes treats a missing optional native mesh bridge as no meshes', () => {
   const originalMeshGetter = NativeStandardCamera.getWebXRLiDARDepthFrameMeshes;
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
 
   try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 11 });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_NATIVE_MESH_PAYLOAD_PROFILE') profileLogs.push(payload);
-    };
     (NativeStandardCamera as unknown as Record<string, unknown>).getWebXRLiDARDepthFrameMeshes = undefined;
 
     const { frame } = makeXRFrame({
@@ -1005,16 +653,7 @@ test('XRFrame.detectedMeshes treats a missing optional native mesh bridge as no 
     expect(meshes.size).toBe(0);
     expect([...meshes]).toEqual([]);
     expect(frame.detectedMeshes).toBe(meshes);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      fallbackReason: 'missing-native-mesh-payload-getter',
-      frameNumber: 1,
-      meshCount: 0,
-      meshPayloadUnavailable: true,
-      scanId: 11,
-    });
   } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFrameMeshes = originalMeshGetter;
   }
 });
@@ -1078,8 +717,6 @@ test('XRFrame.detectedMeshes preserves XRMesh identity across native anchor upda
 
 test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS copy', () => {
   const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
   const { frame, referenceSpace } = makeXRFrame({ trackingState: 'normal' });
   const view = new WebXRView(frame, referenceSpace);
   const depth = new WebXRCPUDepthInformation(frame, view);
@@ -1088,10 +725,6 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
   nativeBytes.set(new Uint8Array(new Float32Array([1, 2]).buffer));
 
   try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 10 });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
-    };
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => ({
       confidenceMapUsed: true,
       confidenceFilteredDepthCount: 2,
@@ -1112,30 +745,7 @@ test('XRCPUDepthInformation reuses exact native ArrayBuffers without an extra JS
 
     expect(depth.data).toBe(nativeBuffer);
     expect(depth.data).toBe(depth.data);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      depthBytes: 8,
-      depthMeanMeters: 1.5,
-      depthPixelCount: 49152,
-      depthSize: [256, 192],
-      depthType: 'raw',
-      confidenceMapUsed: true,
-      confidenceFilteredDepthCount: 2,
-      confidenceFilteredPercent: 0,
-      confidenceFallbackReason: 'sparse-medium-confidence',
-      confidenceFallbackUsed: true,
-      confidenceThreshold: 1,
-      highConfidenceDepthCount: 30000,
-      depthMaxMeters: 3.2,
-      invalidDepthPercent: 0,
-      lowConfidencePercent: 0,
-      mediumConfidenceDepthCount: 19151,
-      depthMinMeters: 0.45,
-      scanId: 10,
-      validDepthPercent: 100,
-    });
   } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
   }
 });
@@ -1208,58 +818,8 @@ test('XRCPUDepthInformation requests low-confidence native depth when the sessio
   }
 });
 
-test('XRCPUDepthInformation logs native payload bridge failures before reporting unavailable depth', () => {
-  const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
-  const { frame, referenceSpace } = makeXRFrame({ trackingState: 'normal' });
-  const view = new WebXRView(frame, referenceSpace);
-  const depth = new WebXRCPUDepthInformation(frame, view);
-
-  try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 12 });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
-    };
-    (NativeStandardCamera as unknown as Record<string, unknown>).getWebXRLiDARDepthFramePayload = undefined;
-
-    expect(() => depth.data).toThrow('Depth data for this XRFrame is no longer available');
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      fallbackReason: 'missing-native-payload-getter',
-      frameNumber: 1,
-      includeCameraImage: false,
-      includeDepthData: true,
-      payloadUnavailable: true,
-      scanId: 12,
-    });
-
-    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => {
-      throw new TypeError('native payload failed');
-    };
-
-    expect(() => depth.getDepthInMeters(0.5, 0.5)).toThrow(
-      'Depth data for this XRFrame is no longer available'
-    );
-    expect(JSON.parse(String(profileLogs[1]))).toMatchObject({
-      errorMessage: 'native payload failed',
-      errorName: 'TypeError',
-      fallbackReason: 'native-payload-error',
-      frameNumber: 1,
-      includeCameraImage: false,
-      includeDepthData: true,
-      payloadUnavailable: true,
-      scanId: 12,
-    });
-  } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    console.log = originalConsoleLog;
-    (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
-  }
-});
-
 test('XRCPUDepthInformation indexes normalized coordinates using WebXR width and height scaling', () => {
   const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
-  const originalConsoleLog = console.log;
   const { frame, referenceSpace } = makeXRFrame({
     depthTransform: IDENTITY,
     height: 2,
@@ -1286,15 +846,12 @@ test('XRCPUDepthInformation indexes normalized coordinates using WebXR width and
     expect(() => depth.getDepthInMeters(-0.01, 0)).toThrow(RangeError);
     expect(() => depth.getDepthInMeters(0, 1.01)).toThrow(RangeError);
   } finally {
-    console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
   }
 });
 
 test('XRCPUCameraImage treats native payload bridge failures as unavailable camera image', () => {
   const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
   const { frame } = makeXRFrame({ trackingState: 'normal' });
   const camera = new WebXRCamera(
     frame,
@@ -1305,36 +862,18 @@ test('XRCPUCameraImage treats native payload bridge failures as unavailable came
   );
 
   try {
-    setWebXRDepthProfileTelemetryContext({ scanId: 13 });
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
-    };
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => {
       throw new TypeError('camera payload failed');
     };
 
     expect(WebXRCPUCameraImage.fromCamera(camera)).toBeNull();
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      errorMessage: 'camera payload failed',
-      errorName: 'TypeError',
-      fallbackReason: 'native-payload-error',
-      frameNumber: 1,
-      includeCameraImage: true,
-      includeDepthData: false,
-      payloadUnavailable: true,
-      scanId: 13,
-    });
   } finally {
-    setWebXRDepthProfileTelemetryContext(null);
-    console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
   }
 });
 
 test('XRCPUCameraImage reuses exact native ArrayBuffers without an extra JS copy', () => {
   const originalPayloadGetter = NativeStandardCamera.getWebXRLiDARDepthFramePayload;
-  const originalConsoleLog = console.log;
-  const profileLogs: unknown[] = [];
   const { frame } = makeXRFrame({ trackingState: 'normal' });
   const nativeBuffer = new ArrayBuffer(8);
   const nativeBytes = new Uint8Array(nativeBuffer);
@@ -1348,9 +887,6 @@ test('XRCPUCameraImage reuses exact native ArrayBuffers without an extra JS copy
   );
 
   try {
-    console.log = (name: unknown, payload?: unknown): void => {
-      if (name === 'PANORAMIC_NATIVE_PAYLOAD_PROFILE') profileLogs.push(payload);
-    };
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = () => ({
       colorData: nativeBytes,
       colorFormat: 'bgra8unorm',
@@ -1362,16 +898,7 @@ test('XRCPUCameraImage reuses exact native ArrayBuffers without an extra JS copy
     expect(image).not.toBeNull();
     expect(image?.data).toBe(nativeBuffer);
     expect(image?.data).toBe(image?.data);
-    expect(JSON.parse(String(profileLogs[0]))).toMatchObject({
-      cameraBytes: 8,
-      cameraCapturedSize: [1920, 1440],
-      colorSize: [1920, 1080],
-      depthToCameraScale: [0.1333, 0.1333],
-      projectionCameraImageResolution: [1920, 1440],
-      projectionDepthToCameraScale: [0.1333, 0.1333],
-    });
   } finally {
-    console.log = originalConsoleLog;
     (NativeStandardCamera as typeof NativeStandardCamera).getWebXRLiDARDepthFramePayload = originalPayloadGetter;
   }
 });

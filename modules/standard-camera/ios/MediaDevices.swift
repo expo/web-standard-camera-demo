@@ -89,15 +89,6 @@ private func notReadable(_ underlying: Error) -> Exception {
 // @ref LLP 0008 — audio implementation
 
 internal func getUserMedia(constraints: GetUserMediaConstraints) async throws -> MediaStream {
-  let gumStartedAt = CFAbsoluteTimeGetCurrent()
-  standardCameraTrace("native-gum-start", [
-    "audio": constraints.audio != nil,
-    "facingMode": constraints.video?.facingMode,
-    "frameRate": constraints.video?.frameRate,
-    "height": constraints.video?.height,
-    "video": constraints.video != nil,
-    "width": constraints.video?.width
-  ])
   // @ref LLP 0003#gum-validate-constraints — at least one of audio/video required
   let videoConstraints = constraints.video
   let audioConstraints = constraints.audio
@@ -166,13 +157,8 @@ internal func getUserMedia(constraints: GetUserMediaConstraints) async throws ->
   if videoDevice == nil {
     // @ref LLP 0008#audio-build-session — Audio-only streams have no preview
     // or ImageCapture consumer that can lazily request the session start.
-    source.startSessionIfNeeded(reason: "getUserMediaAudioOnly", streamId: stream.id)
+    source.startSessionIfNeeded()
   }
-  standardCameraTrace("native-gum-done", [
-    "durationMs": (CFAbsoluteTimeGetCurrent() - gumStartedAt) * 1000,
-    "tracks": tracks.count,
-    "videoDevice": videoDevice?.localizedName
-  ])
   return stream
 }
 

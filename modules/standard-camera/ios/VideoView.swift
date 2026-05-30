@@ -113,9 +113,9 @@ internal final class VideoView: ExpoView {
     mirroringLayer.onTransformWrite = nil
     previewRotationObservation?.invalidate()
     firstFrameObserver?.invalidate()
-    let sourceToPause = detachPreviewSource(reason: "deinit")
+    let sourceToPause = detachPreviewSource()
     previewLayer.session = nil
-    sourceToPause?.stopSessionForPause(reason: "preview-deinit")
+    sourceToPause?.stopSessionForPause()
   }
 
   private func syncMirrorFromLayerTransform() {
@@ -161,25 +161,19 @@ internal final class VideoView: ExpoView {
     previewLayer.connection?.isEnabled
   }
 
-  private func detachPreviewSource(reason: String, streamId: String? = nil) -> CaptureSource? {
+  private func detachPreviewSource() -> CaptureSource? {
     guard let source = previewSource else { return nil }
     let remainingPreviews = source.unregisterPreview(self)
     previewSource = nil
-    standardCameraTrace("native-preview-source-detach", [
-      "remainingPreviews": remainingPreviews,
-      "reason": reason,
-      "streamId": streamId
-    ])
     if remainingPreviews == 0 {
       // @ref LLP 0006#concurrency — Let the capture graph cool down when no
       // preview layer is rendering it. The next <Video>.play() or
       // ImageCapture.grabFrame() request restarts the session on the
       // serialized AVFoundation queue, avoiding hot preview-layer attachment
-      // on the main thread.
-      // The caller pauses only after replacing the AVCaptureVideoPreviewLayer
-      // session, since AVFoundation may use an internal
-      // beginConfiguration/commitConfiguration pair for that layer mutation
-      // and stopRunning() cannot overlap it.
+      // on the main thread. The caller pauses only after replacing the
+      // AVCaptureVideoPreviewLayer session, since AVFoundation may use an
+      // internal beginConfiguration/commitConfiguration pair for that layer
+      // mutation and stopRunning() cannot overlap it.
       return source
     }
     return nil
@@ -226,8 +220,6 @@ internal final class VideoView: ExpoView {
   // @ref LLP 0005#srcobject-readyState — Reset to HAVE_NOTHING; fire
   //                                       loadeddata when frames arrive.
   private func attachStream() {
-    let attachStartedAt = CFAbsoluteTimeGetCurrent()
-    let hadPreviewSession = previewLayer.session != nil
     firstFrameObserver?.invalidate()
     firstFrameObserver = nil
     previewRotationObservation?.invalidate()
@@ -236,32 +228,17 @@ internal final class VideoView: ExpoView {
     currentPreviewRotationAngle = nil
     // Detach from any previous source so we don't receive stale preview-
     // enable callbacks after the stream changes.
-    let sourceToPause = detachPreviewSource(reason: "replace")
+    let sourceToPause = detachPreviewSource()
 
     guard let stream = srcObject, let session = stream.captureSession else {
-      standardCameraTrace("native-preview-attach-start", [
-        "attaching": false,
-        "hadPreviewSession": hadPreviewSession
-      ])
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       previewLayer.session = nil
       CATransaction.commit()
-      standardCameraTrace("native-preview-attach-done", [
-        "attaching": false,
-        "durationMs": (CFAbsoluteTimeGetCurrent() - attachStartedAt) * 1000,
-        "hadPreviewSession": hadPreviewSession
-      ])
-      sourceToPause?.stopSessionForPause(reason: "preview-replace")
+      sourceToPause?.stopSessionForPause()
       return
     }
 
-    standardCameraTrace("native-preview-attach-start", [
-      "attaching": true,
-      "hadPreviewSession": hadPreviewSession,
-      "isRunning": session.isRunning,
-      "streamId": stream.id
-    ])
     // Attaching a session and rotating the connection mutate animatable
     // properties on the preview layer; wrap them so Core Animation doesn't
     // animate the transition (which appeared as a slide-in from the left
@@ -303,17 +280,8 @@ internal final class VideoView: ExpoView {
       source.registerPreview(self)
     }
     if let sourceToPause, sourceToPause !== videoTrack?.source {
-      sourceToPause.stopSessionForPause(reason: "preview-replace")
+      sourceToPause.stopSessionForPause()
     }
-    standardCameraTrace("native-preview-attach-done", [
-      "attaching": true,
-      "connectionEnabled": previewLayer.connection?.isEnabled,
-      "durationMs": (CFAbsoluteTimeGetCurrent() - attachStartedAt) * 1000,
-      "hadPreviewSession": hadPreviewSession,
-      "isRunning": session.isRunning,
-      "streamId": stream.id
-    ])
-
     // @ref LLP 0006#first-frame-detection — Drive loadeddata off the FrameSink's
     // first sample callback. The FrameSink lives on the first video track's
     // CaptureSource (post-refactor — tracks own the source, not the stream).
@@ -330,7 +298,7 @@ internal final class VideoView: ExpoView {
     // @ref LLP 0003#gum-build-session — The stream may be returned before
     // AVFoundation has completed startRunning(), so preview attachment asks
     // the source to coalesce startup rather than touching the session here.
-    videoTrack?.source?.startSessionIfNeeded(reason: "attachStream", streamId: stream.id)
+    videoTrack?.source?.startSessionIfNeeded()
   }
 
   // @ref LLP 0006#preview-orientation-and-mirroring — Use Apple's rotation
@@ -394,7 +362,7 @@ internal final class VideoView: ExpoView {
 
   func play() {
     guard let stream = srcObject else { return }
-    stream.captureSource?.startSessionIfNeeded(reason: "play", streamId: stream.id)
+    stream.captureSource?.startSessionIfNeeded()
     DispatchQueue.main.async { [weak self] in
       self?.previewLayer.connection?.isEnabled = true
       self?.onPlay()
@@ -404,7 +372,7 @@ internal final class VideoView: ExpoView {
   // @ref LLP 0005#srcobject-play-pause — pause() stops the session
   func pause() {
     guard let stream = srcObject else { return }
-    stream.captureSource?.stopSessionForPause(reason: "pause")
+    stream.captureSource?.stopSessionForPause()
     DispatchQueue.main.async { [weak self] in
       self?.onPause()
     }
